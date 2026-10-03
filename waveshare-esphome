@@ -1,0 +1,208 @@
+substitutions:
+  name: "esp32p4"
+  name_clean: "esp32p4"
+  friendly_name: "Waveshare ESP32 P4"
+  powerwall_base: "sensor.home_energy_gateway"
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+  includes: 
+    - power_display.h
+
+esp32:
+  board: esp32-p4
+  cpu_frequency: 360MHz
+  variant: esp32p4
+  flash_size: 16MB
+  framework:
+    type: esp-idf
+    advanced:
+      enable_idf_experimental_features: yes
+
+globals:
+  - id: flash
+    type: bool
+    restore_value: no
+    initial_value: "true"
+
+external_components:
+  - source: github://pr#10425
+    components: [mipi_dsi]
+    refresh: 1s
+
+psram:
+  speed: 200Mhz
+
+packages:
+  logger_base: !include common/logger.yaml
+  network_base: !include common/network.yaml
+  wifi_base: !include common/wifi.yaml
+  restart_base: !include common/restart_control.yaml
+  status_base: !include common/status_control.yaml
+
+sensor:
+  - platform: homeassistant
+    name: "Solar Power"
+    entity_id: ${powerwall_base}_solar_power
+    id: solar_power
+  - platform: homeassistant
+    name: "Battery Power"
+    entity_id: ${powerwall_base}_battery_power
+    id: battery_power
+  - platform: homeassistant
+    name: "Home Power"
+    entity_id: ${powerwall_base}_load_power
+    id: home_power
+  - platform: homeassistant
+    name: "Grid Power"
+    entity_id: ${powerwall_base}_site_power
+    id: grid_power
+  - platform: homeassistant
+    name: "Battery Charge"
+    entity_id: ${powerwall_base}_charge
+    id: battery_charge
+
+binary_sensor:
+  - platform: homeassistant
+    name: "Grid Status"
+    entity_id: binary_${powerwall_base}_grid_status
+    id: grid_status
+
+
+esp_ldo:
+  - channel: 3
+    voltage: 2.5V
+
+esp32_hosted:
+  variant: ESP32C6
+  reset_pin: GPIO54
+  cmd_pin: GPIO19
+  clk_pin: GPIO18
+  d0_pin: GPIO14
+  d1_pin: GPIO15
+  d2_pin: GPIO16
+  d3_pin: GPIO17
+  active_high: true
+
+i2c:
+  sda: GPIO7
+  scl: GPIO8
+  scan: true
+  frequency: 400kHz 
+
+touchscreen:
+  - platform: gt911
+    calibration:
+      x_min: 0
+      y_max: 800
+      y_min: 0
+      x_max: 800
+    id: touch_screen
+    on_touch:
+      - lambda: |-
+          ESP_LOGD("touchscreen", "Touch detected at (%d, %d)", touch.x, touch.y);
+      - light.turn_on: backlight          
+    transform:
+      swap_xy: true
+      mirror_x: true
+      mirror_y: false  
+
+light:
+  - platform: monochromatic
+    output: backlight_pwm
+    name: "Display Backlight"
+    id: backlight
+    restore_mode: RESTORE_DEFAULT_ON
+    default_transition_length: 250ms
+
+output:
+  - platform: ledc
+    pin: GPIO26
+    id: backlight_pwm
+    frequency: 100Hz
+    inverted: True
+
+# touchscreen:
+#   platform: gt911
+#   id: my_touchscreen
+
+display:
+    - platform: mipi_dsi
+      model: WAVESHARE-P4-TOUCH-3.4C
+      pixel_mode: 24bit
+      color_depth: 24
+      auto_clear_enabled: true
+      update_interval: 2s
+      lambda: |
+        if (!id(grid_status).state ){
+          if (id(flash)){
+            id(flash) = false;
+          } else {
+            id(flash) = true;
+          }
+        }
+        draw_all(it,
+              *id(font_48),
+              *id(icon_font_36),
+              800, 800,
+              id(grid_power).state,
+              id(battery_power).state,
+              id(solar_power).state,
+              id(home_power).state,
+              id(battery_charge).state,
+              id(grid_status).state,
+              id(flash));
+
+
+font:
+  - file: 'fonts/GoogleSans-Medium.ttf'
+    id: font_48
+    size: 64
+  - file: 'materialdesignicons-webfont.ttf'
+    id: icon_font_36
+    size: 96
+    glyphs: [
+      "󰤟", # mdi-wifi-strength-1
+      "󰤢", # mdi-wifi-strength-2
+      "󰤥", # mdi-wifi-strength-3
+      "󰤨", # mdi-wifi-strength-4
+      "󰤮", # mdi-wifi-strength-off-outline
+      "󰒎", # mdi-server-network-off
+      "󰒍", # mdi-server-network
+      "󰋜", # mdi-home
+      "󰴾", # mdi-transmission-tower
+      "󰶜", # mdi-solar-panel-large
+      "󰂅", # mdi-battery-charging-100
+      "󰂋", # mdi-battery-charging-90
+      "󰂊", # mdi-battery-charging-80
+      "󰢞", # mdi-battery-charging-70
+      "󰂉", # mdi-battery-charging-60
+      "󰢝", # mdi-battery-charging-50
+      "󰂈", # mdi-battery-charging-40
+      "󰂇", # mdi-battery-charging-30
+      "󰂆", # mdi-battery-charging-20
+      "󰢜", # mdi-battery-charging-10
+      "󰢟", # mdi-battery-charging-outline
+      "󰁹", # mdi-battery
+      "󰁺", # mdi-battery-10
+      "󰁻", # mdi-battery-20
+      "󰁼", # mdi-battery-30
+      "󰁽", # mdi-battery-40
+      "󰁾", # mdi-battery-50
+      "󰁿", # mdi-battery-60
+      "󰂀", # mdi-battery-70
+      "󰂁", # mdi-battery-80
+      "󰂂", # mdi-battery-90
+      "󰂎", # mdi-battery-outline
+      "󰵃", # mdi-air-filter
+      "󰭬", # mdi-car-electric
+      "󱖵", # mdi-car-electric-outline
+      "󰳓", # mdi-toaster-oven
+      "󱆻", # mdi-tumble-dryer-off
+      "󰤗", # mdi-tumble-dryer
+      "󰓞", # mdi-stove
+      ]
+
+
+

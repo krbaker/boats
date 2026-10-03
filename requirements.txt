@@ -1,0 +1,40 @@
+The aim of this project is to make a display that shows local AIS boats using an NMEA 183 stream from a network server.
+
+The display is an ESP32 based display.  We don't want to use ESPHome, but a configuration that should describe all of the hardware is included in waveshare-esphome.  Use that to setup an ESP32 project, but not ESPHOME.
+
+The display is a round color display.
+  * It should have two modes, map and details
+  * The map should
+    Be nautical maps centered on a static, configured position
+    Have zoom in / out buttons
+    Display all ships on the map
+      scaled to the size of the ships
+      icon should reflect the heading
+      Add a name and speed below the ship
+    Regularly update the position of ships
+    Touching a ship should bring up a detail page with all of the AIS detail we have
+    Ships should disapear if not heard from in 10 minutes
+    Time and Tide should be displayed near the boarder
+  * The detail page should
+    List all of the information about the AIS contact
+    Name
+    MMSI
+    Course
+    Speed
+    Last Update
+    AIS Class
+    Vessel Type
+    Distance away (from configured location)
+ * A Network info page reached by holding a single point on the touchscreen for 10s,
+     a reset button - changing to AP mode, display AP SSID and password in this mode)
+     if connected to SSID, the IP of the device
+ * the esp32 should have a configuration web page
+   * All configuring the host:port of the NEMA183 AIS data server (it should ignore AIS messages it doesn't understand, it should tolerate timestampped NMEA183)
+   * NOAA tide station to use
+   * Timezone
+   * Allow updating SSID & Password, falling back to previous config if it fails
+   * Upload a map
+   * Set the center point lat/lon of the map 
+
+
+A python map builder is also to be created which outputs a PNG to be uploaded to the display.  This should take a center lat/lon and produce a PNG from NOAA ENC charts
