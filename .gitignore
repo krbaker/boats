@@ -1,0 +1,8 @@
+firmware/build/
+firmware/managed_components/
+firmware/sdkconfig
+firmware/sdkconfig.old
+firmware/build.log
+firmware/test/host/build/
+mapbuilder/map_out/
+__pycache__/

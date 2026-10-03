@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AIS Display</title>
+<style>
+  :root { --bg:#0d1b2a; --card:#1b2b3f; --fg:#e8eef5; --muted:#8fa3b8; --accent:#3fa7f5; --ok:#3ccf7a; --bad:#f2545b; --warn:#f5b13f; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.45 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; padding:16px; }
+  main { max-width:640px; margin:0 auto; }
+  h1 { font-size:22px; margin:4px 0 16px; }
+  h2 { font-size:16px; margin:0 0 12px; color:var(--accent); }
+  section { background:var(--card); border-radius:12px; padding:16px; margin-bottom:16px; }
+  label { display:block; margin:10px 0 4px; color:var(--muted); font-size:13px; }
+  input, select { width:100%; padding:9px 10px; border-radius:8px; border:1px solid #33475e; background:#0f2133; color:var(--fg); font-size:15px; }
+  .row { display:flex; gap:12px; flex-wrap:wrap; }
+  .row > div { flex:1 1 140px; }
+  button { margin-top:14px; padding:9px 18px; border:0; border-radius:8px; background:var(--accent); color:#04121f; font-weight:600; font-size:15px; cursor:pointer; }
+  button:disabled { opacity:.5; cursor:default; }
+  .msg { margin-top:10px; font-size:14px; min-height:1.2em; }
+  .ok { color:var(--ok); } .bad { color:var(--bad); } .warn { color:var(--warn); }
+  table { width:100%; border-collapse:collapse; font-size:14px; }
+  td { padding:3px 0; vertical-align:top; } td:first-child { color:var(--muted); width:38%; }
+  .hint { color:var(--muted); font-size:13px; margin-top:6px; }
+  a { color:var(--accent); }
+  code { background:#0f2133; padding:1px 5px; border-radius:4px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>AIS Display</h1>
+
+  <section>
+    <h2>Status</h2>
+    <table id="status"><tr><td>Loading…</td><td></td></tr></table>
+  </section>
+
+  <section>
+    <h2>AIS data server</h2>
+    <div class="row">
+      <div><label for="ais_host">Host name or IP</label><input id="ais_host" placeholder="192.168.1.50"></div>
+      <div style="flex:0 1 120px"><label for="ais_port">TCP port</label><input id="ais_port" type="number" min="1" max="65535"></div>
+    </div>
+    <div class="hint">NMEA 0183 over TCP. Timestamped lines are fine; unsupported messages are ignored.</div>
+    <button onclick="saveConfig(['ais_host','ais_port'], 'ais_msg')">Save</button>
+    <div class="msg" id="ais_msg"></div>
+  </section>
+
+  <section>
+    <h2>Map</h2>
+    <label for="map_file">Chart set (<code>map_set.zip</code> from the map builder)</label>
+    <input id="map_file" type="file" accept=".zip,application/zip">
+    <button id="map_btn" onclick="uploadMap()">Upload</button>
+    <div class="msg" id="map_msg"></div>
+    <div class="hint">Uploading a chart set also sets the centre position below to the chart's centre.</div>
+    <div class="row">
+      <div><label for="center_lat">Centre latitude</label><input id="center_lat" type="number" step="any"></div>
+      <div><label for="center_lon">Centre longitude</label><input id="center_lon" type="number" step="any"></div>
+    </div>
+    <button onclick="saveConfig(['center_lat','center_lon'], 'center_msg')">Save position</button>
+    <div class="msg" id="center_msg"></div>
+  </section>
+
+  <section>
+    <h2>Tides &amp; time</h2>
+    <label for="tide_station">NOAA tide station ID</label>
+    <input id="tide_station" inputmode="numeric" placeholder="9447130">
+    <div class="hint">Find a station ID on <a href="https://tidesandcurrents.noaa.gov/map/" target="_blank" rel="noopener">tidesandcurrents.noaa.gov</a>.</div>
+    <label for="tz_select">Time zone</label>
+    <select id="tz_select" onchange="tzChanged()"></select>
+    <div id="tz_custom_row" hidden>
+      <label for="tz_posix">POSIX TZ string</label>
+      <input id="tz_posix" placeholder="PST8PDT,M3.2.0,M11.1.0">
+    </div>
+    <label for="brightness">Display brightness (%)</label>
+    <input id="brightness" type="number" min="5" max="100">
+    <button onclick="saveTideTz()">Save</button>
+    <div class="msg" id="tide_msg"></div>
+  </section>
+
+  <section>
+    <h2>Wi-Fi</h2>
+    <label for="wifi_ssid">Network name (SSID)</label>
+    <input id="wifi_ssid" autocomplete="off">
+    <label for="wifi_pass">Password</label>
+    <input id="wifi_pass" type="password" autocomplete="new-password">
+    <button id="wifi_btn" onclick="saveWifi()">Connect</button>
+    <div class="msg" id="wifi_msg"></div>
+    <div class="hint">The new network is tested before it's saved. If it fails, the display goes back to the previous network (or its setup access point).</div>
+  </section>
+</main>
+
+<script>
+// IANA name -> POSIX TZ rule.
+const ZONES = [
+  ["America/New_York", "EST5EDT,M3.2.0,M11.1.0"],
+  ["America/Chicago", "CST6CDT,M3.2.0,M11.1.0"],
+  ["America/Denver", "MST7MDT,M3.2.0,M11.1.0"],
+  ["America/Phoenix", "MST7"],
+  ["America/Los_Angeles", "PST8PDT,M3.2.0,M11.1.0"],
+  ["America/Anchorage", "AKST9AKDT,M3.2.0,M11.1.0"],
+  ["Pacific/Honolulu", "HST10"],
+  ["America/Puerto_Rico", "AST4"],
+  ["Pacific/Guam", "ChST-10"],
+  ["Pacific/Pago_Pago", "SST11"],
+  ["America/Halifax", "AST4ADT,M3.2.0,M11.1.0"],
+  ["America/St_Johns", "NST3:30NDT,M3.2.0,M11.1.0"],
+  ["America/Toronto", "EST5EDT,M3.2.0,M11.1.0"],
+  ["America/Vancouver", "PST8PDT,M3.2.0,M11.1.0"],
+  ["America/Mexico_City", "CST6"],
+  ["America/Sao_Paulo", "<-03>3"],
+  ["Europe/London", "GMT0BST,M3.5.0/1,M10.5.0"],
+  ["Europe/Dublin", "IST-1GMT0,M10.5.0,M3.5.0/1"],
+  ["Europe/Lisbon", "WET0WEST,M3.5.0/1,M10.5.0"],
+  ["Europe/Paris", "CET-1CEST,M3.5.0,M10.5.0/3"],
+  ["Europe/Berlin", "CET-1CEST,M3.5.0,M10.5.0/3"],
+  ["Europe/Amsterdam", "CET-1CEST,M3.5.0,M10.5.0/3"],
+  ["Europe/Oslo", "CET-1CEST,M3.5.0,M10.5.0/3"],
+  ["Europe/Athens", "EET-2EEST,M3.5.0/3,M10.5.0/4"],
+  ["Europe/Helsinki", "EET-2EEST,M3.5.0/3,M10.5.0/4"],
+  ["Africa/Johannesburg", "SAST-2"],
+  ["Asia/Dubai", "<+04>-4"],
+  ["Asia/Kolkata", "IST-5:30"],
+  ["Asia/Singapore", "<+08>-8"],
+  ["Asia/Hong_Kong", "HKT-8"],
+  ["Asia/Tokyo", "JST-9"],
+  ["Australia/Perth", "AWST-8"],
+  ["Australia/Brisbane", "AEST-10"],
+  ["Australia/Sydney", "AEST-10AEDT,M10.1.0,M4.1.0/3"],
+  ["Pacific/Auckland", "NZST-12NZDT,M9.5.0,M4.1.0/3"],
+  ["UTC", "UTC0"],
+];
+
+const $ = id => document.getElementById(id);
+let cfg = {};
+
+function setMsg(id, text, cls) { const e = $(id); e.textContent = text; e.className = "msg " + (cls || ""); }
+
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  let body = {};
+  try { body = await r.json(); } catch (e) {}
+  if (!r.ok) throw new Error(body.error || ("HTTP " + r.status));
+  return body;
+}
+
+function fillTz() {
+  const sel = $("tz_select");
+  sel.innerHTML = "";
+  for (const [name] of ZONES) sel.add(new Option(name.replace(/_/g, " "), name));
+  sel.add(new Option("Custom (POSIX rule)…", "custom"));
+}
+
+function tzChanged() { $("tz_custom_row").hidden = $("tz_select").value !== "custom"; }
+
+function showConfig(c) {
+  cfg = c;
+  for (const k of ["ais_host", "ais_port", "tide_station", "center_lat", "center_lon", "brightness", "tz_posix"]) {
+    if (document.activeElement !== $(k)) $(k).value = c[k] ?? "";
+  }
+  if (c.ais_port === 0) $("ais_port").value = "";
+  if (document.activeElement !== $("wifi_ssid") && !$("wifi_ssid").value) $("wifi_ssid").value = c.wifi_ssid || "";
+  const known = ZONES.find(z => z[0] === c.tz_name && z[1] === c.tz_posix);
+  $("tz_select").value = known ? c.tz_name : "custom";
+  tzChanged();
+}
+
+async function loadConfig() { showConfig(await api("/api/config")); }
+
+function fieldValue(k) {
+  const v = $(k).value.trim();
+  if (["ais_port", "brightness"].includes(k)) return v === "" ? 0 : parseInt(v, 10);
+  if (["center_lat", "center_lon"].includes(k)) return parseFloat(v);
+  return v;
+}
+
+async function postConfig(body, msgId) {
+  try {
+    showConfig(await api("/api/config", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }));
+    setMsg(msgId, "Saved.", "ok");
+  } catch (e) { setMsg(msgId, e.message, "bad"); }
+}
+
+function saveConfig(keys, msgId) {
+  const body = {};
+  for (const k of keys) body[k] = fieldValue(k);
+  if (keys.includes("center_lat") && (isNaN(body.center_lat) || isNaN(body.center_lon))) {
+    return setMsg(msgId, "Enter latitude and longitude in decimal degrees.", "bad");
+  }
+  postConfig(body, msgId);
+}
+
+function saveTideTz() {
+  const body = { tide_station: fieldValue("tide_station"), brightness: fieldValue("brightness") };
+  const sel = $("tz_select").value;
+  if (sel === "custom") { body.tz_name = "Custom"; body.tz_posix = fieldValue("tz_posix"); }
+  else { body.tz_name = sel; body.tz_posix = ZONES.find(z => z[0] === sel)[1]; }
+  postConfig(body, "tide_msg");
+}
+
+async function uploadMap() {
+  const f = $("map_file").files[0];
+  if (!f) return setMsg("map_msg", "Choose map_set.zip first.", "bad");
+  $("map_btn").disabled = true;
+  setMsg("map_msg", "Uploading " + Math.round(f.size / 1024) + " KiB…");
+  try {
+    showConfig(await api("/api/map", { method: "POST", headers: { "Content-Type": "application/zip" }, body: f }));
+    setMsg("map_msg", "Map installed.", "ok");
+  } catch (e) { setMsg("map_msg", "Upload failed: " + e.message, "bad"); }
+  $("map_btn").disabled = false;
+}
+
+let wifiPending = false;
+async function saveWifi() {
+  const ssid = $("wifi_ssid").value.trim(), password = $("wifi_pass").value;
+  if (!ssid) return setMsg("wifi_msg", "Enter the network name.", "bad");
+  try {
+    await api("/api/wifi", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ssid, password }) });
+    wifiPending = true;
+    $("wifi_btn").disabled = true;
+    setMsg("wifi_msg", "Testing connection to " + ssid + " (up to 20 s)…", "warn");
+  } catch (e) { setMsg("wifi_msg", e.message, "bad"); }
+}
+
+function ago(s) {
+  if (s < 0) return "never";
+  if (s < 60) return s + " s ago";
+  if (s < 3600) return Math.floor(s / 60) + " min ago";
+  return Math.floor(s / 3600) + " h ago";
+}
+
+function fmtTime(t) { return new Date(t * 1000).toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" }); }
+
+function row(k, v, cls) { return `<tr><td>${k}</td><td class="${cls || ""}">${v}</td></tr>`; }
+function esc(s) { return String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]); }
+
+async function pollStatus() {
+  try {
+    const s = await api("/api/status");
+    const w = s.wifi, a = s.ais, t = s.tide, m = s.map;
+    let html = "";
+    if (w.state === "access point") html += row("Wi-Fi", `Setup access point <b>${esc(w.ap_ssid)}</b>`, "warn");
+    else html += row("Wi-Fi", `${esc(w.state)} to <b>${esc(w.ssid)}</b>` + (w.ip ? ` — ${w.ip} (${w.rssi} dBm)` : ""), w.ip ? "ok" : "warn");
+    html += row("AIS feed", esc(a.state) + (a.error && a.state !== "connected" ? ` (${esc(a.error)})` : "") +
+      (a.last_rx_s >= 0 ? `, data ${ago(a.last_rx_s)}` : ""), a.state === "connected" ? "ok" : "bad");
+    html += row("Messages", `${a.reports} decoded, ${a.unsupported} unsupported, ${a.ignored} ignored, ${a.bad_checksum} bad checksum`);
+    html += row("Vessels", s.vessels);
+    let tide = esc(t.state);
+    if (t.next) tide = `next ${t.next.high ? "high" : "low"} ${fmtTime(t.next.time)}, ${t.next.height_ft.toFixed(1)} ft`;
+    if (t.error) tide += ` (${esc(t.error)})`;
+    html += row("Tide" + (t.name ? ` — ${esc(t.name)}` : ""), tide, t.state === "ok" ? "" : "warn");
+    html += row("Map", m.radii_nm ? `${m.radii_nm.length} zoom levels (${m.radii_nm.join(", ")} nm), centre ${m.center_lat.toFixed(4)}, ${m.center_lon.toFixed(4)}` : "none uploaded", m.radii_nm ? "" : "warn");
+    html += row("Storage", `${Math.round(m.storage_used / 1024)} / ${Math.round(m.storage_total / 1024)} KiB`);
+    html += row("Uptime", ago(s.system.uptime_s).replace(" ago", "") + `, free RAM ${Math.round(s.system.heap_internal / 1024)} KiB + ${Math.round(s.system.heap_psram / 1048576)} MiB PSRAM`);
+    $("status").innerHTML = html;
+
+    if (wifiPending && w.test !== "testing") {
+      wifiPending = false;
+      $("wifi_btn").disabled = false;
+      $("wifi_pass").value = "";
+      if (w.test === "ok") setMsg("wifi_msg", `Connected to ${w.test_ssid}. New address: ${w.ip}` + (w.ap_active ? " — reconnect your device to that network and open http://" + w.ip + "/" : ""), "ok");
+      else if (w.test === "failed_reverted") setMsg("wifi_msg", `Could not join ${w.test_ssid}; went back to ${w.ssid}.`, "bad");
+      else setMsg("wifi_msg", `Could not join ${w.test_ssid}; the display is in setup (access point) mode.`, "bad");
+    }
+  } catch (e) {
+    if (wifiPending) setMsg("wifi_msg", "Lost contact with the display while it changes networks… still trying.", "warn");
+  }
+}
+
+fillTz();
+loadConfig().catch(e => setMsg("ais_msg", "Could not load settings: " + e.message, "bad"));
+pollStatus();
+setInterval(pollStatus, 3000);
+</script>
+</body>
+</html>

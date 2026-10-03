@@ -1,0 +1,21 @@
+menu "AIS Display"
+
+    config AIS_TOUCH_SWAP_XY
+        int "Touch: swap X and Y (0/1)"
+        range 0 1
+        default 0
+        help
+            Touch orientation fix-ups. The Waveshare BSP defaults (all 0) are used
+            unless touches land in the wrong place.
+
+    config AIS_TOUCH_MIRROR_X
+        int "Touch: mirror X (0/1)"
+        range 0 1
+        default 0
+
+    config AIS_TOUCH_MIRROR_Y
+        int "Touch: mirror Y (0/1)"
+        range 0 1
+        default 0
+
+endmenu
