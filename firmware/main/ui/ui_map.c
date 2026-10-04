@@ -28,6 +28,7 @@
 #define HIT_RADIUS_MIN  22
 #define VECTOR_MINUTES  6       // course/speed vector length
 #define HEADING_LINE_PX 28      // heading line drawn ahead of the bow
+#define HALO_PX         2       // light rim outside each vessel's dark outline
 #define DASH_PX         8
 #define DASH_GAP_PX     6
 #define DRAG_SLOP_PX    10      // finger movement before a touch becomes a drag
@@ -474,6 +475,10 @@ static void draw_vessel(lv_layer_t *layer, placed_t *pl, int64_t now_us)
     lv_opa_t opa = stale ? LV_OPA_50 : LV_OPA_COVER;
     lv_color_t color = ui_ship_color(v->ship_type);
     lv_color_t outline = lv_color_hex(0x101010);
+    // A light rim outside the dark outline: light-dark-colour reads against
+    // white water, tan land and blue shallows alike.
+    lv_color_t halo = lv_color_white();
+    lv_opa_t halo_opa = (lv_opa_t)(opa * 85 / 100);
 
     bool moving = (v->fields & AIS_F_SOG) && v->sog_kn >= 0.5f;
     bool has_dir = (v->fields & AIS_F_HEADING) || ((v->fields & AIS_F_COG) && moving);
@@ -506,8 +511,9 @@ static void draw_vessel(lv_layer_t *layer, placed_t *pl, int64_t now_us)
         float vlen = v->sog_kn * 1852.0f * VECTOR_MINUTES / 60.0f / s_view.m_per_px;
         if (vlen > 160) vlen = 160;
         float s = sinf(v->cog_deg * (float)M_PI / 180), c = cosf(v->cog_deg * (float)M_PI / 180);
-        draw_dashed_line(layer, (lv_point_precise_t){x, y}, (lv_point_precise_t){x + s * vlen, y - c * vlen}, color, 2,
-                         opa);
+        lv_point_precise_t a = {x, y}, b = {x + s * vlen, y - c * vlen};
+        draw_dashed_line(layer, a, b, halo, 2 + 2 * HALO_PX, halo_opa);
+        draw_dashed_line(layer, a, b, color, 2, opa);
     }
 
     float extent;
@@ -520,14 +526,17 @@ static void draw_vessel(lv_layer_t *layer, placed_t *pl, int64_t now_us)
         lv_point_precise_t sb_st = rot(off_x + hw, off_y + hl, s, c, x, y);
         lv_point_precise_t pt_st = rot(off_x - hw, off_y + hl, s, c, x, y);
         lv_point_precise_t pt_sh = rot(off_x - hw, off_y + shoulder, s, c, x, y);
+        lv_point_precise_t poly[] = {bow, sb_sh, sb_st, pt_st, pt_sh, bow};
+        // Heading line straight ahead of the bow, in line with the hull.
+        bool heading = v->fields & AIS_F_HEADING;
+        lv_point_precise_t tip = rot(off_x, off_y - hl - HEADING_LINE_PX, s, c, x, y);
+        for (int i = 0; i < 5; i++) draw_line(layer, poly[i], poly[i + 1], halo, 2 + 2 * HALO_PX, halo_opa);
+        if (heading) draw_line(layer, bow, tip, halo, 5 + 2 * HALO_PX, halo_opa);
         draw_triangle(layer, bow, sb_sh, sb_st, color, opa);
         draw_triangle(layer, bow, sb_st, pt_st, color, opa);
         draw_triangle(layer, bow, pt_st, pt_sh, color, opa);
-        lv_point_precise_t poly[] = {bow, sb_sh, sb_st, pt_st, pt_sh, bow};
         for (int i = 0; i < 5; i++) draw_line(layer, poly[i], poly[i + 1], outline, 2, opa);
-        if (v->fields & AIS_F_HEADING) {
-            // Heading line straight ahead of the bow, in line with the hull.
-            lv_point_precise_t tip = rot(off_x, off_y - hl - HEADING_LINE_PX, s, c, x, y);
+        if (heading) {
             draw_line(layer, bow, tip, outline, 5, opa);
             draw_line(layer, bow, tip, color, 3, opa);
         }
@@ -537,6 +546,12 @@ static void draw_vessel(lv_layer_t *layer, placed_t *pl, int64_t now_us)
         float d = fmaxf(wid, 14);
         lv_draw_rect_dsc_t r;
         lv_draw_rect_dsc_init(&r);
+        r.bg_color = halo;
+        r.bg_opa = halo_opa;
+        r.radius = LV_RADIUS_CIRCLE;
+        float hd = d + 2 * HALO_PX;
+        lv_area_t ha = {(int32_t)(x - hd / 2), (int32_t)(y - hd / 2), (int32_t)(x + hd / 2), (int32_t)(y + hd / 2)};
+        lv_draw_rect(layer, &r, &ha);
         r.bg_color = color;
         r.bg_opa = opa;
         r.radius = LV_RADIUS_CIRCLE;
@@ -545,7 +560,7 @@ static void draw_vessel(lv_layer_t *layer, placed_t *pl, int64_t now_us)
         r.border_opa = opa;
         lv_area_t a = {(int32_t)(x - d / 2), (int32_t)(y - d / 2), (int32_t)(x + d / 2), (int32_t)(y + d / 2)};
         lv_draw_rect(layer, &r, &a);
-        extent = d / 2;
+        extent = d / 2 + HALO_PX;
     }
 
     pl->shown = true;

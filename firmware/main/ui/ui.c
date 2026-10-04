@@ -155,16 +155,18 @@ lv_obj_t *ui_overlay_create(lv_obj_t *parent, lv_event_cb_t close_cb)
     return o;
 }
 
+// Strong, fairly dark colours that don't occur on NOAA charts (the chart's
+// magenta, light blue and tan would hide pleasure craft, ferries and pilots).
 lv_color_t ui_ship_color(uint8_t t)
 {
-    if (t == 30) return lv_color_hex(0xff8c1a);                         // fishing
-    if (t == 36 || t == 37) return lv_color_hex(0xd94cd9);              // sailing / pleasure
-    if (t >= 60 && t <= 69) return lv_color_hex(0x3d7cff);              // passenger
-    if (t >= 70 && t <= 79) return lv_color_hex(0x2db84d);              // cargo
-    if (t >= 80 && t <= 89) return lv_color_hex(0xe53935);              // tanker
-    if (t == 31 || t == 32 || t == 52) return lv_color_hex(0x19c3d6);   // tug / towing
-    if ((t >= 40 && t <= 59)) return lv_color_hex(0xf5d90a);            // HSC, pilot, SAR, law enf.
-    return lv_color_hex(0x9e9e9e);
+    if (t == 30) return lv_color_hex(0xf06a00);                         // fishing: orange
+    if (t == 36 || t == 37) return lv_color_hex(0x8a2be2);              // sailing / pleasure: violet
+    if (t >= 60 && t <= 69) return lv_color_hex(0x1f4fe0);              // passenger: royal blue
+    if (t >= 70 && t <= 79) return lv_color_hex(0x1f9d3a);              // cargo: green
+    if (t >= 80 && t <= 89) return lv_color_hex(0xd42020);              // tanker: red
+    if (t == 31 || t == 32 || t == 52) return lv_color_hex(0x00a6a6);   // tug / towing: teal
+    if ((t >= 40 && t <= 59)) return lv_color_hex(0xffb000);            // HSC, pilot, SAR, law enf.: amber
+    return lv_color_hex(0x6e6e6e);                                      // other / unknown: grey
 }
 
 void ui_format_time(time_t t, char *buf, size_t len, bool seconds)

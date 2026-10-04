@@ -67,6 +67,7 @@ SCREEN_PX = 800         # the display is 800 px across; a level's radius spans h
 TILE_PX = 256
 MAX_RENDER_PX = 16384   # largest chart request; each zoom level is rendered in one piece if it fits
 PALETTE_COLORS = 128
+DEFAULT_WASH = 0.3      # how far chart colours are faded toward white, so vessels stand out
 PACK_MAGIC = b"AISPAK1\0"
 MERC_RADIUS_M = 6378137.0
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
@@ -122,6 +123,12 @@ def fetch_chart(bbox, width, height, layers, retries=4):
             time.sleep(delay)
             delay *= 2
     raise AssertionError("unreachable")
+
+
+def washed(palette_img, wash):
+    """The palette's colours faded toward white by `wash` (0 = unchanged, 1 = white)."""
+    pal = palette_img.getpalette()
+    return [round(c + (255 - c) * wash) for c in pal]
 
 
 def tile_png(img):
@@ -203,6 +210,8 @@ def build_level(i, radius, args, layers, cx, cy, out_dir):
             palette = sample.quantize(colors=PALETTE_COLORS, method=Image.Quantize.MEDIANCUT,
                                       dither=Image.Dither.NONE)
         img = img.quantize(palette=palette, dither=Image.Dither.NONE)
+        if args.wash:
+            img.putpalette(washed(palette, args.wash))
         for r in range(nr):
             for c in range(nc):
                 box = (c * TILE_PX, r * TILE_PX, (c + 1) * TILE_PX, (r + 1) * TILE_PX)
@@ -241,6 +250,9 @@ def main():
                     help="comma-separated view radius for each zoom level in nautical miles (default 0.5,1,2,4,10)")
     ap.add_argument("--pan-nm", type=float, default=10.0,
                     help="how far from the centre the display can pan, in nautical miles (default 10)")
+    ap.add_argument("--wash", type=float, default=DEFAULT_WASH,
+                    help=f"fade the chart toward white by this fraction so vessels stand out "
+                         f"(0 = NOAA's colours, 1 = blank; default {DEFAULT_WASH})")
     ap.add_argument("--max-render-px", type=int, default=MAX_RENDER_PX,
                     help=f"largest image to request from the chart service (default {MAX_RENDER_PX}; the service "
                          "advertises 14400, so try that if big renders fail)")
@@ -256,6 +268,8 @@ def main():
         return 0
     if not -80 <= args.lat <= 80 or not -180 <= args.lon <= 180:
         ap.error("lat must be within +/-80 and lon within +/-180")
+    if not 0 <= args.wash < 1:
+        ap.error("--wash must be from 0 up to (not including) 1")
     if args.max_render_px < TILE_PX:
         ap.error(f"--max-render-px must be at least {TILE_PX}")
     if not 0 < args.pan_nm <= 30:
@@ -273,6 +287,7 @@ def main():
         "projection": "EPSG:3857",
         "pan_nm": args.pan_nm,
         "tile_px": TILE_PX,
+        "wash": args.wash,
         "levels": [build_level(i, r, args, layers, cx, cy, map_dir) for i, r in enumerate(args.radii_nm)],
     }
     manifest_json = json.dumps(manifest, indent=2)

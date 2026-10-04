@@ -18,7 +18,7 @@ tools/ais_sim.py AIS test server (simulated traffic or replay of a capture)
 | **Vessel detail** | Tap a vessel | Name, MMSI, call sign, AIS class, vessel type, navigational status, course, heading, speed, distance and bearing from your position, size, destination, and when it was last heard. It updates live. Swipe right or tap **Map** to go back. |
 | **Network** | Hold one finger anywhere for **10 s**. A countdown ring appears after 2 s. | The Wi-Fi network, IP address and config page URL, plus AIS and tide status. **Reset to AP mode** (tap twice to confirm) switches the display to a setup access point and shows its SSID and password. Saved settings are kept. |
 
-Vessel colours: green cargo, red tanker, blue passenger, orange fishing, magenta sailing or pleasure, cyan tug, yellow pilot / SAR / law enforcement / high-speed craft, grey other or unknown.
+Vessel colours: green cargo, red tanker, blue passenger, orange fishing, violet sailing or pleasure, teal tug, amber pilot / SAR / law enforcement / high-speed craft, grey other or unknown. They're chosen to avoid the chart's own colours, and each hull has a dark outline inside a light rim so it stands out on water and land alike.
 
 ## Configuration web page
 
@@ -44,6 +44,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 .venv/bin/python build_map.py --lat 47.6005 --lon -122.3550 -o seattle
 # optional: --radii-nm 0.25,0.5,1,2,4,10   one zoom level per view radius (default 0.5,1,2,4,10)
 #           --pan-nm 10                      how far from the centre you can pan (default 10)
+#           --wash 0.3                       fade the chart toward white so vessels stand out (0 = NOAA colours)
 ```
 
 Each zoom level is rendered over the whole pan area as one large image (up to 16384 px square), so labels and detail are consistent across it, then cut into 256 px tiles stored as one pack file per level. The closest zoom level needs about 2 GB of RAM while it's cut up. If the chart service starts refusing such big renders, add `--max-render-px 14400` (its advertised limit) and a level that's too big is split into a few blocks. The output is:
