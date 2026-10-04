@@ -23,6 +23,7 @@
 #define PILL_PAD_DEG    4       // extra arc either side of a pill's text
 #define MIN_SHIP_LEN    18      // px; ships are never drawn smaller than this
 #define MIN_SHIP_WIDTH  8
+#define HULL_M_PER_PX   (2 * 0.5f * 1852 / UI_SIZE)  // hulls are never drawn smaller than at the 0.5 nm zoom
 #define STALE_S         180     // dim targets not heard for this long
 #define HIT_RADIUS_MIN  22
 #define VECTOR_MINUTES  6       // course/speed vector length
@@ -478,20 +479,23 @@ static void draw_vessel(lv_layer_t *layer, placed_t *pl, int64_t now_us)
     bool has_dir = (v->fields & AIS_F_HEADING) || ((v->fields & AIS_F_COG) && moving);
     float dir = (v->fields & AIS_F_HEADING) ? v->heading : v->cog_deg;
 
-    // Size from the reported dimensions, scaled to the chart, with a floor so
-    // small boats stay visible and touchable.
+    // Size from the reported dimensions, with a floor so small boats stay
+    // visible and touchable. Hulls keep the size they have at the 0.5 nm zoom
+    // when zoomed further out (so they look oversized there), and are only
+    // true to scale at that zoom and closer.
+    float hull_m_per_px = fminf(s_view.m_per_px, HULL_M_PER_PX);
     float len = MIN_SHIP_LEN, wid = MIN_SHIP_WIDTH;
     float off_x = 0, off_y = 0; // hull centre relative to the GPS antenna, hull frame
     if (v->fields & AIS_F_DIM) {
         float lm = v->dim_a + v->dim_b;
         float wm = v->dim_c + v->dim_d ? (float)(v->dim_c + v->dim_d) : lm * 0.3f;
-        float true_len = lm / s_view.m_per_px;
-        len = fmaxf(true_len, MIN_SHIP_LEN);
-        wid = fmaxf(wm / s_view.m_per_px, MIN_SHIP_WIDTH);
+        float scaled_len = lm / hull_m_per_px;
+        len = fmaxf(scaled_len, MIN_SHIP_LEN);
+        wid = fmaxf(wm / hull_m_per_px, MIN_SHIP_WIDTH);
         if (wid > len * 0.6f) wid = len * 0.6f;
-        if (true_len > MIN_SHIP_LEN) {
-            off_y = -((float)v->dim_a - v->dim_b) / 2 / s_view.m_per_px;
-            off_x = ((float)v->dim_d - v->dim_c) / 2 / s_view.m_per_px;
+        if (scaled_len > MIN_SHIP_LEN) {
+            off_y = -((float)v->dim_a - v->dim_b) / 2 / hull_m_per_px;
+            off_x = ((float)v->dim_d - v->dim_c) / 2 / hull_m_per_px;
         }
     }
 

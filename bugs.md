@@ -30,3 +30,12 @@
 * The map maker will need to store bigger maps
 * maximum pan area should be the same at all zoom levels (10nm)
 * increase the farthest zoomed out to 10nm
+
+
+---- Set 2 ----
+* remove the recenter button, this isn't meant for precise location of the user
+* remove the heading lines from boats under 1kt
+* add current tide level to the tide bubble (<ft>ft <rise/fall icon> <HH:MM AM/PM> <ft>ft)
+* Make everything around the perimeter the same thickness (height of font/bubble) (right now 2nm and the +- around it differ)
+* the actual ship icon can still seem to 'stack' in the wrong order (I saw a vessel underway behind a stantionary circle icon)
+* the timeout to 'grey out' a vessel seems to short for AIS class B at rest
