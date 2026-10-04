@@ -26,6 +26,9 @@
 #define STALE_S         180     // dim targets not heard for this long
 #define HIT_RADIUS_MIN  22
 #define VECTOR_MINUTES  6       // course/speed vector length
+#define HEADING_LINE_PX 28      // heading line drawn ahead of the bow
+#define DASH_PX         8
+#define DASH_GAP_PX     6
 
 // Radii used for ship scaling when no chart has been uploaded.
 static const float k_default_radii[] = {0.5f, 1.0f, 2.0f, 4.0f};
@@ -75,8 +78,9 @@ static void update_view(void)
         s_view.nlevels = sizeof(k_default_radii) / sizeof(k_default_radii[0]);
         if (s_zoom >= s_view.nlevels) s_zoom = s_view.nlevels - 1;
         float r = k_default_radii[s_zoom];
-        double dlat = r / 60.0, dlon = dlat / cos(cfg.center_lat * M_PI / 180.0);
-        s_view.bbox = (geo_bbox_t){cfg.center_lat - dlat, cfg.center_lat + dlat, cfg.center_lon - dlon, cfg.center_lon + dlon};
+        double cx, cy, half = r * 1852.0 / cos(cfg.center_lat * M_PI / 180.0); // Mercator stretches by 1/cos(lat)
+        geo_mercator(cfg.center_lat, cfg.center_lon, &cx, &cy);
+        s_view.bbox = (geo_bbox_t){cx - half, cy - half, cx + half, cy + half};
         s_view.m_per_px = 2 * r * 1852.0f / UI_SIZE;
         s_view.radius_nm = r;
     }
@@ -127,6 +131,21 @@ static void draw_line(lv_layer_t *layer, lv_point_precise_t a, lv_point_precise_
     d.opa = opa;
     d.round_start = d.round_end = 1;
     lv_draw_line(layer, &d);
+}
+
+// LVGL's software renderer only dashes horizontal / vertical lines, so dash by hand.
+static void draw_dashed_line(lv_layer_t *layer, lv_point_precise_t a, lv_point_precise_t b, lv_color_t color, int w,
+                             lv_opa_t opa)
+{
+    float dx = b.x - a.x, dy = b.y - a.y, len = hypotf(dx, dy);
+    if (len < 1) return;
+    dx /= len;
+    dy /= len;
+    for (float t = 0; t < len; t += DASH_PX + DASH_GAP_PX) {
+        float e = fminf(t + DASH_PX, len);
+        draw_line(layer, (lv_point_precise_t){a.x + dx * t, a.y + dy * t}, (lv_point_precise_t){a.x + dx * e, a.y + dy * e},
+                  color, w, opa);
+    }
 }
 
 static void draw_triangle(lv_layer_t *layer, lv_point_precise_t a, lv_point_precise_t b, lv_point_precise_t c,
@@ -200,12 +219,15 @@ static void draw_vessel(lv_layer_t *layer, const vessel_t *v, int64_t now_us)
         }
     }
 
-    // Course/speed vector.
+    // Course-over-ground vector: where the vessel will be in VECTOR_MINUTES. It
+    // differs from the heading when current or wind sets the vessel sideways,
+    // so it is dashed to keep it distinct from the heading line.
     if ((v->fields & AIS_F_COG) && moving) {
         float vlen = v->sog_kn * 1852.0f * VECTOR_MINUTES / 60.0f / s_view.m_per_px;
         if (vlen > 160) vlen = 160;
         float s = sinf(v->cog_deg * (float)M_PI / 180), c = cosf(v->cog_deg * (float)M_PI / 180);
-        draw_line(layer, (lv_point_precise_t){x, y}, (lv_point_precise_t){x + s * vlen, y - c * vlen}, color, 2, opa);
+        draw_dashed_line(layer, (lv_point_precise_t){x, y}, (lv_point_precise_t){x + s * vlen, y - c * vlen}, color, 2,
+                         opa);
     }
 
     float extent;
@@ -223,6 +245,12 @@ static void draw_vessel(lv_layer_t *layer, const vessel_t *v, int64_t now_us)
         draw_triangle(layer, bow, pt_st, pt_sh, color, opa);
         lv_point_precise_t poly[] = {bow, sb_sh, sb_st, pt_st, pt_sh, bow};
         for (int i = 0; i < 5; i++) draw_line(layer, poly[i], poly[i + 1], outline, 2, opa);
+        if (v->fields & AIS_F_HEADING) {
+            // Heading line straight ahead of the bow, in line with the hull.
+            lv_point_precise_t tip = rot(off_x, off_y - hl - HEADING_LINE_PX, s, c, x, y);
+            draw_line(layer, bow, tip, outline, 5, opa);
+            draw_line(layer, bow, tip, color, 3, opa);
+        }
         extent = hypotf(hl + fabsf(off_y), hw + fabsf(off_x));
     } else {
         // No heading known (stationary): draw a dot.
@@ -261,24 +289,10 @@ static void draw_vessel(lv_layer_t *layer, const vessel_t *v, int64_t now_us)
     h->r = (int16_t)fmaxf(extent, HIT_RADIUS_MIN);
 }
 
-static void draw_own_position(lv_layer_t *layer)
-{
-    settings_t cfg;
-    settings_get(&cfg);
-    float x, y;
-    geo_project(&s_view.bbox, UI_SIZE, UI_SIZE, cfg.center_lat, cfg.center_lon, &x, &y);
-    lv_color_t c = lv_color_hex(0xff2d6f);
-    draw_line(layer, (lv_point_precise_t){x - 12, y}, (lv_point_precise_t){x - 4, y}, c, 3, LV_OPA_COVER);
-    draw_line(layer, (lv_point_precise_t){x + 4, y}, (lv_point_precise_t){x + 12, y}, c, 3, LV_OPA_COVER);
-    draw_line(layer, (lv_point_precise_t){x, y - 12}, (lv_point_precise_t){x, y - 4}, c, 3, LV_OPA_COVER);
-    draw_line(layer, (lv_point_precise_t){x, y + 4}, (lv_point_precise_t){x, y + 12}, c, 3, LV_OPA_COVER);
-}
-
 static void overlay_draw_cb(lv_event_t *e)
 {
     lv_layer_t *layer = lv_event_get_layer(e);
     int64_t now = esp_timer_get_time();
-    draw_own_position(layer);
     s_nhits = 0;
     // Stale targets first so live ones draw on top.
     for (int pass = 0; pass < 2; pass++) {

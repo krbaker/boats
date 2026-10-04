@@ -12,7 +12,7 @@ tools/ais_sim.py AIS test server (simulated traffic or replay of a capture)
 
 | Screen | How to get there | What it shows |
 |---|---|---|
-| **Map** | Default | The chart for the current zoom level, centred on your configured position (pink cross). Each vessel is drawn as a hull: scaled to its reported length and beam, rotated to its heading, and coloured by vessel type. A line ahead of it shows where it will be in 6 minutes. Its name and speed appear underneath. Vessels go dim after 3 minutes without a report and disappear after 10 minutes. **+ / −** on the right change the zoom level. The time is at the top edge, the next high or low tide at the bottom, and the vessel count or AIS status on the left. |
+| **Map** | Default | The chart for the current zoom level, centred on your configured position. Each vessel is drawn as a hull: scaled to its reported length and beam, rotated to its heading, and coloured by vessel type. A short solid line off the bow shows its heading, and a dashed line shows its course over ground and where it will be in 6 minutes (the two differ when current or wind sets it sideways). Its name and speed appear underneath. Vessels go dim after 3 minutes without a report and disappear after 10 minutes. **+ / −** on the right change the zoom level. The time is at the top edge, the next high or low tide at the bottom, and the vessel count or AIS status on the left. |
 | **Vessel detail** | Tap a vessel | Name, MMSI, call sign, AIS class, vessel type, navigational status, course, heading, speed, distance and bearing from your position, size, destination, and when it was last heard. It updates live. Swipe right or tap **Map** to go back. |
 | **Network** | Hold one finger anywhere for **10 s**. A countdown ring appears after 2 s. | The Wi-Fi network, IP address and config page URL, plus AIS and tide status. **Reset to AP mode** (tap twice to confirm) switches the display to a setup access point and shows its SSID and password. Saved settings are kept. |
 
@@ -40,7 +40,7 @@ python3 build_map.py --lat 47.6005 --lon -122.3550 -o seattle
 # optional: --radii-nm 0.25,0.5,1,2,4   (one zoom level per radius; default 0.5,1,2,4)
 ```
 
-This writes `seattle/map_z0.png … map_z3.png`, `manifest.json` and **`seattle/map_set.zip`**. Upload the zip on the config page. The charts come from NOAA's ENC-based Chart Display Service, which draws official NOAA ENC data with standard (S-52) nautical chart symbols. The info, data-quality and overscale overlays are turned off to reduce clutter; `--list-layers` and `--layers` control this. Only US waters are covered. No pip packages are needed.
+This writes `seattle/map_z0.png … map_z3.png`, `manifest.json` and **`seattle/map_set.zip`**. Upload the zip on the config page. Charts are rendered in Web Mercator (EPSG:3857); a chart set made by an older version of the builder (EPSG:4326) is rejected and must be rebuilt. The charts come from NOAA's ENC-based Chart Display Service, which draws official NOAA ENC data with standard (S-52) nautical chart symbols. The info, data-quality and overscale overlays are turned off to reduce clutter; `--list-layers` and `--layers` control this. Only US waters are covered. No pip packages are needed.
 
 ## Building and flashing the firmware
 

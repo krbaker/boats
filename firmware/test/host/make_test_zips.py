@@ -19,9 +19,9 @@ def png(w, h):
 
 
 def manifest(levels=(2.0, 0.5, 1.0), **over):
-    m = {"version": 1, "center_lat": 47.6, "center_lon": -122.35, "projection": "EPSG:4326", "width": 800,
+    m = {"version": 2, "center_lat": 47.6, "center_lon": -122.35, "projection": "EPSG:3857", "width": 800,
          "height": 800, "levels": [{"file": f"map_z{i}.png", "radius_nm": r, "m_per_px": 2 * r * 1852 / 800,
-                                    "bbox": [47.5, -122.5, 47.7, -122.2]} for i, r in enumerate(levels)]}
+                                    "bbox": [-13630000.0, 6030000.0, -13610000.0, 6050000.0]} for i, r in enumerate(levels)]}
     m.update(over)
     return json.dumps(m)
 
@@ -43,6 +43,7 @@ make("missing_png.zip", {k: v for k, v in good.items() if k != "map_z2.png"}, ex
 make("wrong_size.zip", {**good, "map_z1.png": png(640, 640)}, expect="fail")
 make("bad_manifest.zip", {**good, "manifest.json": "{not json"}, expect="fail")
 make("no_manifest.zip", {k: v for k, v in good.items() if k != "manifest.json"}, expect="fail")
+make("old_projection.zip", {**good, "manifest.json": manifest(projection="EPSG:4326")}, expect="fail")
 make("bad_center.zip", {**good, "manifest.json": manifest(center_lat=123.0)}, expect="fail")
 make("traversal.zip", {**good, "../../x.png": png(800, 800)})  # reduced to its base name, stays inside
 make("bad_name.zip", {**good, "bad name!.png": png(800, 800)}, expect="fail")

@@ -54,28 +54,38 @@ DEFAULT_LAYERS = [1, 2, 3, 4, 5, 6, 7]
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 
 
-def bbox_for(lat, lon, radius_nm):
-    """Lat/lon box extending radius_nm from the centre in each direction.
+MERC_RADIUS_M = 6378137.0
 
-    One nautical mile is one minute of latitude. Longitude is stretched by
-    1/cos(lat) so pixels are square on the ground (equirectangular around the
-    centre, which is what the display assumes).
+
+def mercator(lat, lon):
+    """Lat/lon to Web Mercator (EPSG:3857) metres."""
+    return (MERC_RADIUS_M * math.radians(lon),
+            MERC_RADIUS_M * math.log(math.tan(math.pi / 4 + math.radians(lat) / 2)))
+
+
+def bbox_for(lat, lon, radius_nm):
+    """Web Mercator box extending radius_nm from the centre in each direction.
+
+    Charts are requested in EPSG:3857 because the chart service keeps pixels
+    square in whatever CRS it is asked for: an EPSG:4326 request comes back
+    covering more latitude than asked (by 1/cos(lat)), which put vessels on
+    land. Mercator metres are 1/cos(lat) longer than ground metres.
     """
-    dlat = radius_nm / 60.0
-    dlon = dlat / math.cos(math.radians(lat))
-    return lat - dlat, lon - dlon, lat + dlat, lon + dlon
+    x, y = mercator(lat, lon)
+    half = radius_nm * 1852.0 / math.cos(math.radians(lat))
+    return x - half, y - half, x + half, y + half
 
 
 def fetch_chart(bbox, size, layers, retries=4):
-    lat_min, lon_min, lat_max, lon_max = bbox
+    x_min, y_min, x_max, y_max = bbox
     params = {
         "SERVICE": "WMS",
         "VERSION": "1.3.0",
         "REQUEST": "GetMap",
         "LAYERS": ",".join(str(layer) for layer in layers),
         "STYLES": "",
-        "CRS": "EPSG:4326",  # WMS 1.3.0 axis order for EPSG:4326 is lat,lon
-        "BBOX": f"{lat_min:.7f},{lon_min:.7f},{lat_max:.7f},{lon_max:.7f}",
+        "CRS": "EPSG:3857",
+        "BBOX": f"{x_min:.2f},{y_min:.2f},{x_max:.2f},{y_max:.2f}",
         "WIDTH": str(size),
         "HEIGHT": str(size),
         "FORMAT": "image/png",
@@ -149,10 +159,10 @@ def main():
 
     os.makedirs(args.out, exist_ok=True)
     manifest = {
-        "version": 1,
+        "version": 2,
         "center_lat": round(args.lat, 7),
         "center_lon": round(args.lon, 7),
-        "projection": "EPSG:4326",
+        "projection": "EPSG:3857",
         "width": args.size,
         "height": args.size,
         "levels": [],
@@ -171,7 +181,7 @@ def main():
             "ais:center_lon": manifest["center_lon"],
             "ais:m_per_px": f"{m_per_px:.4f}",
             "ais:zoom_index": i,
-            "ais:projection": "EPSG:4326",
+            "ais:projection": "EPSG:3857",
             "Source": "NOAA ENC via NOAA Chart Display Service",
         })
         name = f"map_z{i}.png"
@@ -181,7 +191,7 @@ def main():
             "file": name,
             "radius_nm": radius,
             "m_per_px": round(m_per_px, 4),
-            "bbox": [round(v, 7) for v in bbox],  # lat_min, lon_min, lat_max, lon_max
+            "bbox": [round(v, 2) for v in bbox],  # EPSG:3857 metres: x_min, y_min, x_max, y_max
         })
         print(f"  wrote {name} ({len(png) // 1024} KiB)")
 

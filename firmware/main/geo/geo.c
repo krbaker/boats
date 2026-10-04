@@ -7,6 +7,7 @@
 #endif
 
 #define EARTH_RADIUS_NM 3440.065
+#define MERC_RADIUS_M   6378137.0
 #define DEG2RAD(d) ((d) * M_PI / 180.0)
 #define RAD2DEG(r) ((r) * 180.0 / M_PI)
 
@@ -29,8 +30,16 @@ double geo_bearing_deg(double lat1, double lon1, double lat2, double lon2)
     return fmod(b + 360.0, 360.0);
 }
 
+void geo_mercator(double lat, double lon, double *x, double *y)
+{
+    *x = MERC_RADIUS_M * DEG2RAD(lon);
+    *y = MERC_RADIUS_M * log(tan(M_PI / 4 + DEG2RAD(lat) / 2));
+}
+
 void geo_project(const geo_bbox_t *bbox, int w, int h, double lat, double lon, float *x, float *y)
 {
-    *x = (float)((lon - bbox->lon_min) / (bbox->lon_max - bbox->lon_min) * w);
-    *y = (float)((bbox->lat_max - lat) / (bbox->lat_max - bbox->lat_min) * h);
+    double mx, my;
+    geo_mercator(lat, lon, &mx, &my);
+    *x = (float)((mx - bbox->x_min) / (bbox->x_max - bbox->x_min) * w);
+    *y = (float)((bbox->y_max - my) / (bbox->y_max - bbox->y_min) * h);
 }

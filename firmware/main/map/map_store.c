@@ -101,6 +101,11 @@ static bool parse_manifest(const char *dir, map_manifest_t *m, char *err, size_t
         snprintf(err, errlen, "maps must be %dx%d (got %dx%d)", MAP_SIZE_PX, MAP_SIZE_PX, m->width, m->height);
         goto out;
     }
+    cJSON *proj = cJSON_GetObjectItem(root, "projection");
+    if (!cJSON_IsString(proj) || strcmp(proj->valuestring, "EPSG:3857") != 0) {
+        snprintf(err, errlen, "chart is from an older map builder; rebuild it");
+        goto out;
+    }
     m->center_lat = lat->valuedouble;
     m->center_lon = lon->valuedouble;
 
@@ -116,11 +121,11 @@ static bool parse_manifest(const char *dir, map_manifest_t *m, char *err, size_t
         strlcpy(l->file, file->valuestring, sizeof(l->file));
         l->radius_nm = cJSON_GetNumberValue(cJSON_GetObjectItem(lv, "radius_nm"));
         l->m_per_px = cJSON_GetNumberValue(cJSON_GetObjectItem(lv, "m_per_px"));
-        l->bbox.lat_min = cJSON_GetNumberValue(cJSON_GetArrayItem(bbox, 0));
-        l->bbox.lon_min = cJSON_GetNumberValue(cJSON_GetArrayItem(bbox, 1));
-        l->bbox.lat_max = cJSON_GetNumberValue(cJSON_GetArrayItem(bbox, 2));
-        l->bbox.lon_max = cJSON_GetNumberValue(cJSON_GetArrayItem(bbox, 3));
-        if (!(l->m_per_px > 0) || !(l->bbox.lat_max > l->bbox.lat_min) || !(l->bbox.lon_max > l->bbox.lon_min)) {
+        l->bbox.x_min = cJSON_GetNumberValue(cJSON_GetArrayItem(bbox, 0));
+        l->bbox.y_min = cJSON_GetNumberValue(cJSON_GetArrayItem(bbox, 1));
+        l->bbox.x_max = cJSON_GetNumberValue(cJSON_GetArrayItem(bbox, 2));
+        l->bbox.y_max = cJSON_GetNumberValue(cJSON_GetArrayItem(bbox, 3));
+        if (!(l->m_per_px > 0) || !(l->bbox.x_max > l->bbox.x_min) || !(l->bbox.y_max > l->bbox.y_min)) {
             snprintf(err, errlen, "manifest: bad georeference for %s", l->file);
             goto out;
         }
