@@ -18,6 +18,13 @@
 #include "map_pack.h"
 #include "settings.h"
 
+#ifdef ESP_PLATFORM
+#include "sdkconfig.h"
+#if CONFIG_FATFS_LFN_NONE
+#error "The chart files (manifest.json) need FAT long file names. Set CONFIG_FATFS_LFN_HEAP=y in firmware/sdkconfig (idf.py menuconfig > Component config > FAT Filesystem support > Long filename support), or delete sdkconfig to regenerate it from sdkconfig.defaults."
+#endif
+#endif
+
 static const char *TAG = "map_store";
 
 #define NEW_DIR         MAP_ROOT "/ais_map.new"
