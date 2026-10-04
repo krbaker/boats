@@ -4,8 +4,8 @@
 Charts are rendered by NOAA's ENC-based Chart Display Service (official ENC
 data drawn with S-52 nautical symbology) in Web Mercator, at one scale per
 zoom level, covering the whole area the display can pan over (by default
-10 nm either side of the centre). Each level is cut into 256 px tiles and
-stored in one pack file. The output directory gets:
+10 nm either side of the centre). Each level is rendered as one large image,
+then cut into 256 px tiles and stored in one pack file. The output directory gets:
 
     ais_map/manifest.json       centre point and per-level georeference
     ais_map/z0.pak ... zN.pak   the tiles for each zoom level (z0 = most zoomed in)
@@ -65,7 +65,7 @@ DEFAULT_LAYERS = [1, 2, 3, 4, 5, 6, 7]
 
 SCREEN_PX = 800         # the display is 800 px across; a level's radius spans half of that
 TILE_PX = 256
-META_TILES = 16         # tiles per side fetched in one chart request (4096 px), to keep label seams rare
+MAX_RENDER_PX = 16384   # largest chart request; each zoom level is rendered in one piece if it fits
 PALETTE_COLORS = 128
 PACK_MAGIC = b"AISPAK1\0"
 MERC_RADIUS_M = 6378137.0
@@ -85,6 +85,7 @@ def fetch_chart(bbox, width, height, layers, retries=4):
     square in whatever CRS it is asked for: an EPSG:4326 request comes back
     covering more latitude than asked (by 1/cos(lat)), which put vessels on land.
     """
+    Image.MAX_IMAGE_PIXELS = None  # a whole zoom level is one image of up to 16k x 16k
     x_min, y_min, x_max, y_max = bbox
     params = {
         "SERVICE": "WMS",
@@ -108,7 +109,9 @@ def fetch_chart(bbox, width, height, layers, retries=4):
                 data = resp.read()
             if not data.startswith(PNG_SIGNATURE):
                 raise RuntimeError("chart service did not return a PNG: " + data[:300].decode("utf-8", "replace"))
-            img = Image.open(io.BytesIO(data)).convert("RGB")
+            img = Image.open(io.BytesIO(data))
+            img.load()
+            img = img.convert("RGB")
             if img.size != (width, height):
                 raise RuntimeError(f"chart service returned {img.size}, expected {width}x{height}")
             return img
@@ -121,11 +124,10 @@ def fetch_chart(bbox, width, height, layers, retries=4):
     raise AssertionError("unreachable")
 
 
-def tile_png(img, palette):
-    """Encode one tile as a palette PNG using the level's shared palette."""
-    q = img.quantize(palette=palette, dither=Image.Dither.NONE)
+def tile_png(img):
+    """Encode one tile (already in the level's palette) as a PNG."""
     buf = io.BytesIO()
-    q.save(buf, "PNG", optimize=True)
+    img.save(buf, "PNG", optimize=True)
     return buf.getvalue()
 
 
@@ -171,27 +173,43 @@ def build_level(i, radius, args, layers, cx, cy, out_dir):
     origin_x = cx - cols * TILE_PX * merc_px / 2         # top-left corner of the tile grid
     origin_y = cy + rows * TILE_PX * merc_px / 2
 
-    metas = math.ceil(cols / META_TILES)
-    print(f"zoom {i}: radius {radius} nm ({m_per_px:.2f} m/px), {cols}x{rows} tiles in {metas * metas} request(s)",
-          flush=True)
+    # Render the whole level as one big image and cut it into tiles, so every
+    # tile comes from the same render (the chart service picks symbols, labels
+    # and level of detail per request). A level too big for one request is
+    # split into as few equal blocks as possible.
+    per_block = max(1, args.max_render_px // TILE_PX)
+    nblk = math.ceil(cols / per_block)
+    size = math.ceil(cols / nblk)  # tiles per block side
+    print(f"zoom {i}: radius {radius} nm ({m_per_px:.2f} m/px), {cols}x{rows} tiles, "
+          f"{cols * TILE_PX} px across{f' in {nblk * nblk} blocks' if nblk > 1 else ''}", flush=True)
+    if nblk > 1:
+        print(f"  warning: too big for one {args.max_render_px} px render; detail may differ between blocks",
+              file=sys.stderr)
     tiles, palette = {}, None
-    # Start with the middle block so the palette comes from the area people look at most.
-    order = sorted(((mr, mc) for mr in range(metas) for mc in range(metas)),
-                   key=lambda p: (p[0] - (metas - 1) / 2) ** 2 + (p[1] - (metas - 1) / 2) ** 2)
-    for n, (mr, mc) in enumerate(order, 1):
-        c0, r0 = mc * META_TILES, mr * META_TILES
-        nc, nr = min(META_TILES, cols - c0), min(META_TILES, rows - r0)
+    # Middle block first, so the palette comes from the area people look at most.
+    order = sorted(((br, bc) for br in range(nblk) for bc in range(nblk)),
+                   key=lambda p: (p[0] - (nblk - 1) / 2) ** 2 + (p[1] - (nblk - 1) / 2) ** 2)
+    for n, (br, bc) in enumerate(order, 1):
+        c0, r0 = bc * size, br * size
+        nc, nr = min(size, cols - c0), min(size, rows - r0)
         x0 = origin_x + c0 * TILE_PX * merc_px
         y1 = origin_y - r0 * TILE_PX * merc_px
         bbox = (x0, y1 - nr * TILE_PX * merc_px, x0 + nc * TILE_PX * merc_px, y1)
+        t0 = time.time()
         img = fetch_chart(bbox, nc * TILE_PX, nr * TILE_PX, layers)
         if palette is None:
-            palette = img.quantize(colors=PALETTE_COLORS, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.NONE)
+            # Chosen from a reduced copy: the full render can be 16k x 16k.
+            sample = img.resize((min(img.width, 2048), min(img.height, 2048)), Image.Resampling.NEAREST)
+            palette = sample.quantize(colors=PALETTE_COLORS, method=Image.Quantize.MEDIANCUT,
+                                      dither=Image.Dither.NONE)
+        img = img.quantize(palette=palette, dither=Image.Dither.NONE)
         for r in range(nr):
             for c in range(nc):
                 box = (c * TILE_PX, r * TILE_PX, (c + 1) * TILE_PX, (r + 1) * TILE_PX)
-                tiles[(c0 + c, r0 + r)] = tile_png(img.crop(box), palette)
-        print(f"  block {n}/{metas * metas}", flush=True)
+                tiles[(c0 + c, r0 + r)] = tile_png(img.crop(box))
+        del img
+        print(f"  {'block ' + str(n) + '/' + str(nblk * nblk) + ' ' if nblk > 1 else ''}rendered and cut in "
+              f"{time.time() - t0:.0f} s", flush=True)
 
     name = f"z{i}.pak"
     unique = write_pack(os.path.join(out_dir, name), cols, rows, tiles)
@@ -223,6 +241,9 @@ def main():
                     help="comma-separated view radius for each zoom level in nautical miles (default 0.5,1,2,4,10)")
     ap.add_argument("--pan-nm", type=float, default=10.0,
                     help="how far from the centre the display can pan, in nautical miles (default 10)")
+    ap.add_argument("--max-render-px", type=int, default=MAX_RENDER_PX,
+                    help=f"largest image to request from the chart service (default {MAX_RENDER_PX}; the service "
+                         "advertises 14400, so try that if big renders fail)")
     ap.add_argument("--layers", default=",".join(map(str, DEFAULT_LAYERS)),
                     help="comma-separated chart layer ids (see --list-layers)")
     ap.add_argument("--list-layers", action="store_true", help="print the available layer ids and exit")
@@ -235,6 +256,8 @@ def main():
         return 0
     if not -80 <= args.lat <= 80 or not -180 <= args.lon <= 180:
         ap.error("lat must be within +/-80 and lon within +/-180")
+    if args.max_render_px < TILE_PX:
+        ap.error(f"--max-render-px must be at least {TILE_PX}")
     if not 0 < args.pan_nm <= 30:
         ap.error("--pan-nm must be between 0 and 30")
     layers = [int(x) for x in args.layers.split(",") if x.strip()]

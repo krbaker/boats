@@ -46,7 +46,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 #           --pan-nm 10                      how far from the centre you can pan (default 10)
 ```
 
-Each zoom level is rendered over the whole pan area and cut into 256 px tiles, stored as one pack file per level. The output is:
+Each zoom level is rendered over the whole pan area as one large image (up to 16384 px square), so labels and detail are consistent across it, then cut into 256 px tiles stored as one pack file per level. The closest zoom level needs about 2 GB of RAM while it's cut up. If the chart service starts refusing such big renders, add `--max-render-px 14400` (its advertised limit) and a level that's too big is split into a few blocks. The output is:
 
 - `seattle/ais_map/`: `manifest.json` and `z0.pak … z4.pak`. Copy this folder to the root of the display's microSD card and restart the display, **or**
 - `seattle/map_set.zip`: the same files, to upload on the config page.
