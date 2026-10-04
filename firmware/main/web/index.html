@@ -53,7 +53,10 @@
     <input id="map_file" type="file" accept=".zip,application/zip">
     <button id="map_btn" onclick="uploadMap()">Upload</button>
     <div class="msg" id="map_msg"></div>
-    <div class="hint">Uploading a chart set also sets the centre position below to the chart's centre.</div>
+    <progress id="map_progress" max="1" value="0" hidden></progress>
+    <div class="hint">The chart is stored on the display's microSD card (FAT32). Uploading a chart set also sets the
+      centre position below to the chart's centre. You can instead copy the builder's <code>ais_map</code> folder to
+      the root of the card and restart the display.</div>
     <div class="row">
       <div><label for="center_lat">Centre latitude</label><input id="center_lat" type="number" step="any"></div>
       <div><label for="center_lon">Centre longitude</label><input id="center_lon" type="number" step="any"></div>
@@ -199,16 +202,33 @@ function saveTideTz() {
   postConfig(body, "tide_msg");
 }
 
-async function uploadMap() {
+// XHR rather than fetch, for upload progress on large chart sets.
+function uploadMap() {
   const f = $("map_file").files[0];
   if (!f) return setMsg("map_msg", "Choose map_set.zip first.", "bad");
   $("map_btn").disabled = true;
-  setMsg("map_msg", "Uploading " + Math.round(f.size / 1024) + " KiB…");
-  try {
-    showConfig(await api("/api/map", { method: "POST", headers: { "Content-Type": "application/zip" }, body: f }));
-    setMsg("map_msg", "Map installed.", "ok");
-  } catch (e) { setMsg("map_msg", "Upload failed: " + e.message, "bad"); }
-  $("map_btn").disabled = false;
+  const bar = $("map_progress");
+  bar.hidden = false;
+  bar.value = 0;
+  const mb = (f.size / 1048576).toFixed(1);
+  setMsg("map_msg", `Uploading ${mb} MB…`);
+  const xhr = new XMLHttpRequest();
+  xhr.open("POST", "/api/map");
+  xhr.setRequestHeader("Content-Type", "application/zip");
+  xhr.upload.onprogress = e => {
+    if (!e.lengthComputable) return;
+    bar.value = e.loaded / e.total;
+    setMsg("map_msg", e.loaded < e.total ? `Uploading ${mb} MB… ${Math.round(100 * e.loaded / e.total)}%` : "Checking the chart…");
+  };
+  const done = (ok, text) => { $("map_btn").disabled = false; bar.hidden = true; setMsg("map_msg", text, ok ? "ok" : "bad"); };
+  xhr.onload = () => {
+    let body = {};
+    try { body = JSON.parse(xhr.responseText); } catch (e) {}
+    if (xhr.status === 200) { showConfig(body); done(true, "Map installed."); }
+    else done(false, "Upload failed: " + (body.error || "HTTP " + xhr.status));
+  };
+  xhr.onerror = () => done(false, "Upload failed: connection lost.");
+  xhr.send(f);
 }
 
 let wifiPending = false;
@@ -250,8 +270,8 @@ async function pollStatus() {
     if (t.next) tide = `next ${t.next.high ? "high" : "low"} ${fmtTime(t.next.time)}, ${t.next.height_ft.toFixed(1)} ft`;
     if (t.error) tide += ` (${esc(t.error)})`;
     html += row("Tide" + (t.name ? ` — ${esc(t.name)}` : ""), tide, t.state === "ok" ? "" : "warn");
-    html += row("Map", m.radii_nm ? `${m.radii_nm.length} zoom levels (${m.radii_nm.join(", ")} nm), centre ${m.center_lat.toFixed(4)}, ${m.center_lon.toFixed(4)}` : "none uploaded", m.radii_nm ? "" : "warn");
-    html += row("Storage", `${Math.round(m.storage_used / 1024)} / ${Math.round(m.storage_total / 1024)} KiB`);
+    html += row("Map", m.radii_nm ? `${m.radii_nm.length} zoom levels (${m.radii_nm.join(", ")} nm), centre ${m.center_lat.toFixed(4)}, ${m.center_lon.toFixed(4)}` : "none on the card", m.radii_nm ? "" : "warn");
+    html += row("microSD card", m.card ? `${(m.storage_free / 1048576).toFixed(0)} MB free of ${(m.storage_total / 1048576).toFixed(0)} MB` : "not found (insert a FAT32 card and restart)", m.card ? "" : "bad");
     html += row("Uptime", ago(s.system.uptime_s).replace(" ago", "") + `, free RAM ${Math.round(s.system.heap_internal / 1024)} KiB + ${Math.round(s.system.heap_psram / 1048576)} MiB PSRAM`);
     $("status").innerHTML = html;
 

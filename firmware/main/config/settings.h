@@ -9,6 +9,20 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
 
+// Which vessels the map labels or draws (set on the Vessels overlay).
+typedef enum { FILTER_HIDE_LABEL, FILTER_HIDE_VESSEL } filter_mode_t;
+typedef enum { ORDER_SPEED, ORDER_SIZE } draw_order_t;
+
+typedef struct {
+    uint16_t min_len_ft;     // 0 = no size filter
+    uint8_t min_speed_kn;    // 0 = no speed filter
+    uint8_t mode;            // filter_mode_t: what happens to vessels below the limits
+    uint8_t order;           // draw_order_t: whose labels win when they overlap
+    bool include_unknown;    // vessels that never reported size / speed pass those filters
+    bool label_name;
+    bool label_speed;
+} vessel_filter_t;
+
 typedef struct {
     char ais_host[64];
     uint16_t ais_port;
@@ -19,6 +33,8 @@ typedef struct {
     double center_lon;
     uint8_t zoom_index;
     uint8_t brightness;      // percent
+    vessel_filter_t filter;
+    uint32_t map_created;    // chart set whose centre was last applied (see map_store)
 } settings_t;
 
 // Bits set on settings_events() when the matching group of settings changes.

@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "map_pack.h"
 #include "map_store.h"
 #include "settings.h"
 
@@ -38,8 +39,29 @@ static int run(const char *expect, const char *path, size_t chunk)
     if (ok) {
         map_manifest_t m;
         if (!map_store_get_manifest(&m) || m.nlevels != 3 || m.levels[0].radius_nm > m.levels[1].radius_nm ||
-            s_cfg.center_lat != m.center_lat || s_map_changed != changed_before + 1 || s_cfg.zoom_index != 2) {
+            s_cfg.center_lat != m.center_lat || s_cfg.map_created != 1234567 || s_map_changed != changed_before + 1 ||
+            s_cfg.zoom_index != 2 || m.levels[0].cols != 3 || m.levels[0].rows != 2) {
             printf("FAIL %s: installed map not as expected\n", path);
+            return 1;
+        }
+        // Read tiles back out of an installed pack.
+        map_pack_t pk;
+        char perr[96], ppath[128];
+        snprintf(ppath, sizeof(ppath), "%s/%s", MAP_DIR, m.levels[0].file);
+        size_t len0, len1, bad;
+        if (!map_pack_open(&pk, ppath, perr, sizeof(perr))) {
+            printf("FAIL %s: %s\n", path, perr);
+            return 1;
+        }
+        uint8_t *t0 = map_pack_read(&pk, 0, 0, &len0), *t1 = map_pack_read(&pk, 2, 1, &len1);
+        uint8_t *t2 = map_pack_read(&pk, 3, 0, &bad);
+        bool good = !t0 && len0 == 0 && t1 && len1 > 24 && memcmp(t1, "\x89PNG", 4) == 0 && !t2 && bad == 1;
+        free(t0);
+        free(t1);
+        free(t2);
+        map_pack_close(&pk);
+        if (!good) {
+            printf("FAIL %s: tiles not read back correctly\n", path);
             return 1;
         }
     }
@@ -49,6 +71,7 @@ static int run(const char *expect, const char *path, size_t chunk)
 int main(int argc, char **argv)
 {
     int failures = 0;
+    map_store_init();
     static const size_t chunks[] = {1, 7, 30, 4096, 1 << 22};
     for (int i = 1; i + 1 < argc; i += 2) {
         for (size_t c = 0; c < sizeof(chunks) / sizeof(chunks[0]); c++) {

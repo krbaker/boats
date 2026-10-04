@@ -220,10 +220,11 @@ static esp_err_t status_get(httpd_req_t *req)
         cJSON *levels = cJSON_AddArrayToObject(mj, "radii_nm");
         for (int i = 0; i < m.nlevels; i++) cJSON_AddItemToArray(levels, cJSON_CreateNumber(m.levels[i].radius_nm));
     }
-    size_t total, used;
-    map_store_usage(&total, &used);
-    cJSON_AddNumberToObject(mj, "storage_used", used);
-    cJSON_AddNumberToObject(mj, "storage_total", total);
+    uint64_t total, free_bytes;
+    map_store_usage(&total, &free_bytes);
+    cJSON_AddBoolToObject(mj, "card", map_store_card_ok());
+    cJSON_AddNumberToObject(mj, "storage_free", (double)free_bytes);
+    cJSON_AddNumberToObject(mj, "storage_total", (double)total);
 
     cJSON *sj = cJSON_AddObjectToObject(o, "system");
     cJSON_AddNumberToObject(sj, "uptime_s", now_us / 1000000);
@@ -261,19 +262,27 @@ static esp_err_t vessels_get(httpd_req_t *req)
     return send_json(req, arr);
 }
 
+#define UPLOAD_CHUNK (16 * 1024)
+
 static esp_err_t map_post(httpd_req_t *req)
 {
-    if (req->content_len <= 0 || req->content_len > 10 * 1024 * 1024) {
-        return send_error(req, "400 Bad Request", "upload map_set.zip (up to 10 MB)");
+    if (!map_store_card_ok()) {
+        return send_error(req, "400 Bad Request", "no microSD card in the display (insert one and restart it)");
+    }
+    uint64_t total, free_bytes;
+    map_store_usage(&total, &free_bytes);
+    if (req->content_len <= 0) return send_error(req, "400 Bad Request", "upload map_set.zip");
+    if (req->content_len + (1 << 20) > free_bytes) {
+        return send_error(req, "400 Bad Request", "not enough free space on the microSD card");
     }
     map_upload_t *u = map_upload_begin();
-    if (!u) return send_error(req, "500 Internal Server Error", "storage unavailable");
+    if (!u) return send_error(req, "500 Internal Server Error", "could not write to the microSD card");
 
-    char *buf = malloc(4096);
+    char *buf = malloc(UPLOAD_CHUNK);
     int remaining = req->content_len;
     esp_err_t err = ESP_OK;
     while (remaining > 0) {
-        int n = httpd_req_recv(req, buf, MIN(remaining, 4096));
+        int n = httpd_req_recv(req, buf, MIN(remaining, UPLOAD_CHUNK));
         if (n == HTTPD_SOCK_ERR_TIMEOUT) continue;
         if (n <= 0) {
             err = ESP_FAIL;
@@ -283,7 +292,7 @@ static esp_err_t map_post(httpd_req_t *req)
         if (map_upload_feed(u, (uint8_t *)buf, n) != ESP_OK) {
             // Keep draining so the browser sees our error rather than a reset.
             while (remaining > 0) {
-                n = httpd_req_recv(req, buf, MIN(remaining, 4096));
+                n = httpd_req_recv(req, buf, MIN(remaining, UPLOAD_CHUNK));
                 if (n == HTTPD_SOCK_ERR_TIMEOUT) continue;
                 if (n <= 0) break;
                 remaining -= n;

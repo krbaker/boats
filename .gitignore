@@ -6,3 +6,6 @@ firmware/build.log
 firmware/test/host/build/
 mapbuilder/map_out/
 __pycache__/
+firmware/test/host/preview/build/
+firmware/test/host/preview/out/
+mapbuilder/.venv/

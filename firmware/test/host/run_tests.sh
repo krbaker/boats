@@ -16,5 +16,5 @@ python3 roundtrip.py
 CJSON=${IDF_PATH:-$HOME/esp/esp-idf}/components/json/cJSON
 rm -rf build/fs && mkdir -p build/fs
 $CC $CFLAGS -Istubs -I../../main/map -I"$CJSON" -D_DEFAULT_SOURCE -DMAP_ROOT='"build/fs"' -o build/test_map_store \
-    test_map_store.c ../../main/map/map_store.c "$CJSON/cJSON.c" -lm
+    test_map_store.c ../../main/map/map_store.c ../../main/map/map_pack.c "$CJSON/cJSON.c" -lm
 build/test_map_store $(python3 make_test_zips.py) 2>/dev/null

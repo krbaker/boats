@@ -1,5 +1,6 @@
-// Chart storage: the uploaded map set (manifest + one PNG per zoom level)
-// lives in LittleFS under /data/maps/cur.
+// Chart storage: the map set (manifest + one tile pack per zoom level) lives
+// on the microSD card in /sdcard/ais_map. It arrives either as an upload of
+// the map builder's map_set.zip, or copied onto the card by hand.
 
 #pragma once
 
@@ -11,29 +12,36 @@
 #include "geo.h"
 
 #ifndef MAP_ROOT
-#define MAP_ROOT            "/data"     // overridden by the host tests
+#define MAP_ROOT            "/sdcard"   // overridden by the host tests
 #endif
-#define MAP_DIR             MAP_ROOT "/maps/cur"
+#define MAP_DIR             MAP_ROOT "/ais_map"
 #define MAP_MAX_LEVELS      8
-#define MAP_SIZE_PX         800
+#define MAP_TILE_PX         256
 
 typedef struct {
-    char file[32];
-    float radius_nm;
-    float m_per_px;
-    geo_bbox_t bbox;
+    char file[16];          // tile pack, e.g. "z0.pak"
+    float radius_nm;        // view radius at this zoom
+    float m_per_px;         // ground metres per pixel at the chart centre
+    double merc_px;         // Web Mercator metres per pixel
+    double origin_x;        // EPSG:3857 metres of the tile grid's top-left corner
+    double origin_y;
+    int cols, rows;
 } map_level_t;
 
 typedef struct {
+    uint32_t created;       // build time; identifies the chart set
     double center_lat, center_lon;
-    int width, height;
+    float pan_nm;           // how far from the centre the view may pan
     int nlevels;
     map_level_t levels[MAP_MAX_LEVELS];  // sorted most zoomed-in first
 } map_manifest_t;
 
+// Mount the microSD card. If the chart set on it is new (copied on by hand),
+// its centre becomes the configured position.
 esp_err_t map_store_init(void);
+bool map_store_card_ok(void);
 
-// Read the current manifest. Returns false if no map has been uploaded.
+// Read the current manifest. Returns false if there is no (valid) chart set.
 bool map_store_get_manifest(map_manifest_t *out);
 
 // Streaming upload of a map_set.zip (STORED entries only).
@@ -44,4 +52,5 @@ esp_err_t map_upload_feed(map_upload_t *u, const uint8_t *data, size_t len);
 esp_err_t map_upload_finish(map_upload_t *u, char *err, size_t errlen);
 void map_upload_abort(map_upload_t *u);
 
-void map_store_usage(size_t *total, size_t *used);
+// Card capacity and free space in bytes (0 if no card).
+void map_store_usage(uint64_t *total, uint64_t *free_bytes);

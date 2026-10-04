@@ -18,10 +18,22 @@ def png(w, h):
             + b"\0" * 500)
 
 
+def pack(cols, rows, tile_px=256, truncate=0):
+    """A tile pack whose tiles are all one (fake) PNG, except an empty top-left tile."""
+    tile = png(tile_px, tile_px)
+    data_start = 16 + cols * rows * 8
+    index = b"".join(struct.pack("<II", 0, 0) if i == 0 else struct.pack("<II", data_start, len(tile))
+                     for i in range(cols * rows))
+    out = b"AISPAK1\0" + struct.pack("<HHHH", cols, rows, tile_px, 0) + index + tile
+    return out[:len(out) - truncate]
+
+
 def manifest(levels=(2.0, 0.5, 1.0), **over):
-    m = {"version": 2, "center_lat": 47.6, "center_lon": -122.35, "projection": "EPSG:3857", "width": 800,
-         "height": 800, "levels": [{"file": f"map_z{i}.png", "radius_nm": r, "m_per_px": 2 * r * 1852 / 800,
-                                    "bbox": [-13630000.0, 6030000.0, -13610000.0, 6050000.0]} for i, r in enumerate(levels)]}
+    m = {"version": 3, "created": 1234567, "center_lat": 47.6, "center_lon": -122.35, "projection": "EPSG:3857",
+         "pan_nm": 3, "tile_px": 256,
+         "levels": [{"file": f"z{i}.pak", "radius_nm": r, "m_per_px": 2 * r * 1852 / 800,
+                     "merc_px": 2 * r * 1852 / 800 / 0.674, "origin": [-13630000.0, 6050000.0], "cols": 3, "rows": 2}
+                    for i, r in enumerate(levels)]}
     m.update(over)
     return json.dumps(m)
 
@@ -34,15 +46,18 @@ def make(name, files, compression=zipfile.ZIP_STORED, expect="ok"):
     print(expect, path)
 
 
-good = {"manifest.json": manifest(), "map_z0.png": png(800, 800), "map_z1.png": png(800, 800),
-        "map_z2.png": png(800, 800)}
+good = {"manifest.json": manifest(), "z0.pak": pack(3, 2), "z1.pak": pack(3, 2), "z2.pak": pack(3, 2)}
 make("good.zip", good)
-make("folder.zip", {"maps/" + k: v for k, v in good.items()})
+make("folder.zip", {"ais_map/" + k: v for k, v in good.items()})
 make("deflated.zip", good, zipfile.ZIP_DEFLATED, "fail")
-make("missing_png.zip", {k: v for k, v in good.items() if k != "map_z2.png"}, expect="fail")
-make("wrong_size.zip", {**good, "map_z1.png": png(640, 640)}, expect="fail")
+make("missing_pack.zip", {k: v for k, v in good.items() if k != "z2.pak"}, expect="fail")
+make("wrong_grid.zip", {**good, "z1.pak": pack(4, 2)}, expect="fail")
+make("wrong_tile_size.zip", {**good, "z1.pak": pack(3, 2, tile_px=512)}, expect="fail")
+make("truncated_pack.zip", {**good, "z1.pak": pack(3, 2, truncate=10)}, expect="fail")
+make("not_a_pack.zip", {**good, "z1.pak": png(800, 800)}, expect="fail")
 make("bad_manifest.zip", {**good, "manifest.json": "{not json"}, expect="fail")
 make("no_manifest.zip", {k: v for k, v in good.items() if k != "manifest.json"}, expect="fail")
+make("old_version.zip", {**good, "manifest.json": manifest(version=2)}, expect="fail")
 make("old_projection.zip", {**good, "manifest.json": manifest(projection="EPSG:4326")}, expect="fail")
 make("bad_center.zip", {**good, "manifest.json": manifest(center_lat=123.0)}, expect="fail")
 make("traversal.zip", {**good, "../../x.png": png(800, 800)})  # reduced to its base name, stays inside

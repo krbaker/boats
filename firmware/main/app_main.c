@@ -3,7 +3,7 @@
 #include "bsp/esp-bsp.h"
 #include "esp_log.h"
 
-#include "map_images.h"
+#include "map_tiles.h"
 #include "map_store.h"
 #include "nmea_client.h"
 #include "settings.h"
@@ -42,7 +42,7 @@ void app_main(void)
     wifi_mgr_start();
     tide_start();
     nmea_client_start();
-    map_images_init();
+    map_tiles_init();
     web_server_start();
 
     ui_start(); // also applies the saved backlight brightness

@@ -40,3 +40,6 @@ int vessel_db_snapshot(vessel_t *out, int max);
 bool vessel_db_get(uint32_t mmsi, vessel_t *out);
 
 int vessel_db_count(void);
+
+// Increments whenever a vessel is added, updated or expired.
+uint32_t vessel_db_generation(void);

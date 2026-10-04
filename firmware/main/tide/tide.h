@@ -11,6 +11,12 @@ typedef struct {
     bool high;
 } tide_event_t;
 
+// Predicted water level at one moment (the tide curve).
+typedef struct {
+    time_t t;
+    float height_ft;
+} tide_sample_t;
+
 typedef enum {
     TIDE_NO_STATION,
     TIDE_WAITING,       // for network / clock
@@ -34,5 +40,10 @@ void tide_get_status(tide_status_t *out);
 
 // Next tide event after `now`. Returns false if none is known.
 bool tide_next(time_t now, tide_event_t *out);
+
+// Copy the known high/low events, or the half-hourly tide curve (covering at
+// least the last 6 h and the next 24 h), oldest first. Return the number copied.
+int tide_events(tide_event_t *out, int max);
+int tide_curve(tide_sample_t *out, int max);
 
 bool clock_is_set(void);

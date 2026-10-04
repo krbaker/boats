@@ -18,11 +18,14 @@
 static const char *TAG = "tide";
 
 #define MAX_EVENTS      32
+#define MAX_SAMPLES     128     // half-hourly curve: 56 h = 112 samples
 #define REFRESH_S       (6 * 3600)
 #define RETRY_S         300
-#define RESP_MAX        8192
+#define RESP_MAX        16384
 
 static tide_event_t s_events[MAX_EVENTS];
+static tide_sample_t s_samples[MAX_SAMPLES];
+static int s_nsamples;
 static tide_status_t s_status;
 static SemaphoreHandle_t s_lock;
 static EventGroupHandle_t s_settings_ev;
@@ -116,8 +119,9 @@ static void fetch_station_name(const char *station)
 static bool fetch_predictions(const char *station)
 {
     time_t now = time(NULL);
+    time_t from = now - 12 * 3600; // so the tide graph can show recent highs and lows
     struct tm utc;
-    gmtime_r(&now, &utc);
+    gmtime_r(&from, &utc);
     char url[320], err[64] = "";
     snprintf(url, sizeof(url),
              "https://api.tidesandcurrents.noaa.gov/api/prod/datagetter?product=predictions&application=ais_display"
@@ -169,6 +173,45 @@ static bool fetch_predictions(const char *station)
     return n > 0;
 }
 
+// Half-hourly predictions from 7 h ago for 56 h, for the tide graph.
+static void fetch_curve(const char *station)
+{
+    time_t from = time(NULL) - 7 * 3600;
+    struct tm utc;
+    gmtime_r(&from, &utc);
+    char url[320], err[64] = "";
+    snprintf(url, sizeof(url),
+             "https://api.tidesandcurrents.noaa.gov/api/prod/datagetter?product=predictions&application=ais_display"
+             "&begin_date=%04d%02d%02d&range=56&datum=MLLW&station=%s&time_zone=gmt&units=english&interval=30"
+             "&format=json",
+             utc.tm_year + 1900, utc.tm_mon + 1, utc.tm_mday, station);
+
+    char *body = http_get(url, err, sizeof(err));
+    cJSON *root = body ? cJSON_Parse(body) : NULL;
+    free(body);
+    tide_sample_t *samples = malloc(MAX_SAMPLES * sizeof(tide_sample_t));
+    int n = 0;
+    cJSON *preds = cJSON_GetObjectItem(root, "predictions"), *p;
+    cJSON_ArrayForEach(p, preds) {
+        cJSON *t = cJSON_GetObjectItem(p, "t"), *v = cJSON_GetObjectItem(p, "v");
+        if (!cJSON_IsString(t) || !cJSON_IsString(v) || n >= MAX_SAMPLES) continue;
+        samples[n].t = parse_gmt(t->valuestring);
+        samples[n].height_ft = strtof(v->valuestring, NULL);
+        if (samples[n].t) n++;
+    }
+    cJSON_Delete(root);
+
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    if (n > 0) {
+        memcpy(s_samples, samples, n * sizeof(samples[0]));
+        s_nsamples = n;
+    }
+    xSemaphoreGive(s_lock);
+    free(samples);
+    if (n > 0) ESP_LOGI(TAG, "station %s: %d curve samples", station, n);
+    else ESP_LOGW(TAG, "station %s: no tide curve (%s)", station, err[0] ? err : "bad response");
+}
+
 static void tide_task(void *arg)
 {
     time_t next_fetch = 0;
@@ -179,6 +222,7 @@ static void tide_task(void *arg)
         if (bits & SETTINGS_EV_TIDE) {
             xSemaphoreTake(s_lock, portMAX_DELAY);
             s_status.count = 0;
+            s_nsamples = 0;
             s_status.station_name[0] = '\0';
             xSemaphoreGive(s_lock);
             next_fetch = 0;
@@ -191,6 +235,7 @@ static void tide_task(void *arg)
         if (!cfg.tide_station[0]) {
             s_status.state = TIDE_NO_STATION;
             s_status.count = 0;
+            s_nsamples = 0;
         } else if (s_status.count == 0 && s_status.state != TIDE_ERROR) {
             s_status.state = TIDE_WAITING;
         }
@@ -201,7 +246,9 @@ static void tide_task(void *arg)
         if (now < next_fetch) continue;
 
         if (!s_status.station_name[0]) fetch_station_name(cfg.tide_station);
-        next_fetch = now + (fetch_predictions(cfg.tide_station) ? REFRESH_S : RETRY_S);
+        bool ok = fetch_predictions(cfg.tide_station);
+        if (ok) fetch_curve(cfg.tide_station);
+        next_fetch = now + (ok ? REFRESH_S : RETRY_S);
     }
 }
 
@@ -237,4 +284,22 @@ bool tide_next(time_t now, tide_event_t *out)
     }
     xSemaphoreGive(s_lock);
     return found;
+}
+
+int tide_events(tide_event_t *out, int max)
+{
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    int n = s_status.count < max ? s_status.count : max;
+    memcpy(out, s_events, n * sizeof(out[0]));
+    xSemaphoreGive(s_lock);
+    return n;
+}
+
+int tide_curve(tide_sample_t *out, int max)
+{
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    int n = s_nsamples < max ? s_nsamples : max;
+    memcpy(out, s_samples, n * sizeof(out[0]));
+    xSemaphoreGive(s_lock);
+    return n;
 }

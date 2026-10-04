@@ -136,6 +136,25 @@ lv_obj_t *ui_round_button(lv_obj_t *parent, const char *text, int32_t w, int32_t
     return btn;
 }
 
+lv_obj_t *ui_overlay_create(lv_obj_t *parent, lv_event_cb_t close_cb)
+{
+    lv_obj_t *o = lv_obj_create(parent);
+    lv_obj_remove_style_all(o);
+    lv_obj_set_size(o, UI_SIZE, UI_SIZE);
+    lv_obj_set_style_radius(o, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(o, UI_COLOR_BG, 0);
+    lv_obj_set_style_bg_opa(o, LV_OPA_90, 0);
+    lv_obj_set_style_text_font(o, &lv_font_montserrat_20, 0);
+    lv_obj_set_clickable(o, true); // swallow touches meant for the map underneath
+    lv_obj_set_scrollable(o, false);
+    lv_obj_set_hidden(o, true);
+
+    lv_obj_t *close = ui_round_button(o, LV_SYMBOL_CLOSE, 72, 72);
+    lv_obj_align(close, LV_ALIGN_TOP_MID, 0, 40);
+    lv_obj_add_event_cb(close, close_cb, LV_EVENT_CLICKED, NULL);
+    return o;
+}
+
 lv_color_t ui_ship_color(uint8_t t)
 {
     if (t == 30) return lv_color_hex(0xff8c1a);                         // fishing

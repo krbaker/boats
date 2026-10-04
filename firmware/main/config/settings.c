@@ -28,6 +28,17 @@ static void defaults(settings_t *s)
     s->center_lon = -122.3550;
     s->zoom_index = 1;
     s->brightness = 100;
+    s->filter = (vessel_filter_t){
+        .mode = FILTER_HIDE_LABEL, .order = ORDER_SIZE, .include_unknown = true, .label_name = true, .label_speed = true,
+    };
+}
+
+// Old firmware stored fewer filter fields: only accept a blob of exactly the current size.
+static void get_filter(nvs_handle_t h, vessel_filter_t *dst)
+{
+    vessel_filter_t f;
+    size_t len = sizeof(f);
+    if (nvs_get_blob(h, "filter", &f, &len) == ESP_OK && len == sizeof(f)) *dst = f;
 }
 
 static void get_str(nvs_handle_t h, const char *key, char *dst, size_t cap)
@@ -68,6 +79,8 @@ esp_err_t settings_init(void)
         get_double(h, "lon", &s_settings.center_lon);
         nvs_get_u8(h, "zoom", &s_settings.zoom_index);
         nvs_get_u8(h, "bright", &s_settings.brightness);
+        get_filter(h, &s_settings.filter);
+        nvs_get_u32(h, "map_created", &s_settings.map_created);
         nvs_close(h);
     }
     ESP_LOGI(TAG, "AIS %s:%u tide %s tz %s centre %.5f,%.5f", s_settings.ais_host, s_settings.ais_port,
@@ -109,6 +122,8 @@ esp_err_t settings_set(const settings_t *in)
     nvs_set_blob(h, "lon", &in->center_lon, sizeof(double));
     nvs_set_u8(h, "zoom", in->zoom_index);
     nvs_set_u8(h, "bright", in->brightness);
+    nvs_set_blob(h, "filter", &in->filter, sizeof(in->filter));
+    nvs_set_u32(h, "map_created", in->map_created);
     err = nvs_commit(h);
     nvs_close(h);
 

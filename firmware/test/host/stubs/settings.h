@@ -4,6 +4,7 @@
 typedef struct {
     double center_lat, center_lon;
     uint8_t zoom_index;
+    uint32_t map_created;
 } settings_t;
 void settings_get(settings_t *out);
 int settings_set(const settings_t *in);

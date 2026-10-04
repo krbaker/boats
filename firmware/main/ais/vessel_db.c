@@ -12,6 +12,7 @@ static const char *TAG = "vessels";
 
 static vessel_t *s_vessels;
 static int s_count;
+static volatile uint32_t s_generation;
 static SemaphoreHandle_t s_lock;
 
 void vessel_db_init(void)
@@ -74,6 +75,7 @@ void vessel_db_update(const ais_report_t *r)
     v->fields |= r->fields;
     v->last_heard_us = esp_timer_get_time();
     v->last_heard_wall = wall_now();
+    s_generation++;
     xSemaphoreGive(s_lock);
 }
 
@@ -90,6 +92,7 @@ void vessel_db_expire(void)
             i++;
         }
     }
+    if (removed) s_generation++;
     xSemaphoreGive(s_lock);
     if (removed) ESP_LOGI(TAG, "expired %d vessel(s), %d remain", removed, s_count);
 }
@@ -115,4 +118,9 @@ bool vessel_db_get(uint32_t mmsi, vessel_t *out)
 int vessel_db_count(void)
 {
     return s_count;
+}
+
+uint32_t vessel_db_generation(void)
+{
+    return s_generation;
 }
