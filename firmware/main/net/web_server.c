@@ -275,8 +275,9 @@ static esp_err_t map_post(httpd_req_t *req)
     if (req->content_len + (1 << 20) > free_bytes) {
         return send_error(req, "400 Bad Request", "not enough free space on the microSD card");
     }
-    map_upload_t *u = map_upload_begin();
-    if (!u) return send_error(req, "500 Internal Server Error", "could not write to the microSD card");
+    char msg[200] = "";
+    map_upload_t *u = map_upload_begin(msg, sizeof(msg));
+    if (!u) return send_error(req, "500 Internal Server Error", msg);
 
     char *buf = malloc(UPLOAD_CHUNK);
     int remaining = req->content_len;
@@ -306,7 +307,6 @@ static esp_err_t map_post(httpd_req_t *req)
         return ESP_FAIL; // connection is gone
     }
 
-    char msg[96] = "";
     if (map_upload_finish(u, msg, sizeof(msg)) != ESP_OK) {
         ESP_LOGW(TAG, "map upload rejected: %s", msg);
         return send_error(req, "400 Bad Request", msg);

@@ -2,6 +2,7 @@
 
 #include <ctype.h>
 #include <dirent.h>
+#include <errno.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -25,6 +26,12 @@ static const char *TAG = "map_store";
 #define WRITE_BUF       (32 * 1024)
 
 static bool s_card_ok;
+static void (*s_on_replace)(void);
+
+void map_store_on_replace(void (*fn)(void))
+{
+    s_on_replace = fn;
+}
 
 bool map_store_card_ok(void)
 {
@@ -79,9 +86,10 @@ static void remove_dir(const char *path)
     struct dirent *e;
     char p[300];
     while ((e = readdir(d))) {
-        if (e->d_name[0] == '.') continue;
+        // Everything but . and .., including the "._name" files macOS leaves on FAT cards.
+        if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0) continue;
         snprintf(p, sizeof(p), "%s/%s", path, e->d_name);
-        unlink(p);
+        if (unlink(p) != 0) ESP_LOGW(TAG, "could not delete %s: %s", p, strerror(errno));
     }
     closedir(d);
     rmdir(path);
@@ -196,7 +204,7 @@ struct map_upload {
     char name[64];
     FILE *out;
     int nfiles;
-    char err[64];
+    char err[200];
 };
 
 static uint16_t rd16(const uint8_t *p) { return p[0] | p[1] << 8; }
@@ -210,15 +218,21 @@ static void zfail(map_upload_t *u, const char *msg)
     }
 }
 
-map_upload_t *map_upload_begin(void)
+map_upload_t *map_upload_begin(char *err, size_t errlen)
 {
-    if (!s_card_ok) return NULL;
-    remove_dir(NEW_DIR);
-    if (mkdir(NEW_DIR, 0755) != 0) {
-        ESP_LOGE(TAG, "mkdir %s failed", NEW_DIR);
+    if (!s_card_ok) {
+        snprintf(err, errlen, "no microSD card");
         return NULL;
     }
-    return calloc(1, sizeof(map_upload_t));
+    remove_dir(NEW_DIR);
+    if (mkdir(NEW_DIR, 0755) != 0) {
+        snprintf(err, errlen, "could not create %s on the microSD card: %s", NEW_DIR, strerror(errno));
+        ESP_LOGE(TAG, "%s", err);
+        return NULL;
+    }
+    map_upload_t *u = calloc(1, sizeof(map_upload_t));
+    if (!u) snprintf(err, errlen, "out of memory");
+    return u;
 }
 
 static void start_entry(map_upload_t *u)
@@ -243,7 +257,12 @@ static void start_entry(map_upload_t *u)
     char path[128];
     snprintf(path, sizeof(path), "%s/%s", NEW_DIR, base);
     u->out = fopen(path, "wb");
-    if (!u->out) zfail(u, "could not write to the microSD card");
+    if (!u->out) {
+        char msg[200];
+        snprintf(msg, sizeof(msg), "could not create %s on the microSD card: %s", path, strerror(errno));
+        ESP_LOGE(TAG, "%s", msg);
+        zfail(u, msg);
+    }
     else setvbuf(u->out, NULL, _IOFBF, WRITE_BUF);
 }
 
@@ -325,14 +344,24 @@ esp_err_t map_upload_feed(map_upload_t *u, const uint8_t *data, size_t len)
         case Z_DATA: {
             size_t take = u->data_left < len ? u->data_left : len;
             if (u->out && fwrite(data, 1, take, u->out) != take) {
-                zfail(u, "microSD card full");
+                char msg[200];
+                snprintf(msg, sizeof(msg), "writing %s to the microSD card failed: %s", u->name, strerror(errno));
+                ESP_LOGE(TAG, "%s", msg);
+                zfail(u, msg);
                 break;
             }
             u->data_left -= take;
             data += take;
             len -= take;
             if (u->data_left == 0) {
-                if (u->out) fclose(u->out);
+                if (u->out && fclose(u->out) != 0) {
+                    u->out = NULL;
+                    char msg[200];
+                    snprintf(msg, sizeof(msg), "writing %s to the microSD card failed: %s", u->name, strerror(errno));
+                    ESP_LOGE(TAG, "%s", msg);
+                    zfail(u, msg);
+                    break;
+                }
                 u->out = NULL;
                 u->have = 0;
                 u->state = Z_HEADER;
@@ -394,10 +423,13 @@ esp_err_t map_upload_finish(map_upload_t *u, char *err, size_t errlen)
         }
     }
 
+    if (s_on_replace) s_on_replace();
     remove_dir(MAP_DIR);
     if (rename(NEW_DIR, MAP_DIR) != 0) {
-        snprintf(err, errlen, "could not install map");
+        snprintf(err, errlen, "could not install the chart: renaming %s failed: %s", NEW_DIR, strerror(errno));
+        ESP_LOGE(TAG, "%s", err);
         remove_dir(NEW_DIR);
+        settings_notify_map_changed(); // the old chart set may be partly gone
         return ESP_FAIL;
     }
     ESP_LOGI(TAG, "installed map: %d levels centred %.5f,%.5f", m.nlevels, m.center_lat, m.center_lon);

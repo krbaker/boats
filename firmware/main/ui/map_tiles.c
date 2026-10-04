@@ -70,6 +70,7 @@ static map_manifest_t s_loader_manifest;
 static bool s_loader_have;
 static map_pack_t s_pack;
 static int s_pack_level = -1;
+static SemaphoreHandle_t s_pack_lock;   // held while the loader uses s_pack
 
 // ---------------------------------------------------------------------------
 // Loader task
@@ -96,10 +97,12 @@ static void publish_manifest(const map_manifest_t *m, map_tiles_state_t state)
 
 static void load_chart_set(void)
 {
+    xSemaphoreTake(s_pack_lock, portMAX_DELAY);
     map_pack_close(&s_pack);
     s_pack_level = -1;
     s_loader_gen++;
     s_loader_have = false;
+    xSemaphoreGive(s_pack_lock);
     if (!map_store_card_ok()) {
         publish_manifest(NULL, MAP_TILES_NO_CARD);
         return;
@@ -119,10 +122,23 @@ static void load_chart_set(void)
             return;
         }
     }
+    xSemaphoreTake(s_pack_lock, portMAX_DELAY);
     s_loader_manifest = m;
     s_loader_have = true;
+    xSemaphoreGive(s_pack_lock);
     ESP_LOGI(TAG, "chart set: %d zoom levels, pan %.1f nm", m.nlevels, m.pan_nm);
     publish_manifest(&m, MAP_TILES_READY);
+}
+
+// map_store is about to replace the chart set: let go of the old pack files
+// until the reload that follows.
+static void release_packs(void)
+{
+    xSemaphoreTake(s_pack_lock, portMAX_DELAY);
+    map_pack_close(&s_pack);
+    s_pack_level = -1;
+    s_loader_have = false;
+    xSemaphoreGive(s_pack_lock);
 }
 
 static void decode_tile(tile_key_t k, result_t *r)
@@ -198,7 +214,9 @@ static void loader_task(void *arg)
             }
 
             result_t r;
+            xSemaphoreTake(s_pack_lock, portMAX_DELAY);
             decode_tile(k, &r);
+            xSemaphoreGive(s_pack_lock);
             xSemaphoreTake(s_lock, portMAX_DELAY);
             if (r.gen == s_loader_gen && s_ndone < MAX_DONE) {
                 s_done[s_ndone++] = r;
@@ -343,6 +361,8 @@ void map_tiles_reload(void)
 void map_tiles_init(void)
 {
     s_lock = xSemaphoreCreateMutex();
+    s_pack_lock = xSemaphoreCreateMutex();
+    map_store_on_replace(release_packs);
     s_cache = heap_caps_calloc(CACHE_TILES, sizeof(entry_t), MALLOC_CAP_SPIRAM);
     xTaskCreatePinnedToCore(loader_task, "map_tiles", 8192, NULL, 2, &s_task, 1);
     map_tiles_reload();

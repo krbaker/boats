@@ -46,11 +46,16 @@ bool map_store_get_manifest(map_manifest_t *out);
 
 // Streaming upload of a map_set.zip (STORED entries only).
 typedef struct map_upload map_upload_t;
-map_upload_t *map_upload_begin(void);
+// Returns NULL, with err set, if the card can't be written.
+map_upload_t *map_upload_begin(char *err, size_t errlen);
 esp_err_t map_upload_feed(map_upload_t *u, const uint8_t *data, size_t len);
 // Validate, install, update the configured centre. On failure err explains why.
 esp_err_t map_upload_finish(map_upload_t *u, char *err, size_t errlen);
 void map_upload_abort(map_upload_t *u);
+
+// Called just before an upload replaces the chart set, so whoever reads the
+// tile packs can close them first (FAT doesn't stop open files being deleted).
+void map_store_on_replace(void (*fn)(void));
 
 // Card capacity and free space in bytes (0 if no card).
 void map_store_usage(uint64_t *total, uint64_t *free_bytes);

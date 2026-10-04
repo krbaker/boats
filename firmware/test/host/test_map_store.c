@@ -24,7 +24,16 @@ static int run(const char *expect, const char *path, size_t chunk)
     fclose(f);
 
     int changed_before = s_map_changed;
-    map_upload_t *u = map_upload_begin();
+    // A card that had the chart copied on from a Mac also holds "._name" files.
+    FILE *junk = fopen(MAP_DIR "/._z0.pak", "w");
+    if (junk) fclose(junk);
+
+    char berr[160];
+    map_upload_t *u = map_upload_begin(berr, sizeof(berr));
+    if (!u) {
+        printf("FAIL %s: %s\n", path, berr);
+        return 1;
+    }
     for (size_t off = 0; off < n; off += chunk) {
         size_t len = n - off < chunk ? n - off : chunk;
         if (map_upload_feed(u, buf + off, len) != ESP_OK) break;
