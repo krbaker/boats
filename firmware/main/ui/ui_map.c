@@ -21,10 +21,14 @@
 
 #define PILL_EDGE_GAP   4       // px between the pills and the edge of the screen
 #define PILL_PAD_DEG    4       // extra arc either side of a pill's text
+#define PILL_WIDTH      (lv_font_get_line_height(&lv_font_montserrat_28) + 10)  // every pill is this thick
 #define MIN_SHIP_LEN    18      // px; ships are never drawn smaller than this
 #define MIN_SHIP_WIDTH  8
 #define HULL_M_PER_PX   (2 * 0.5f * 1852 / UI_SIZE)  // hulls are never drawn smaller than at the 0.5 nm zoom
-#define STALE_S         180     // dim targets not heard for this long
+#define STALE_MOVING_S  180     // dim vessels not heard for this long...
+#define STALE_SLOW_S    420     // ...or this long if slow / at rest: those report only every 3 minutes
+#define SLOW_KN         2.0f    // AIS Class B (and anchored Class A) drop to 3-minute reports below ~2 kn
+#define HEADING_MIN_KN  1.0f    // no heading / course lines below this speed
 #define HIT_RADIUS_MIN  22
 #define VECTOR_MINUTES  6       // course/speed vector length
 #define HEADING_LINE_PX 28      // heading line drawn ahead of the bow
@@ -46,7 +50,8 @@ typedef struct {
 // Where a vessel ended up on screen, for placing its label afterwards.
 typedef struct {
     const vessel_t *v;
-    float prio;
+    float prio;             // label priority
+    float layer;            // drawing order: higher on top
     float x, y, extent;
     bool shown;     // on screen
     bool labelled;  // passes the filter, so it may get a label
@@ -79,7 +84,7 @@ typedef struct {
     void (*on_tap)(void);
 } pill_t;
 
-enum { PILL_TIME, PILL_TIDE, PILL_STATUS, PILL_ZOOM_IN, PILL_ZOOM, PILL_ZOOM_OUT, PILL_RECENTER, PILL_COUNT };
+enum { PILL_TIME, PILL_TIDE, PILL_STATUS, PILL_ZOOM_IN, PILL_ZOOM, PILL_ZOOM_OUT, PILL_COUNT };
 
 static lv_obj_t *s_scr, *s_maplayer, *s_overlay, *s_msg;
 static const map_manifest_t *s_shown_manifest;
@@ -95,6 +100,7 @@ static int s_nvessels;
 static hit_t *s_hits;
 static int s_nhits;
 static placed_t *s_placed;
+static placed_t **s_label_order;
 static lv_area_t *s_label_areas;
 static vessel_filter_t s_filter;
 static int s_zoom;
@@ -113,7 +119,7 @@ static void pill_create(pill_t *p, const lv_font_t *font, float center, float mi
 {
     p->center = center;
     p->min_span = p->span = min_span;
-    p->width = lv_font_get_line_height(font) + 10;
+    p->width = PILL_WIDTH;
     p->on_tap = on_tap;
     p->hidden = true;
 
@@ -233,13 +239,6 @@ static void update_view(void)
     pill_set_disabled(&s_pills[PILL_ZOOM_IN], s_zoom == 0);
     pill_set_disabled(&s_pills[PILL_ZOOM_OUT], s_zoom >= s_view.nlevels - 1);
 
-    // Offer to recentre once the view is away from the configured position
-    // (as near to it as the pan area allows).
-    double hx = fmin(fmax(s_view.home_x, s_view.pan_x - lim), s_view.pan_x + lim);
-    double hy = fmin(fmax(s_view.home_y, s_view.pan_y - lim), s_view.pan_y + lim);
-    bool away = fabs(s_view.cx - hx) > 2 * s_view.merc_px || fabs(s_view.cy - hy) > 2 * s_view.merc_px;
-    pill_set_text(&s_pills[PILL_RECENTER], away ? LV_SYMBOL_GPS "  Recenter" : "");
-
     lv_obj_invalidate(s_maplayer);
     lv_obj_invalidate(s_overlay);
 }
@@ -259,13 +258,6 @@ static void view_go_home(void)
     }
     s_view.scale = merc_scale(lat);
     s_view.pan_half = (m ? m->pan_nm : DEFAULT_PAN_NM) * 1852.0 * s_view.scale;
-    s_view.cx = s_view.home_x;
-    s_view.cy = s_view.home_y;
-    update_view();
-}
-
-static void recenter(void)
-{
     s_view.cx = s_view.home_x;
     s_view.cy = s_view.home_y;
     update_view();
@@ -412,20 +404,41 @@ static bool vessel_passes_filter(const vessel_t *v)
     return true;
 }
 
-// Higher draws on top and wins label space. Stale vessels always lose.
+// A vessel goes dim once it has missed a couple of its expected reports.
+static bool vessel_stale(const vessel_t *v, int64_t now_us)
+{
+    bool slow = !(v->fields & AIS_F_SOG) || v->sog_kn < SLOW_KN;
+    return now_us - v->last_heard_us > (int64_t)(slow ? STALE_SLOW_S : STALE_MOVING_S) * 1000000;
+}
+
+// Label priority: higher wins label space. Stale vessels always lose.
 static float vessel_priority(const vessel_t *v, int64_t now_us)
 {
     float p;
     if (s_filter.order == ORDER_SPEED) p = (v->fields & AIS_F_SOG) ? v->sog_kn : -1;
     else p = ((v->fields & AIS_F_DIM) && v->dim_a + v->dim_b) ? v->dim_a + v->dim_b : -1;
-    if (now_us - v->last_heard_us > (int64_t)STALE_S * 1000000) p -= 100000;
+    if (vessel_stale(v, now_us)) p -= 100000;
     return p;
+}
+
+// Drawing order: stale vessels at the bottom, then those at rest, then vessels
+// under way on top, so a moving vessel is never hidden under a stationary one.
+static float vessel_layer(const vessel_t *v, float prio, int64_t now_us)
+{
+    int tier = vessel_stale(v, now_us) ? 0 : ((v->fields & AIS_F_SOG) && v->sog_kn >= HEADING_MIN_KN) ? 2 : 1;
+    return tier * 1000000.0f + prio;
 }
 
 static int placed_cmp(const void *a, const void *b)
 {
-    float pa = ((const placed_t *)a)->prio, pb = ((const placed_t *)b)->prio;
-    return (pa > pb) - (pa < pb);
+    float la = ((const placed_t *)a)->layer, lb = ((const placed_t *)b)->layer;
+    return (la > lb) - (la < lb);
+}
+
+static int label_cmp(const void *a, const void *b)
+{
+    float pa = (*(const placed_t *const *)a)->prio, pb = (*(const placed_t *const *)b)->prio;
+    return (pb > pa) - (pb < pa); // highest first
 }
 
 static void draw_label(lv_layer_t *layer, const char *text, const lv_area_t *bg, lv_opa_t opa)
@@ -471,7 +484,7 @@ static void draw_vessel(lv_layer_t *layer, placed_t *pl, int64_t now_us)
     pl->shown = false;
     if (dx * dx + dy * dy > (float)(UI_CENTER + 40) * (UI_CENTER + 40)) return; // off the round screen
 
-    bool stale = now_us - v->last_heard_us > (int64_t)STALE_S * 1000000;
+    bool stale = vessel_stale(v, now_us);
     lv_opa_t opa = stale ? LV_OPA_50 : LV_OPA_COVER;
     lv_color_t color = ui_ship_color(v->ship_type);
     lv_color_t outline = lv_color_hex(0x101010);
@@ -480,7 +493,7 @@ static void draw_vessel(lv_layer_t *layer, placed_t *pl, int64_t now_us)
     lv_color_t halo = lv_color_white();
     lv_opa_t halo_opa = (lv_opa_t)(opa * 85 / 100);
 
-    bool moving = (v->fields & AIS_F_SOG) && v->sog_kn >= 0.5f;
+    bool moving = (v->fields & AIS_F_SOG) && v->sog_kn >= HEADING_MIN_KN;
     bool has_dir = (v->fields & AIS_F_HEADING) || ((v->fields & AIS_F_COG) && moving);
     float dir = (v->fields & AIS_F_HEADING) ? v->heading : v->cog_deg;
 
@@ -528,7 +541,7 @@ static void draw_vessel(lv_layer_t *layer, placed_t *pl, int64_t now_us)
         lv_point_precise_t pt_sh = rot(off_x - hw, off_y + shoulder, s, c, x, y);
         lv_point_precise_t poly[] = {bow, sb_sh, sb_st, pt_st, pt_sh, bow};
         // Heading line straight ahead of the bow, in line with the hull.
-        bool heading = v->fields & AIS_F_HEADING;
+        bool heading = (v->fields & AIS_F_HEADING) && moving;
         lv_point_precise_t tip = rot(off_x, off_y - hl - HEADING_LINE_PX, s, c, x, y);
         for (int i = 0; i < 5; i++) draw_line(layer, poly[i], poly[i + 1], halo, 2 + 2 * HALO_PX, halo_opa);
         if (heading) draw_line(layer, bow, tip, halo, 5 + 2 * HALO_PX, halo_opa);
@@ -580,8 +593,10 @@ static void draw_labels(lv_layer_t *layer, int n)
 {
     int nplaced = 0;
     // Most important first, so they get the space when labels would overlap.
-    for (int i = n - 1; i >= 0; i--) {
-        const placed_t *pl = &s_placed[i];
+    for (int i = 0; i < n; i++) s_label_order[i] = &s_placed[i];
+    qsort(s_label_order, n, sizeof(s_label_order[0]), label_cmp);
+    for (int i = 0; i < n; i++) {
+        const placed_t *pl = s_label_order[i];
         if (!pl->shown || !pl->labelled) continue;
         char text[48];
         label_text(pl->v, text, sizeof(text));
@@ -612,9 +627,10 @@ static void overlay_draw_cb(lv_event_t *e)
         if (!(v->fields & AIS_F_POS)) continue;
         bool pass = vessel_passes_filter(v);
         if (!pass && s_filter.mode == FILTER_HIDE_VESSEL) continue;
-        s_placed[n++] = (placed_t){.v = v, .prio = vessel_priority(v, now), .labelled = pass};
+        float prio = vessel_priority(v, now);
+        s_placed[n++] = (placed_t){.v = v, .prio = prio, .layer = vessel_layer(v, prio, now), .labelled = pass};
     }
-    // Least important first, so the most important hulls end up on top.
+    // Bottom layer first.
     qsort(s_placed, n, sizeof(s_placed[0]), placed_cmp);
     for (int i = 0; i < n; i++) draw_vessel(layer, &s_placed[i], now);
     draw_labels(layer, n);
@@ -717,10 +733,13 @@ static void update_border_text(void)
     if (ts.state == TIDE_NO_STATION) {
         strcpy(buf, "Tide: no station set");
     } else if (clock_is_set() && tide_next(now, &next)) {
-        char t[16];
+        // Level now, rising / falling, then the next high or low.
+        char t[16], level[16] = "";
+        float h;
         ui_format_time(next.t, t, sizeof(t), false);
-        snprintf(buf, sizeof(buf), "%s %s %s  %.1f ft", next.high ? LV_SYMBOL_UP : LV_SYMBOL_DOWN,
-                 next.high ? "High" : "Low", t, next.height_ft);
+        if (tide_level(now, &h)) snprintf(level, sizeof(level), "%.1f ft  ", h);
+        snprintf(buf, sizeof(buf), "%s%s  %s  %.1f ft", level, next.high ? LV_SYMBOL_UP : LV_SYMBOL_DOWN, t,
+                 next.height_ft);
     } else if (ts.state == TIDE_ERROR) {
         strcpy(buf, "Tide unavailable");
     } else {
@@ -788,6 +807,7 @@ lv_obj_t *ui_map_create(void)
     s_vessels = heap_caps_malloc(VESSEL_MAX * sizeof(vessel_t), MALLOC_CAP_SPIRAM);
     s_hits = heap_caps_malloc(VESSEL_MAX * sizeof(hit_t), MALLOC_CAP_SPIRAM);
     s_placed = heap_caps_malloc(VESSEL_MAX * sizeof(placed_t), MALLOC_CAP_SPIRAM);
+    s_label_order = heap_caps_malloc(VESSEL_MAX * sizeof(placed_t *), MALLOC_CAP_SPIRAM);
     s_label_areas = heap_caps_malloc(VESSEL_MAX * sizeof(lv_area_t), MALLOC_CAP_SPIRAM);
     s_ev = settings_subscribe();
     settings_t cfg;
@@ -831,14 +851,13 @@ lv_obj_t *ui_map_create(void)
     lv_obj_set_clickable(s_msg, false);
 
     // Pills around the edge. Angles: 0 = 3 o'clock, increasing clockwise.
-    pill_create(&s_pills[PILL_TIME], &lv_font_montserrat_32, 270, 0, LV_ARCLABEL_DIR_CLOCKWISE, NULL);
+    pill_create(&s_pills[PILL_TIME], &lv_font_montserrat_28, 270, 0, LV_ARCLABEL_DIR_CLOCKWISE, NULL);
     pill_create(&s_pills[PILL_TIDE], &lv_font_montserrat_24, 90, 0, LV_ARCLABEL_DIR_COUNTER_CLOCKWISE, ui_tide_open);
-    pill_create(&s_pills[PILL_STATUS], &lv_font_montserrat_20, 180, 0, LV_ARCLABEL_DIR_CLOCKWISE, ui_vessels_open);
+    pill_create(&s_pills[PILL_STATUS], &lv_font_montserrat_24, 180, 0, LV_ARCLABEL_DIR_CLOCKWISE, ui_vessels_open);
     // Zoom on the right edge: + above the current radius, - below.
-    pill_create(&s_pills[PILL_ZOOM_IN], &lv_font_montserrat_32, -21, 9, LV_ARCLABEL_DIR_CLOCKWISE, zoom_in);
-    pill_create(&s_pills[PILL_ZOOM], &lv_font_montserrat_20, 0, 0, LV_ARCLABEL_DIR_CLOCKWISE, NULL);
-    pill_create(&s_pills[PILL_ZOOM_OUT], &lv_font_montserrat_32, 21, 9, LV_ARCLABEL_DIR_CLOCKWISE, zoom_out);
-    pill_create(&s_pills[PILL_RECENTER], &lv_font_montserrat_20, 225, 0, LV_ARCLABEL_DIR_CLOCKWISE, recenter);
+    pill_create(&s_pills[PILL_ZOOM_IN], &lv_font_montserrat_28, -21, 9, LV_ARCLABEL_DIR_CLOCKWISE, zoom_in);
+    pill_create(&s_pills[PILL_ZOOM], &lv_font_montserrat_24, 0, 0, LV_ARCLABEL_DIR_CLOCKWISE, NULL);
+    pill_create(&s_pills[PILL_ZOOM_OUT], &lv_font_montserrat_28, 21, 9, LV_ARCLABEL_DIR_CLOCKWISE, zoom_out);
     pill_set_text(&s_pills[PILL_ZOOM_IN], LV_SYMBOL_PLUS);
     pill_set_text(&s_pills[PILL_ZOOM_OUT], LV_SYMBOL_MINUS);
 

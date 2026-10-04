@@ -106,6 +106,12 @@ int tide_events(tide_event_t *out, int max)
     return n;
 }
 
+bool tide_level(time_t t, float *h)
+{
+    *h = tide_height(t);
+    return true;
+}
+
 bool tide_next(time_t now, tide_event_t *out)
 {
     tide_event_t ev[32];
@@ -377,8 +383,6 @@ int main(int argc, char **argv)
     snap("map_zoomed");
     drag(500, 500, 250, 300);
     snap("map_panned");
-    tap_edge(225); // Recenter
-    snap("map_recentered");
     tap_edge(21);  // zoom back out
     tap_edge(21);
 

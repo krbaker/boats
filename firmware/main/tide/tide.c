@@ -303,3 +303,19 @@ int tide_curve(tide_sample_t *out, int max)
     xSemaphoreGive(s_lock);
     return n;
 }
+
+bool tide_level(time_t t, float *height_ft)
+{
+    bool found = false;
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    for (int i = 1; i < s_nsamples && !found; i++) {
+        const tide_sample_t *a = &s_samples[i - 1], *b = &s_samples[i];
+        if (a->t <= t && t <= b->t) {
+            float f = b->t == a->t ? 0 : (float)(t - a->t) / (float)(b->t - a->t);
+            *height_ft = a->height_ft + f * (b->height_ft - a->height_ft);
+            found = true;
+        }
+    }
+    xSemaphoreGive(s_lock);
+    return found;
+}

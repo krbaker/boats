@@ -46,4 +46,7 @@ bool tide_next(time_t now, tide_event_t *out);
 int tide_events(tide_event_t *out, int max);
 int tide_curve(tide_sample_t *out, int max);
 
+// Predicted water level at t, interpolated from the tide curve. False if unknown.
+bool tide_level(time_t t, float *height_ft);
+
 bool clock_is_set(void);
