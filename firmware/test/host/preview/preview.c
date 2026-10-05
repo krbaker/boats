@@ -283,6 +283,8 @@ void sdr_get_status(sdr_status_t *out)
     out->cpu_pct = 23.4f;
     out->demod.noise_dbfs[0] = out->demod.noise_dbfs[1] = -38.6f;
     out->demod.ppm = -2.2f;
+    out->gain = 372;
+    out->gain_best = true;
 }
 
 const char *sdr_state_str(sdr_state_t st) { return st == SDR_READY ? "receiving" : "?"; }

@@ -33,7 +33,7 @@ static void defaults(settings_t *s)
     };
     s->net_enabled = true;
     s->sdr_enabled = true;
-    s->sdr_gain = 402;
+    s->sdr_gain = SDR_GAIN_BEST;
 }
 
 // Old firmware stored fewer filter fields: only accept a blob of exactly the current size.

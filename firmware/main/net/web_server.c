@@ -85,7 +85,7 @@ static esp_err_t config_get(httpd_req_t *req)
     cJSON_AddStringToObject(o, "wifi_ssid", ssid);
     cJSON_AddBoolToObject(o, "net_enabled", cfg.net_enabled);
     cJSON_AddBoolToObject(o, "sdr_enabled", cfg.sdr_enabled);
-    cJSON_AddNumberToObject(o, "sdr_gain", cfg.sdr_gain);  // tenths of a dB, -1 = auto
+    cJSON_AddNumberToObject(o, "sdr_gain", cfg.sdr_gain);  // tenths of a dB, -1 tuner AGC, -2 best fixed
     cJSON_AddNumberToObject(o, "sdr_ppm", cfg.sdr_ppm_tenths / 10.0);
     cJSON_AddBoolToObject(o, "sdr_bias_tee", cfg.sdr_bias_tee);
     return send_json(req, o);
@@ -146,7 +146,7 @@ static esp_err_t config_post(httpd_req_t *req)
         else cfg.sdr_bias_tee = cJSON_IsTrue(v);
     }
     if ((v = cJSON_GetObjectItem(root, "sdr_gain"))) {
-        if (!cJSON_IsNumber(v) || v->valueint < SDR_GAIN_AUTO || v->valueint > 500) bad = "sdr_gain";
+        if (!cJSON_IsNumber(v) || v->valueint < SDR_GAIN_BEST || v->valueint > 500) bad = "sdr_gain";
         else cfg.sdr_gain = v->valueint;
     }
     if ((v = cJSON_GetObjectItem(root, "sdr_ppm"))) {
@@ -276,6 +276,12 @@ static esp_err_t status_get(httpd_req_t *req)
     cJSON_AddNumberToObject(rj, "bad_crc", r.demod.bad_crc);
     cJSON_AddNumberToObject(rj, "noise_dbfs", (r.demod.noise_dbfs[0] + r.demod.noise_dbfs[1]) / 2);
     cJSON_AddNumberToObject(rj, "ppm", r.demod.ppm);
+    cJSON *gj = cJSON_AddObjectToObject(rj, "gain");
+    cJSON_AddNumberToObject(gj, "now", r.gain);
+    cJSON_AddBoolToObject(gj, "best", r.gain_best);
+    cJSON_AddNumberToObject(gj, "steps_down", r.gain_steps_down);
+    cJSON_AddNumberToObject(gj, "sweep_step", r.sweep_step);
+    cJSON_AddNumberToObject(gj, "sweep_steps", r.sweep_steps);
 
     // Packets per source and channel, and which source each vessel came from.
     rx_stats_t rx;

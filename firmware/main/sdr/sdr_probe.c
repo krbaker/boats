@@ -92,6 +92,28 @@ static volatile uint32_t s_xfer_errors, s_short_xfers;
 static volatile bool s_streaming;
 static volatile uint32_t s_hist_min = 255, s_hist_max;
 static volatile uint64_t s_sum, s_count;
+static volatile uint64_t s_clip_total, s_byte_total;
+// Per-buffer power while the gain sweep measures a step.
+#define MEAS_MAX 64
+static volatile bool s_meas_on;
+static volatile int s_meas_n;
+static float s_meas_pw[MEAS_MAX];
+
+// Gain: what's applied now, and the "best fixed gain" control.
+static const int16_t k_gains[] = {0,   9,   14,  27,  37,  77,  87,  125, 144, 157, 166, 197, 207, 229, 254,
+                                  280, 297, 328, 338, 364, 372, 386, 402, 421, 434, 439, 445, 480, 496};
+#define NGAINS ((int)(sizeof(k_gains) / sizeof(k_gains[0])))
+#define SWEEP_SETTLE_MS   150
+#define SWEEP_MEASURE_MS  600
+#define KNEE_DB           10.0f   // noise floor this far above the ADC's own: ~0.4 dB SNR lost to the ADC
+#define CLIP_OK           1e-4f   // fraction of samples clipped that's acceptable when choosing
+#define GUARD_WINDOW_US   5000000LL
+#define GUARD_CLIP        1e-3f   // more than this over a window: one step down
+#define GUARD_RECOVER_US  (300 * 1000000LL)  // clean this long: one step back up
+static volatile int16_t s_gain_now;     // tenths of a dB, SDR_GAIN_AUTO for the tuner AGC
+static volatile int s_sweep_step;       // 1..NGAINS while sweeping, else 0
+static volatile int s_gain_steps_down;  // clip guard backoff below the chosen gain
+static int s_target_idx = -1, s_idx;
 static usb_transfer_t *s_xfers[BULK_XFERS];
 
 // What the web page sees.
@@ -339,19 +361,110 @@ static bool tune_r820t(uint32_t freq, uint32_t rate)
     return ok;
 }
 
-// Gain and bias-tee from the settings; the ppm goes to the decoder task.
-static void apply_settings(const settings_t *cfg)
+static void set_gain(int tenth_db)
 {
     set_i2c_repeater(true);
-    bool manual = cfg->sdr_gain != SDR_GAIN_AUTO;
-    if (r82xx_set_gain(&s_r82xx, manual, cfg->sdr_gain) < 0) ESP_LOGE(TAG, "setting the tuner gain failed");
+    bool manual = tenth_db != SDR_GAIN_AUTO;
+    if (r82xx_set_gain(&s_r82xx, manual, tenth_db) < 0) ESP_LOGE(TAG, "setting the tuner gain failed");
     set_i2c_repeater(false);
+    s_gain_now = tenth_db;
+}
+
+static int cmp_float(const void *a, const void *b)
+{
+    float x = *(const float *)a, y = *(const float *)b;
+    return (x > y) - (x < y);
+}
+
+// Finds the best fixed gain: step up through the gains measuring the noise
+// floor (median buffer power, so AIS bursts don't count) and clipping. At low
+// gain the ADC's own noise dominates and the floor hardly moves; past the knee
+// the tuner's noise dominates and the floor rises with the gain, so more gain
+// buys nothing but less headroom. Picks the lowest gain KNEE_DB above the
+// floor at 0 dB, or the highest that doesn't clip. Returns an index into
+// k_gains, or -1 if interrupted.
+static int gain_sweep(void)
+{
+    float floor_db[NGAINS], clip[NGAINS];
+    int n = 0;
+    ESP_LOGI(TAG, "choosing the gain:");
+    for (int i = 0; i < NGAINS && !s_gone; i++) {
+        s_sweep_step = i + 1;
+        set_gain(k_gains[i]);
+        vTaskDelay(pdMS_TO_TICKS(SWEEP_SETTLE_MS));
+        uint64_t c0 = s_clip_total, b0 = s_byte_total;
+        s_meas_n = 0;
+        s_meas_on = true;
+        vTaskDelay(pdMS_TO_TICKS(SWEEP_MEASURE_MS));
+        s_meas_on = false;
+        uint64_t bytes = s_byte_total - b0;
+        if (!s_meas_n || !bytes) break;  // no samples: the stream has stopped
+        float pw[MEAS_MAX];
+        int m = s_meas_n;
+        memcpy(pw, s_meas_pw, m * sizeof(float));
+        qsort(pw, m, sizeof(float), cmp_float);
+        floor_db[i] = 10 * log10f(pw[m / 2] / (128.0f * 128.0f) + 1e-12f);
+        clip[i] = (float)(s_clip_total - c0) / bytes;
+        n = i + 1;
+        ESP_LOGI(TAG, "  %4.1f dB: floor %6.1f dBFS, clipped %.4f%%", k_gains[i] / 10.0, floor_db[i], 100 * clip[i]);
+        if (clip[i] > CLIP_OK) break;  // only gets worse from here
+    }
+    s_sweep_step = 0;
+    if (!n || s_gone) return -1;
+
+    int best = 0;
+    for (int i = 0; i < n && clip[i] <= CLIP_OK; i++) {
+        best = i;
+        if (floor_db[i] >= floor_db[0] + KNEE_DB) break;
+    }
+    ESP_LOGI(TAG, "gain %.1f dB: noise floor %.1f dB above the ADC's", k_gains[best] / 10.0, floor_db[best] - floor_db[0]);
+    return best;
+}
+
+// Clip guard for the chosen gain: a step down when a strong signal clips, and
+// back up once it's been quiet for a while.
+static void gain_guard(void)
+{
+    static int64_t window_start, last_change;
+    static uint64_t c0, b0;
+    int64_t now = esp_timer_get_time();
+    if (now - window_start < GUARD_WINDOW_US) return;
+    uint64_t bytes = s_byte_total - b0;
+    float clip = bytes ? (float)(s_clip_total - c0) / bytes : 0;
+    window_start = now;
+    c0 = s_clip_total;
+    b0 = s_byte_total;
+    if (s_target_idx < 0 || !bytes) return;
+    if (clip > GUARD_CLIP && s_idx > 0) {
+        s_idx--;
+        set_gain(k_gains[s_idx]);
+        last_change = now;
+        ESP_LOGW(TAG, "clipping (%.2f%%): gain down to %.1f dB", 100 * clip, k_gains[s_idx] / 10.0);
+    } else if (clip == 0 && s_idx < s_target_idx && now - last_change > GUARD_RECOVER_US) {
+        s_idx++;
+        set_gain(k_gains[s_idx]);
+        last_change = now;
+        ESP_LOGI(TAG, "no clipping for a while: gain back up to %.1f dB", k_gains[s_idx] / 10.0);
+    }
+    s_gain_steps_down = s_target_idx - s_idx;
+}
+
+// Gain and bias-tee from the settings; the ppm goes to the decoder task.
+// "Best fixed gain" is left to the sweep (the caller runs it).
+static void apply_settings(const settings_t *cfg)
+{
+    if (cfg->sdr_gain != SDR_GAIN_BEST) {
+        set_gain(cfg->sdr_gain);
+        s_target_idx = -1;
+    }
+    bool manual = cfg->sdr_gain >= 0;
     bool bias = cfg->sdr_enabled && cfg->sdr_bias_tee;
     set_gpio(BIAS_TEE_GPIO, bias);
     s_ppm = cfg->sdr_ppm_tenths / 10.0f;
     s_ppm_changed = true;
     if (manual) ESP_LOGI(TAG, "gain %.1f dB, bias-tee %s, %+.1f ppm", cfg->sdr_gain / 10.0, bias ? "on" : "off", s_ppm);
-    else ESP_LOGI(TAG, "gain auto, bias-tee %s, %+.1f ppm", bias ? "on" : "off", s_ppm);
+    else ESP_LOGI(TAG, "gain %s, bias-tee %s, %+.1f ppm", cfg->sdr_gain == SDR_GAIN_AUTO ? "tuner AGC" : "best fixed",
+                  bias ? "on" : "off", s_ppm);
 }
 
 // ---------------------------------------------------------------------------
@@ -385,20 +498,26 @@ static void bulk_cb(usb_transfer_t *t)
     if (t->status == USB_TRANSFER_STATUS_COMPLETED) {
         s_bytes += t->actual_num_bytes;
         if (t->actual_num_bytes < t->num_bytes) s_short_xfers++;
-        // Sample spread, from a slice of each buffer: shows whether the ADC is live.
-        uint32_t lo = s_hist_min, hi = s_hist_max;
-        uint64_t sum = 0;
-        int n = t->actual_num_bytes < 1024 ? t->actual_num_bytes : 1024;
+        // Sample spread, clipping and power: for the throughput test and the
+        // gain control.
+        uint32_t lo = s_hist_min, hi = s_hist_max, clipped = 0, sum = 0, pwr = 0;
+        int n = t->actual_num_bytes;
         for (int i = 0; i < n; i++) {
             uint8_t v = t->data_buffer[i];
             if (v < lo) lo = v;
             if (v > hi) hi = v;
+            clipped += v == 0 || v == 255;
             sum += v;
+            int c = v - 128;
+            pwr += c * c;
         }
         s_hist_min = lo;
         s_hist_max = hi;
         s_sum += sum;
         s_count += n;
+        s_clip_total += clipped;
+        s_byte_total += n;
+        if (s_meas_on && s_meas_n < MEAS_MAX && n) s_meas_pw[s_meas_n++] = (float)pwr / n;
         if (s_dec_on) {
             ring_push(&s_dec_ring, t->data_buffer, t->actual_num_bytes);
             xTaskNotifyGive(s_dec_task);
@@ -598,12 +717,21 @@ static void probe_device(uint8_t addr)
         snprintf(s_tuner, sizeof(s_tuner), "R820T (RTL-SDR Blog V3)");
         // Stream continuously into the decoder (captures tap the same stream),
         // following the settings as they change.
-        bool streaming = false;
+        bool streaming = false, need_sweep = false;
+        settings_t old = {0};
+        s_target_idx = -1;
         for (bool first = true; !s_gone; first = false) {
             if (first || (xEventGroupClearBits(s_events, SETTINGS_EV_SDR) & SETTINGS_EV_SDR)) {
                 settings_t cfg;
                 settings_get(&cfg);
                 apply_settings(&cfg);
+                // Choose the gain again whenever something that changes the answer does.
+                if (cfg.sdr_gain == SDR_GAIN_BEST &&
+                    (first || old.sdr_gain != SDR_GAIN_BEST || old.sdr_bias_tee != cfg.sdr_bias_tee ||
+                     (!old.sdr_enabled && cfg.sdr_enabled))) {
+                    need_sweep = true;
+                }
+                old = cfg;
                 if (cfg.sdr_enabled && !streaming) {
                     s_dec_reset = true;
                     s_dec_on = true;
@@ -618,6 +746,16 @@ static void probe_device(uint8_t addr)
                 }
                 s_state = cfg.sdr_enabled ? SDR_READY : SDR_DISABLED;
             }
+            if (need_sweep && streaming) {
+                need_sweep = false;
+                int best = gain_sweep();
+                if (best >= 0) {
+                    s_target_idx = s_idx = best;
+                    s_gain_steps_down = 0;
+                    set_gain(k_gains[best]);
+                }
+            }
+            if (streaming) gain_guard();
             ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(500));
             int seconds = s_cap_req;
             if (seconds) {
@@ -774,6 +912,11 @@ void sdr_get_status(sdr_status_t *out)
     out->cap_file_bytes = s_cap_file_bytes;
     snprintf(out->cap_error, sizeof(out->cap_error), "%s", s_cap_error);
     out->cpu_pct = s_cpu_pct;
+    out->gain = s_gain_now;
+    out->gain_best = s_target_idx >= 0;
+    out->gain_steps_down = s_gain_steps_down;
+    out->sweep_step = s_sweep_step;
+    out->sweep_steps = NGAINS;
     out->dropped_bytes = s_dec_ring.dropped;
     if (s_demod) ais_demod_get_stats(s_demod, &out->demod);
 }

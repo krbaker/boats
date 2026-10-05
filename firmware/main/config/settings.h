@@ -38,12 +38,13 @@ typedef struct {
     // AIS sources
     bool net_enabled;        // use the network (TCP) feed
     bool sdr_enabled;        // decode a plugged-in RTL-SDR dongle
-    int16_t sdr_gain;        // tuner gain in tenths of a dB, or SDR_GAIN_AUTO
+    int16_t sdr_gain;        // tuner gain in tenths of a dB, or SDR_GAIN_AUTO / SDR_GAIN_BEST
     int16_t sdr_ppm_tenths;  // dongle crystal correction, tenths of a ppm
     bool sdr_bias_tee;       // power an LNA / active antenna through the coax
 } settings_t;
 
-#define SDR_GAIN_AUTO       (-1)
+#define SDR_GAIN_AUTO       (-1)  // the tuner's own AGC
+#define SDR_GAIN_BEST       (-2)  // best fixed gain, chosen by measuring (see sdr_probe.c)
 
 // Bits set on settings_events() when the matching group of settings changes.
 #define SETTINGS_EV_AIS     BIT0

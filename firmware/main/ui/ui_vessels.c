@@ -127,6 +127,14 @@ static void refresh_rx(void)
     if (r.state == SDR_READY || r.state == SDR_CAPTURING) {
         n += snprintf(buf + n, sizeof(buf) - n, "\nDecoder: %.0f%% of one CPU core", r.cpu_pct);
         if (r.dropped_bytes) n += snprintf(buf + n, sizeof(buf) - n, ", %.1f s of samples dropped", r.dropped_bytes / (2.0 * r.rate));
+        if (r.sweep_step) {
+            n += snprintf(buf + n, sizeof(buf) - n, "\nChoosing the gain (%d/%d)...", r.sweep_step, r.sweep_steps);
+        } else if (r.gain == SDR_GAIN_AUTO) {
+            n += snprintf(buf + n, sizeof(buf) - n, "\nGain: tuner AGC");
+        } else {
+            n += snprintf(buf + n, sizeof(buf) - n, "\nGain: %.1f dB%s", r.gain / 10.0, r.gain_best ? " (auto)" : "");
+            if (r.gain_steps_down) n += snprintf(buf + n, sizeof(buf) - n, ", lowered for a strong signal");
+        }
         snprintf(buf + n, sizeof(buf) - n, "\nNoise %.1f dBFS, tuning %+.1f ppm", (r.demod.noise_dbfs[0] + r.demod.noise_dbfs[1]) / 2,
                  r.demod.ppm);
     }

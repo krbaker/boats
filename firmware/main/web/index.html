@@ -113,6 +113,7 @@
     <table>
       <tr><td>Dongle</td><td id="sdr_state">…</td></tr>
       <tr><td>Decoder</td><td id="sdr_decoder">–</td></tr>
+      <tr><td>Gain</td><td id="sdr_gain_now">–</td></tr>
       <tr><td>Packets / min (A + B)</td><td id="sdr_rates">–</td></tr>
       <tr><td>Vessels heard</td><td id="sdr_vessels">–</td></tr>
     </table>
@@ -122,8 +123,10 @@
       <div><label for="sdr_gain">Gain</label><select id="sdr_gain"></select></div>
       <div><label for="sdr_ppm">Frequency correction (ppm)</label><input id="sdr_ppm" type="number" step="0.1" min="-200" max="200"></div>
     </div>
-    <div class="hint">Try a few gains and compare packets per minute above. Too much gain with a strong transmitter
-      nearby makes things worse. The RTL-SDR Blog V3 needs no frequency correction; cheaper dongles may (the decoder
+    <div class="hint">"Best fixed gain" measures the noise at each gain step when the dongle starts (about 25 s) and
+      picks the lowest gain where the dongle's own noise is well above the ADC's, which leaves the most headroom for
+      strong signals; it steps down by itself if a nearby transmitter overloads it. You can also set a gain yourself
+      and compare packets per minute above. The RTL-SDR Blog V3 needs no frequency correction; cheaper dongles may (the decoder
       also corrects itself once it hears packets).</div>
     <label class="check"><input id="sdr_bias_tee" type="checkbox"> Bias-tee: power an LNA or active antenna (4.5 V on the antenna socket)</label>
     <button onclick="saveSdr()">Save</button>
@@ -207,7 +210,8 @@ const SDR_GAINS = [0, 9, 14, 27, 37, 77, 87, 125, 144, 157, 166, 197, 207, 229, 
   372, 386, 402, 421, 434, 439, 445, 480, 496];  // R820T steps, tenths of a dB
 function fillGains() {
   const sel = $("sdr_gain");
-  sel.add(new Option("Auto (tuner AGC)", "-1"));
+  sel.add(new Option("Auto: best fixed gain (recommended)", "-2"));
+  sel.add(new Option("Tuner AGC", "-1"));
   for (const g of SDR_GAINS) sel.add(new Option((g / 10).toFixed(1) + " dB", String(g)));
 }
 
@@ -353,6 +357,10 @@ function showSdr(r, x) {
     (r.dropped_bytes ? `, ${(r.dropped_bytes / (2 * r.rate)).toFixed(1)} s of samples dropped (too slow)` : ", no samples dropped") +
     `; noise ${r.noise_dbfs.toFixed(1)} dBFS, tuning ${r.ppm >= 0 ? "+" : ""}${r.ppm.toFixed(1)} ppm` : "–";
   $("sdr_decoder").className = r.dropped_bytes ? "warn" : "";
+  const g = r.gain;
+  $("sdr_gain_now").textContent = !live ? "–" : g.sweep_step ? `choosing (${g.sweep_step}/${g.sweep_steps})…` :
+    g.now < 0 ? "tuner AGC" : `${(g.now / 10).toFixed(1)} dB` + (g.best ? " (auto)" : "") +
+    (g.steps_down ? ", lowered for a strong signal" : "");
   if (x) {
     const rate = s => `${s.a_min + s.b_min} (${s.a_min} + ${s.b_min}), ${s.a + s.b} since boot`;
     $("sdr_rates").textContent = `SDR ${rate(x.sdr)} — network ${rate(x.network)}`;

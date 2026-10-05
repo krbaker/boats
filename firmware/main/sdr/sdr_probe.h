@@ -29,6 +29,11 @@ typedef struct {
     float cpu_pct;              // time in the demodulator, % of one core
     uint64_t dropped_bytes;     // samples the decoder fell too far behind to take
     ais_demod_stats_t demod;
+    // Gain
+    int16_t gain;               // applied now, tenths of a dB (SDR_GAIN_AUTO: tuner AGC)
+    bool gain_best;             // chosen by the "best fixed gain" sweep
+    int gain_steps_down;        // steps below that choice, backing off from clipping
+    int sweep_step, sweep_steps;  // sweep progress (sweep_step 0: not sweeping)
 } sdr_status_t;
 
 // Starts USB host on the USB-A port. An RTL-SDR Blog V3 (R820T) dongle plugged
