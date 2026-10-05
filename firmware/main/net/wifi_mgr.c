@@ -117,8 +117,10 @@ static void on_wifi_event(void *arg, esp_event_base_t base, int32_t id, void *da
 
 static void make_ap_identity(void)
 {
-    uint8_t mac[6];
-    esp_read_mac(mac, ESP_MAC_WIFI_SOFTAP);
+    // The P4 has no Wi-Fi of its own (the C6 co-processor does), so there is no
+    // local soft-AP MAC: name the access point after the chip's base MAC.
+    uint8_t mac[6] = {0};
+    esp_efuse_mac_get_default(mac);
     static const char alphabet[] = "abcdefghjkmnpqrstuvwxyz23456789"; // no look-alikes
     char pass[11];
     for (int i = 0; i < 10; i++) pass[i] = alphabet[esp_random() % (sizeof(alphabet) - 1)];

@@ -92,6 +92,18 @@
     <div class="msg" id="wifi_msg"></div>
     <div class="hint">The new network is tested before it's saved. If it fails, the display goes back to the previous network (or its setup access point).</div>
   </section>
+
+  <section>
+    <h2>Wi-Fi chip firmware</h2>
+    <div class="hint">Wi-Fi runs on a separate ESP32-C6 chip with its own firmware: currently version <b id="cp_version">…</b>.
+      To update it, upload its firmware image (<code>coprocessor/build/eh_cp_ota_coprocessor_ota.bin</code>). The display restarts when it's done.
+      If an update fails part way, the old firmware keeps running.</div>
+    <label for="cp_file">ESP32-C6 firmware (.bin)</label>
+    <input id="cp_file" type="file" accept=".bin,application/octet-stream">
+    <button id="cp_btn" onclick="uploadCoprocessor()">Update</button>
+    <progress id="cp_progress" max="1" value="0" hidden></progress>
+    <div class="msg" id="cp_msg"></div>
+  </section>
 </main>
 
 <script>
@@ -231,6 +243,33 @@ function uploadMap() {
   xhr.send(f);
 }
 
+function uploadCoprocessor() {
+  const f = $("cp_file").files[0];
+  if (!f) return setMsg("cp_msg", "Choose the ESP32-C6 firmware .bin first.", "bad");
+  $("cp_btn").disabled = true;
+  const bar = $("cp_progress");
+  bar.hidden = false;
+  bar.value = 0;
+  setMsg("cp_msg", "Sending firmware to the Wi-Fi chip… don't power off the display.", "warn");
+  const xhr = new XMLHttpRequest();
+  xhr.open("POST", "/api/coprocessor");
+  xhr.setRequestHeader("Content-Type", "application/octet-stream");
+  xhr.upload.onprogress = e => {
+    if (!e.lengthComputable) return;
+    bar.value = e.loaded / e.total;
+    if (e.loaded === e.total) setMsg("cp_msg", "Finishing the update…", "warn");
+  };
+  const done = (ok, text) => { $("cp_btn").disabled = false; bar.hidden = true; setMsg("cp_msg", text, ok ? "ok" : "bad"); };
+  xhr.onload = () => {
+    let body = {};
+    try { body = JSON.parse(xhr.responseText); } catch (e) {}
+    if (xhr.status === 200) done(true, "Updated. The display is restarting; this page reconnects in about 20 seconds.");
+    else done(false, "Update failed: " + (body.error || "HTTP " + xhr.status));
+  };
+  xhr.onerror = () => done(false, "Lost contact with the display during the update. If the Wi-Fi chip version below hasn't changed after a restart, try again.");
+  xhr.send(f);
+}
+
 let wifiPending = false;
 async function saveWifi() {
   const ssid = $("wifi_ssid").value.trim(), password = $("wifi_pass").value;
@@ -260,6 +299,7 @@ async function pollStatus() {
     const s = await api("/api/status");
     const w = s.wifi, a = s.ais, t = s.tide, m = s.map;
     let html = "";
+    $("cp_version").textContent = w.coprocessor || "unknown";
     if (w.state === "access point") html += row("Wi-Fi", `Setup access point <b>${esc(w.ap_ssid)}</b>`, "warn");
     else html += row("Wi-Fi", `${esc(w.state)} to <b>${esc(w.ssid)}</b>` + (w.ip ? ` — ${w.ip} (${w.rssi} dBm)` : ""), w.ip ? "ok" : "warn");
     html += row("AIS feed", esc(a.state) + (a.error && a.state !== "connected" ? ` (${esc(a.error)})` : "") +

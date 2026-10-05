@@ -9,3 +9,7 @@ __pycache__/
 firmware/test/host/preview/build/
 firmware/test/host/preview/out/
 mapbuilder/.venv/
+coprocessor/build/
+coprocessor/managed_components/
+coprocessor/sdkconfig
+coprocessor/sdkconfig.old

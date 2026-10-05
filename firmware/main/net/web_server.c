@@ -10,6 +10,7 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 
+#include "cp_update.h"
 #include "map_store.h"
 #include "nmea_client.h"
 #include "settings.h"
@@ -182,6 +183,9 @@ static esp_err_t status_get(httpd_req_t *req)
     cJSON_AddStringToObject(wj, "ap_ssid", w.ap_ssid);
     cJSON_AddStringToObject(wj, "test", test_str(w.test));
     cJSON_AddStringToObject(wj, "test_ssid", w.test_ssid);
+    char cpv[24];
+    cp_update_version(cpv, sizeof(cpv));
+    cJSON_AddStringToObject(wj, "coprocessor", cpv);
 
     nmea_status_t n;
     nmea_client_get_status(&n);
@@ -314,6 +318,42 @@ static esp_err_t map_post(httpd_req_t *req)
     return config_get(req);
 }
 
+// Wi-Fi co-processor firmware update: the body is an ESP32-C6 .bin image.
+static esp_err_t coprocessor_post(httpd_req_t *req)
+{
+    if (req->content_len <= 0 || req->content_len > 4 * 1024 * 1024) {
+        return send_error(req, "400 Bad Request", "upload the ESP32-C6 firmware .bin (up to 4 MB)");
+    }
+    cp_update_t *u = cp_update_begin();
+    char *buf = malloc(4096);
+    if (!u || !buf) {
+        free(buf);
+        free(u);
+        return send_error(req, "500 Internal Server Error", "out of memory");
+    }
+    int remaining = req->content_len;
+    bool ok = true;
+    while (remaining > 0) {
+        int n = httpd_req_recv(req, buf, MIN(remaining, 4096));
+        if (n == HTTPD_SOCK_ERR_TIMEOUT) continue;
+        if (n <= 0) {
+            ok = false;
+            break;
+        }
+        remaining -= n;
+        if (ok && !cp_update_feed(u, (uint8_t *)buf, n)) ok = false; // keep draining so the browser sees the error
+    }
+    free(buf);
+    char msg[128] = "";
+    if (remaining > 0) {
+        cp_update_finish(u, msg, sizeof(msg));
+        return ESP_FAIL; // connection lost
+    }
+    if (!cp_update_finish(u, msg, sizeof(msg))) return send_error(req, "400 Bad Request", msg);
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_sendstr(req, "{\"ok\":true,\"message\":\"Wi-Fi chip updated; the display is restarting\"}");
+}
+
 // In AP mode, send every unknown URL to the config page (captive portal).
 static esp_err_t not_found(httpd_req_t *req, httpd_err_code_t code)
 {
@@ -352,6 +392,7 @@ void web_server_start(void)
         {.uri = "/api/status", .method = HTTP_GET, .handler = status_get},
         {.uri = "/api/vessels", .method = HTTP_GET, .handler = vessels_get},
         {.uri = "/api/map", .method = HTTP_POST, .handler = map_post},
+        {.uri = "/api/coprocessor", .method = HTTP_POST, .handler = coprocessor_post},
     };
     for (size_t i = 0; i < sizeof(uris) / sizeof(uris[0]); i++) {
         httpd_register_uri_handler(server, &uris[i]);
