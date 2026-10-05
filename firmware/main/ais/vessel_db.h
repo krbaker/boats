@@ -31,6 +31,9 @@ typedef struct {
     uint32_t msgs[RX_NSRC]; // messages from each source (network, SDR)
 } vessel_t;
 
+// Also starts the vessel cache: names, call signs, types and sizes heard
+// before are remembered on the microSD card (VESSEL_CACHE_PLAN.md), and fill
+// in a vessel as soon as it's heard again.
 void vessel_db_init(void);
 void vessel_db_update(const ais_report_t *r, rx_source_t src);
 void vessel_db_expire(void);
@@ -46,6 +49,9 @@ int vessel_db_count(void);
 // How many vessels have been heard only on the network feed, only by the
 // local SDR, and by both.
 void vessel_db_source_counts(int *net_only, int *sdr_only, int *both);
+
+// Write any unsaved changes to the vessel cache now. Call before a planned restart.
+void vessel_db_save(void);
 
 // Increments whenever a vessel is added, updated or expired.
 uint32_t vessel_db_generation(void);

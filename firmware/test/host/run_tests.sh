@@ -1,7 +1,8 @@
 #!/bin/sh
 # Build and run the host-side unit tests (AIS parser, AIS demodulator, geo
-# helpers, simulator round trip). Set AIS_CAPTURE to a .cu8 I/Q capture (288
-# kS/s, centred on 162.000 MHz) to also run the demodulator over real signals.
+# helpers, vessel cache, simulator round trip). Set AIS_CAPTURE to a .cu8 I/Q
+# capture (288 kS/s, centred on 162.000 MHz) to also run the demodulator over
+# real signals.
 set -e
 cd "$(dirname "$0")"
 CC=${CC:-cc}
@@ -18,6 +19,10 @@ build/test_ais
 build/test_ais_demod
 if [ -n "$AIS_CAPTURE" ]; then build/ais_demod_file "$AIS_CAPTURE" | tail -1; fi
 build/test_geo
+$CC $CFLAGS -I../../components/vessel_cache/include -o build/test_vessel_cache test_vessel_cache.c \
+    ../../components/vessel_cache/vessel_cache.c -pthread
+rm -rf build/vessel_cache && mkdir -p build/vessel_cache
+build/test_vessel_cache build/vessel_cache
 python3 roundtrip.py
 
 # Map upload (streaming zip reader + manifest validation) against a scratch directory.

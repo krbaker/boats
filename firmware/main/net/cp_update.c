@@ -16,6 +16,7 @@
 #include "esp_system.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "vessel_db.h"
 
 static const char *TAG = "cp_update";
 
@@ -100,6 +101,7 @@ bool cp_update_feed(cp_update_t *u, const uint8_t *data, size_t len)
 static void restart_task(void *arg)
 {
     vTaskDelay(pdMS_TO_TICKS(1500)); // let the HTTP response go out
+    vessel_db_save();                // first: the card shares its SDMMC host with the Wi-Fi chip
     eh_host_deinit();
     vTaskDelay(pdMS_TO_TICKS(500));
     esp_restart();

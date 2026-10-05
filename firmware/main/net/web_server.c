@@ -477,6 +477,7 @@ static esp_err_t coprocessor_post(httpd_req_t *req)
 static void restart_task(void *arg)
 {
     vTaskDelay(pdMS_TO_TICKS(500));  // let the HTTP response go out
+    vessel_db_save();
     esp_restart();
 }
 

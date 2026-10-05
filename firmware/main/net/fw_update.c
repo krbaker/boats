@@ -14,6 +14,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "ui.h"
+#include "vessel_db.h"
 
 static const char *TAG = "fw_update";
 
@@ -140,6 +141,7 @@ bool fw_update_feed(fw_update_t *u, const uint8_t *data, size_t len)
 static void restart_task(void *arg)
 {
     vTaskDelay(pdMS_TO_TICKS(1500));  // let the HTTP response go out
+    vessel_db_save();
     esp_restart();
 }
 
