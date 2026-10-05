@@ -231,6 +231,20 @@ static esp_err_t status_get(httpd_req_t *req)
     cJSON_AddNumberToObject(aj, "last_rx_s", n.last_rx_us ? (now_us - n.last_rx_us) / 1000000 : -1);
     cJSON_AddNumberToObject(o, "vessels", vessel_db_count());
 
+    vc_stats_t vc;
+    cJSON *cachej = cJSON_AddObjectToObject(o, "vessel_cache");
+    if (!vessel_db_cache_stats(&vc)) {
+        cJSON_AddStringToObject(cachej, "state", "loading");
+    } else {
+        cJSON_AddStringToObject(cachej, "state", vc.ram_only ? "no card" : vc.last_error[0] ? "error" : "ok");
+        cJSON_AddNumberToObject(cachej, "vessels", vc.count);
+        cJSON_AddNumberToObject(cachej, "capacity", vc.capacity);
+        cJSON_AddNumberToObject(cachej, "file_bytes", vc.file_records * VC_RECORD_SIZE);
+        cJSON_AddNumberToObject(cachej, "writes", vc.records_written);
+        cJSON_AddNumberToObject(cachej, "compactions", vc.compactions);
+        cJSON_AddStringToObject(cachej, "error", vc.last_error);
+    }
+
     tide_status_t t;
     tide_get_status(&t);
     static const char *tide_states[] = {"no station", "waiting", "ok", "error"};
@@ -490,6 +504,13 @@ static esp_err_t restart_post(httpd_req_t *req)
     return ESP_OK;
 }
 
+static esp_err_t vessels_forget_post(httpd_req_t *req)
+{
+    vessel_db_forget_all();
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_sendstr(req, "{\"ok\":true}");
+}
+
 static esp_err_t sdr_capture_post(httpd_req_t *req)
 {
     cJSON *root = read_json(req);
@@ -591,6 +612,7 @@ void web_server_start(void)
         {.uri = "/api/wifi", .method = HTTP_POST, .handler = wifi_post},
         {.uri = "/api/status", .method = HTTP_GET, .handler = status_get},
         {.uri = "/api/vessels", .method = HTTP_GET, .handler = vessels_get},
+        {.uri = "/api/vessels/forget", .method = HTTP_POST, .handler = vessels_forget_post},
         {.uri = "/api/map", .method = HTTP_POST, .handler = map_post},
         {.uri = "/api/coprocessor", .method = HTTP_POST, .handler = coprocessor_post},
         {.uri = "/api/firmware", .method = HTTP_POST, .handler = firmware_post},
