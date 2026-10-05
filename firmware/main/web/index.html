@@ -123,9 +123,9 @@
       <div><label for="sdr_gain">Gain</label><select id="sdr_gain"></select></div>
       <div><label for="sdr_ppm">Frequency correction (ppm)</label><input id="sdr_ppm" type="number" step="0.1" min="-200" max="200"></div>
     </div>
-    <div class="hint">"Best fixed gain" measures the noise at each gain step when the dongle starts (about 25 s) and
-      picks the lowest gain where the dongle's own noise is well above the ADC's, which leaves the most headroom for
-      strong signals; it steps down by itself if a nearby transmitter overloads it. You can also set a gain yourself
+    <div class="hint">"Best fixed gain" measures the noise at each gain step when the dongle starts (up to 25 s) and
+      picks the highest gain that still leaves about 20 dB of headroom above the noise; it steps down by itself if a
+      nearby transmitter overloads it. You can also set a gain yourself
       and compare packets per minute above. The RTL-SDR Blog V3 needs no frequency correction; cheaper dongles may (the decoder
       also corrects itself once it hears packets).</div>
     <label class="check"><input id="sdr_bias_tee" type="checkbox"> Bias-tee: power an LNA or active antenna (4.5 V on the antenna socket)</label>

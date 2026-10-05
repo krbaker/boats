@@ -105,7 +105,7 @@ static const int16_t k_gains[] = {0,   9,   14,  27,  37,  77,  87,  125, 144, 1
 #define NGAINS ((int)(sizeof(k_gains) / sizeof(k_gains[0])))
 #define SWEEP_SETTLE_MS   150
 #define SWEEP_MEASURE_MS  600
-#define KNEE_DB           10.0f   // noise floor this far above the ADC's own: ~0.4 dB SNR lost to the ADC
+#define FLOOR_MAX_DBFS    (-22.0f) // noise floor ceiling: ~9 ADC counts rms, ~20 dB of headroom above the noise
 #define CLIP_OK           1e-4f   // fraction of samples clipped that's acceptable when choosing
 #define GUARD_WINDOW_US   5000000LL
 #define GUARD_CLIP        1e-3f   // more than this over a window: one step down
@@ -377,11 +377,12 @@ static int cmp_float(const void *a, const void *b)
 }
 
 // Finds the best fixed gain: step up through the gains measuring the noise
-// floor (median buffer power, so AIS bursts don't count) and clipping. At low
-// gain the ADC's own noise dominates and the floor hardly moves; past the knee
-// the tuner's noise dominates and the floor rises with the gain, so more gain
-// buys nothing but less headroom. Picks the lowest gain KNEE_DB above the
-// floor at 0 dB, or the highest that doesn't clip. Returns an index into
+// floor (median buffer power, so AIS bursts don't count) and clipping, and pick
+// the highest gain whose floor stays under FLOOR_MAX_DBFS without clipping.
+// The R820T's noise figure keeps improving as its LNA gain rises (at low gain
+// its own mixer and IF noise dominate), so more gain helps until headroom for
+// strong signals runs out. (Picking the "knee" where the floor starts rising
+// chose ~28 dB and heard half as much as 40 dB.) Returns an index into
 // k_gains, or -1 if interrupted.
 static int gain_sweep(void)
 {
@@ -407,17 +408,14 @@ static int gain_sweep(void)
         clip[i] = (float)(s_clip_total - c0) / bytes;
         n = i + 1;
         ESP_LOGI(TAG, "  %4.1f dB: floor %6.1f dBFS, clipped %.4f%%", k_gains[i] / 10.0, floor_db[i], 100 * clip[i]);
-        if (clip[i] > CLIP_OK) break;  // only gets worse from here
+        if (clip[i] > CLIP_OK || floor_db[i] > FLOOR_MAX_DBFS) break;  // only gets worse from here
     }
     s_sweep_step = 0;
     if (!n || s_gone) return -1;
 
     int best = 0;
-    for (int i = 0; i < n && clip[i] <= CLIP_OK; i++) {
-        best = i;
-        if (floor_db[i] >= floor_db[0] + KNEE_DB) break;
-    }
-    ESP_LOGI(TAG, "gain %.1f dB: noise floor %.1f dB above the ADC's", k_gains[best] / 10.0, floor_db[best] - floor_db[0]);
+    for (int i = 0; i < n && clip[i] <= CLIP_OK && floor_db[i] <= FLOOR_MAX_DBFS; i++) best = i;
+    ESP_LOGI(TAG, "gain %.1f dB: noise floor %.1f dBFS", k_gains[best] / 10.0, floor_db[best]);
     return best;
 }
 
