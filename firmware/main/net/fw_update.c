@@ -13,6 +13,7 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "ui.h"
 
 static const char *TAG = "fw_update";
 
@@ -109,6 +110,7 @@ static bool start(fw_update_t *u)
                  me->project_name);
         return fail(u, msg, ESP_OK);
     }
+    ui_updating_begin();  // before the first flash write
     esp_err_t e = esp_ota_begin(u->slot, OTA_WITH_SEQUENTIAL_WRITES, &u->ota);
     if (e != ESP_OK) return fail(u, "could not start writing the firmware", e);
     u->started = true;
@@ -162,6 +164,7 @@ bool fw_update_finish(fw_update_t *u, char *err, size_t errlen)
         xTaskCreate(restart_task, "fw_restart", 2048, NULL, 5, NULL);
     } else {
         ESP_LOGE(TAG, "update failed: %s", u->err);
+        ui_updating_end();
         snprintf(err, errlen, "%s", u->err);
     }
     free(u);

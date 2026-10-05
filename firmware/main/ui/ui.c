@@ -5,6 +5,9 @@
 
 #include "bsp/esp-bsp.h"
 #include "esp_log.h"
+#include "esp_lv_adapter.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 #define HOLD_SHOW_MS    2000    // show the progress ring after this long
 #define HOLD_TRIGGER_MS 10000   // open the network page after this long
@@ -110,6 +113,43 @@ void ui_start(void)
     ui_map_on_show();
     lv_screen_load(s_map_scr);
     lv_timer_create(hold_timer_cb, 100, NULL);
+    bsp_display_unlock();
+}
+
+// ---------------------------------------------------------------------------
+// Firmware update screen
+// ---------------------------------------------------------------------------
+
+static lv_obj_t *s_updating;
+
+void ui_updating_begin(void)
+{
+    if (s_updating) return;
+    bsp_display_lock(0);
+    s_updating = lv_obj_create(lv_layer_top());
+    lv_obj_remove_style_all(s_updating);
+    lv_obj_set_size(s_updating, UI_SIZE, UI_SIZE);
+    lv_obj_set_style_bg_color(s_updating, UI_COLOR_BG, 0);
+    lv_obj_set_style_bg_opa(s_updating, LV_OPA_COVER, 0);
+    lv_obj_t *lbl = lv_label_create(s_updating);
+    lv_label_set_text(lbl, "Updating firmware...\n\nDon't turn off the power");
+    lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_32, 0);
+    lv_obj_set_style_text_color(lbl, UI_COLOR_TEXT, 0);
+    lv_obj_center(lbl);
+    bsp_display_unlock();
+    esp_lv_adapter_refresh_now(NULL);
+    vTaskDelay(pdMS_TO_TICKS(100));    // let the new frame reach the panel
+    esp_lv_adapter_pause(1000);        // then draw nothing until the restart
+}
+
+void ui_updating_end(void)
+{
+    if (!s_updating) return;
+    esp_lv_adapter_resume();
+    bsp_display_lock(0);
+    lv_obj_delete(s_updating);
+    s_updating = NULL;
     bsp_display_unlock();
 }
 

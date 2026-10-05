@@ -26,6 +26,12 @@
 // Start the UI (call once the display is running).
 void ui_start(void);
 
+// Firmware update: show a static "Updating firmware" screen and stop drawing,
+// so the flash writes can't make the display flicker. ui_updating_end() goes
+// back to the UI if the update fails. Call from any task except LVGL's.
+void ui_updating_begin(void);
+void ui_updating_end(void);
+
 // Screen navigation (call from the LVGL task, i.e. event handlers / timers).
 void ui_show_map(void);
 void ui_show_detail(uint32_t mmsi);
