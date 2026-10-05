@@ -36,6 +36,8 @@
   <section>
     <h2>Status</h2>
     <table id="status"><tr><td>Loading…</td><td></td></tr></table>
+    <button id="restart_btn" onclick="restartDisplay()">Restart display</button>
+    <div class="msg" id="restart_msg"></div>
   </section>
 
   <section>
@@ -445,6 +447,20 @@ function showFirmware(fw) {
   }
 }
 
+let restartUptime = null;  // uptime when a restart was asked for; a lower one means it's back
+async function restartDisplay() {
+  let q = "Restart the display now?";
+  if ($("fw_version").textContent.includes("on trial"))
+    q += "\n\nThe new firmware is still on trial: restarting now rolls the display back to the previous firmware.";
+  if (!confirm(q)) return;
+  try {
+    restartUptime = lastUptime;
+    await api("/api/restart", { method: "POST" });
+    $("restart_btn").disabled = true;
+    setMsg("restart_msg", "Restarting… this page reconnects in about 20 seconds.", "warn");
+  } catch (e) { restartUptime = null; setMsg("restart_msg", "Restart failed: " + e.message, "bad"); }
+}
+
 let wifiPending = false;
 async function saveWifi() {
   const ssid = $("wifi_ssid").value.trim(), password = $("wifi_pass").value;
@@ -469,9 +485,17 @@ function fmtTime(t) { return new Date(t * 1000).toLocaleString([], { weekday: "s
 function row(k, v, cls) { return `<tr><td>${k}</td><td class="${cls || ""}">${v}</td></tr>`; }
 function esc(s) { return String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]); }
 
+let lastUptime = Infinity;
 async function pollStatus() {
   try {
     const s = await api("/api/status");
+    lastUptime = s.system.uptime_s;
+    if (restartUptime !== null && lastUptime < restartUptime) {
+      restartUptime = null;
+      $("restart_btn").disabled = false;
+      setMsg("restart_msg", "Restarted.", "ok");
+      loadConfig().catch(() => {});
+    }
     const w = s.wifi, a = s.ais, t = s.tide, m = s.map;
     let html = "";
     $("cp_version").textContent = w.coprocessor || "unknown";

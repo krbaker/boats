@@ -8,7 +8,10 @@
 #include "esp_heap_caps.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
+#include "esp_system.h"
 #include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 #include "cp_update.h"
 #include "fw_update.h"
@@ -471,6 +474,21 @@ static esp_err_t coprocessor_post(httpd_req_t *req)
     return httpd_resp_sendstr(req, "{\"ok\":true,\"message\":\"Wi-Fi chip updated; the display is restarting\"}");
 }
 
+static void restart_task(void *arg)
+{
+    vTaskDelay(pdMS_TO_TICKS(500));  // let the HTTP response go out
+    esp_restart();
+}
+
+static esp_err_t restart_post(httpd_req_t *req)
+{
+    ESP_LOGI(TAG, "restart requested from the web page");
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"ok\":true}");
+    xTaskCreate(restart_task, "web_restart", 2048, NULL, 5, NULL);
+    return ESP_OK;
+}
+
 static esp_err_t sdr_capture_post(httpd_req_t *req)
 {
     cJSON *root = read_json(req);
@@ -575,6 +593,7 @@ void web_server_start(void)
         {.uri = "/api/map", .method = HTTP_POST, .handler = map_post},
         {.uri = "/api/coprocessor", .method = HTTP_POST, .handler = coprocessor_post},
         {.uri = "/api/firmware", .method = HTTP_POST, .handler = firmware_post},
+        {.uri = "/api/restart", .method = HTTP_POST, .handler = restart_post},
         {.uri = "/api/sdr/capture", .method = HTTP_POST, .handler = sdr_capture_post},
         {.uri = "/api/sdr/capture", .method = HTTP_GET, .handler = sdr_capture_get},
         {.uri = "/api/sdr/capture.nmea", .method = HTTP_GET, .handler = sdr_capture_nmea_get},
