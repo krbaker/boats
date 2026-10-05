@@ -13,6 +13,7 @@ $CC $CFLAGS -o build/ais_dump ais_dump.c ../../components/ais/ais.c
 # The demodulator test pushes ~100 s of samples through: optimise it.
 $CC $CFLAGS -O2 -o build/test_ais_demod test_ais_demod.c ../../components/ais_demod/ais_demod.c ../../components/ais/ais.c -lm
 $CC $CFLAGS -O2 -o build/ais_demod_file ais_demod_file.c ../../components/ais_demod/ais_demod.c ../../components/ais/ais.c -lm
+$CC $CFLAGS -O2 -o build/ais_capture_score ais_capture_score.c ../../components/ais_demod/ais_demod.c ../../components/ais/ais.c -lm
 build/test_ais
 build/test_ais_demod
 if [ -n "$AIS_CAPTURE" ]; then build/ais_demod_file "$AIS_CAPTURE" | tail -1; fi

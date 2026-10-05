@@ -30,21 +30,28 @@
 #define MIN_BITS   72                         // shortest plausible frame (incl. CRC)
 #define CH_OFFSET  25000.0f
 
-// Carrier offset (DC) tracking: a slow average normally, and for a short
-// window after a packet starts, the exact mean of the last four bits (the
-// training sequence 0101... is ++--++-- after NRZI, so that window averages
-// to the offset).
+// Carrier offset (DC) tracking: for a short window after a packet starts, the
+// exact mean of the last four bits (the training sequence 0101... is ++--++--
+// after NRZI, so that window averages to the offset), then a slow average
+// through the packet. Between packets it holds still: the discriminator's
+// output on noise is wild and would drag it kHz off.
 #define DC_SLOW       (1.0f / 256)
 #define DC_FAST_WIN   (4 * SPS)
 #ifndef DC_FAST_LEN
 #define DC_FAST_LEN   (16 * SPS)
 #endif
-// Packet detection: fast power vs the noise floor.
-#define PWR_FAST      0.1f
-#define NOISE_DOWN    0.002f
-#define NOISE_UP      0.00005f
-#define DETECT_ON     4.0f                    // 6 dB above the floor
+// Packet detection: smoothed power against the noise power, learnt between
+// packets: quickly downwards, slowly upwards, so packets the detector missed
+// can't drag it up. (Tracking the raw power's minimum instead sat at half the
+// mean, so noise alone crossed the threshold every few ms, and real packets
+// then often started with detection already "on" and no fresh DC estimate.)
+#define PWR_FAST      (1.0f / 16)
+#define NOISE_DOWN    (1.0f / 256)
+#define NOISE_UP      (1.0f / 4096)
+#define DETECT_ON     4.0f                    // 6 dB above the noise
 #define DETECT_OFF    2.0f
+#define MAX_ACTIVE    (8000)                  // longer than any packet (5 slots): re-learn the noise
+#define NOISE_START   1024                    // at first: the lowest smoothed power seen
 // Coherent branch: carrier phase from the symbols within COH_D bits either side.
 #ifndef COH_D
 #define COH_D         2
@@ -61,6 +68,8 @@
 #define DUP_WINDOW    (30 * FS_OUT / 1000)    // 30 ms
 // Frequency tracking: fraction of each good packet's offset applied.
 #define TRACK_GAIN    0.3f
+#define TRACK_GAIN_BIG 0.8f
+#define TRACK_BIG_HZ  1000.0f
 #define TRACK_MAX_HZ  10000.0f
 
 // One HDLC frame decoder, fed bits after NRZI decoding.
@@ -115,6 +124,8 @@ typedef struct {
     float dc;
     float pwr_fast, noise;
     bool active;
+    int active_len;
+    int noise_n;                // samples the noise estimate has seen, up to NOISE_START
     uint32_t n48;
     slicer_t sl[SPS];
     // The slicers and both demodulators usually all decode a strong packet:
@@ -216,7 +227,7 @@ ais_demod_t *ais_demod_init(void *mem, ais_demod_sentence_fn fn, void *ctx)
     d->ch[1].name = 'B';
     d->ch[1].f_ch = CH_OFFSET;
     for (int c = 0; c < 2; c++) {
-        d->ch[c].noise = 1e-4f;
+        d->ch[c].noise = 0;
         d->stats.level_dbfs[c] = -100;
         for (int i = 0; i < SPS; i++) {
             d->ch[c].sl[i].rot_i = d->ch[c].sl[i].ui = 1;
@@ -338,7 +349,8 @@ static void frame_end(ais_demod_t *d, chan_t *ch, hdlc_t *h)
         d->stats.level_dbfs[c] = 10 * log10f(h->pwr_sum / h->nsamp + 1e-12f);
         float off_hz = h->raw_sum / h->nsamp * FS_OUT / (2 * (float)M_PI);
         if (d->tracking) {
-            d->corr_hz += TRACK_GAIN * off_hz;
+            // Big offsets are measured confidently: close most of the gap.
+            d->corr_hz += (fabsf(off_hz) > TRACK_BIG_HZ ? TRACK_GAIN_BIG : TRACK_GAIN) * off_hz;
             if (d->corr_hz > TRACK_MAX_HZ) d->corr_hz = TRACK_MAX_HZ;
             if (d->corr_hz < -TRACK_MAX_HZ) d->corr_hz = -TRACK_MAX_HZ;
             update_nco(d);
@@ -445,12 +457,34 @@ static void slicer_sample(ais_demod_t *d, chan_t *ch, slicer_t *s, float x, floa
 static void chan_sample(ais_demod_t *d, chan_t *ch, float yi, float yq)
 {
     float pwr = yi * yi + yq * yq;
-    ch->pwr_fast += (pwr - ch->pwr_fast) * PWR_FAST;
-    ch->noise += (pwr - ch->noise) * (pwr < ch->noise ? NOISE_DOWN : NOISE_UP);
-    if (!ch->active && ch->pwr_fast > ch->noise * DETECT_ON) {
-        ch->active = true;
-        ch->fast_left = DC_FAST_LEN;
-    } else if (ch->active && ch->pwr_fast < ch->noise * DETECT_OFF) {
+    if (ch->noise_n < NOISE_START) {
+        // Starting up: average the first few samples, then take the lowest
+        // smoothed power seen (a packet in this stretch mustn't count).
+        ch->noise_n++;
+        if (ch->noise_n <= 16) {
+            ch->pwr_fast += (pwr - ch->pwr_fast) / ch->noise_n;
+            ch->noise = ch->pwr_fast;
+        } else {
+            ch->pwr_fast += (pwr - ch->pwr_fast) * PWR_FAST;
+            if (ch->pwr_fast < ch->noise) ch->noise = ch->pwr_fast;
+        }
+    } else {
+        ch->pwr_fast += (pwr - ch->pwr_fast) * PWR_FAST;
+        if (!ch->active) ch->noise += (ch->pwr_fast - ch->noise) * (ch->pwr_fast < ch->noise ? NOISE_DOWN : NOISE_UP);
+    }
+    if (!ch->active) {
+        if (ch->noise_n > 16 && ch->pwr_fast > ch->noise * DETECT_ON) {
+            ch->active = true;
+            ch->active_len = 0;
+            ch->fast_left = DC_FAST_LEN;
+        }
+    } else if (ch->pwr_fast < ch->noise * DETECT_OFF) {
+        ch->active = false;
+    } else if (++ch->active_len > MAX_ACTIVE) {
+        // On for longer than a packet: a steady carrier, or a noise estimate
+        // that's too low. Assume the noise is at most 3 dB below this; if it
+        // was a packet after all, the estimate comes back down between packets.
+        ch->noise = ch->pwr_fast / 2;
         ch->active = false;
     }
 
@@ -473,7 +507,7 @@ static void chan_sample(ais_demod_t *d, chan_t *ch, float yi, float yq)
     if (ch->fast_left > 0) {
         ch->fast_left--;
         ch->dc = ch->fast_sum / DC_FAST_WIN;
-    } else {
+    } else if (ch->active) {
         ch->dc += (m - ch->dc) * DC_SLOW;
     }
 

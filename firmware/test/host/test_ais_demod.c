@@ -252,7 +252,7 @@ static void test_multipart(void)
 
 // Decode rate against SNR (in a 10 kHz bandwidth) and frequency offset;
 // prints a table. Measured performance, with some margin: every packet at
-// >= 14 dB, >= 90% at 12 dB (about 80% at 10 dB), and >= 80% at 12 dB for
+// >= 14 dB, >= 90% at 12 dB (about 80% at 10 dB), and >= 90% at 12 dB for
 // packets up to 5 kHz off frequency once tracking has locked.
 static void test_sweep(void)
 {
@@ -267,16 +267,21 @@ static void test_sweep(void)
         if (snr == 12) CHECK(a >= count * 9 / 10 && b >= count * 9 / 10);
         ais_demod_free(d);
     }
-    printf("offset (Hz)  first 5   next %d (12 dB, tracking on)\n", count);
+    // Off frequency, packets decode only now and then until the first good one
+    // retunes the channels; after that, they should decode as if on frequency.
+    printf("offset (Hz)  packets to lock   next %d (12 dB)\n", count);
     static const int offs[] = {-5000, -2000, -500, 500, 2000, 5000};
     for (unsigned i = 0; i < sizeof(offs) / sizeof(offs[0]); i++) {
         ais_demod_t *d = ais_demod_new(collect, NULL);
-        int first = run(d, k_type1, i & 1 ? 'A' : 'B', offs[i], 12, 5);
-        int rest = run(d, k_type1, i & 1 ? 'A' : 'B', offs[i], 12, count);
+        char ch = i & 1 ? 'A' : 'B';
+        int to_lock = 0;
+        while (to_lock < 100 && !run(d, k_type1, ch, offs[i], 12, 1)) to_lock++;
+        int rest = run(d, k_type1, ch, offs[i], 12, count);
         ais_demod_stats_t st;
         ais_demod_get_stats(d, &st);
-        printf("%9d    %d/5      %d/%d  (correction %+.0f Hz)\n", offs[i], first, rest, count, st.freq_corr_hz);
-        CHECK(rest >= count * 8 / 10);
+        printf("%9d    %3d             %d/%d  (correction %+.0f Hz)\n", offs[i], to_lock, rest, count, st.freq_corr_hz);
+        CHECK(to_lock < 100);
+        CHECK(rest >= count * 9 / 10);
         CHECK(fabs(st.freq_corr_hz - offs[i]) < 100);
         ais_demod_free(d);
     }
@@ -284,13 +289,16 @@ static void test_sweep(void)
 
 int main(int argc, char **argv)
 {
-    // --dump FILE: write a few clean packets (A and B) as a .cu8 file for
-    // inspecting the modulator with other tools.
-    if (argc == 3 && !strcmp(argv[1], "--dump")) {
+    // --dump FILE [offset Hz] [SNR dB] [packets]: write synthetic packets as a
+    // .cu8 file for inspecting with other tools (A and B alternately; more than
+    // four: all on A).
+    if (argc >= 3 && !strcmp(argv[1], "--dump")) {
         FILE *f = fopen(argv[2], "wb");
         if (!f) return 2;
-        for (int i = 0; i < 4; i++) {
-            int n = modulate(k_type1, i & 1 ? 25000 : -25000, 0, 30, 6000, iqbuf, 0.3);
+        double off = argc > 3 ? atof(argv[3]) : 0, snr = argc > 4 ? atof(argv[4]) : 30;
+        int npk = argc > 5 ? atoi(argv[5]) : 4;  // > 4: all on channel A
+        for (int i = 0; i < npk; i++) {
+            int n = modulate(k_type1, (i & 1) && npk <= 4 ? 25000 : -25000, off, snr, 3000, iqbuf, 0.3);
             fwrite(iqbuf, 2, n, f);
         }
         fclose(f);

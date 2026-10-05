@@ -70,6 +70,7 @@ TCP feed (nmea_client) ───────────────────
   - **Frequency tracking** locks onto offsets up to ±5 kHz within a few packets.
   - **Target revised:** the original "every packet at ≥ 10 dB" isn't reached. The tests check ≥ 90% at 12 dB and 100% at 14 dB instead.
   - **CPU:** 60 s of samples takes 3.7 s on a desktop core. It still needs measuring on the P4 (step 5).
+  - **10-minute scored recording** (I/Q plus the roof station's NMEA, recorded together from the web page; `test/host/ais_capture_score`): the packet detector was badly broken. Its noise estimate tracked the minimum, so noise kept triggering it, and real packets often started with no fresh carrier-offset estimate. Clean, strong packets were lost. Fixed: roof packets decoded went from 61% to 74% (of 182), and unique packets from 105 to 126, against 128 for AIS-catcher's most sensitive model.
 - **Step 4 in progress.** When the dongle is plugged in, it's tuned and decoded continuously (a decoder task on core 1, fed through a 2 MB PSRAM ring buffer), into the same vessel table as the network feed.
   - **Comparison:** each vessel records how many messages came from each source. The vessel screen's **Receiver** tab and the web page show packets per channel for both sources (last minute and since boot), and how many vessels each source heard.
   - **CPU:** the decoder's share of a core is measured live and shown in the same places, along with any samples dropped because it fell behind.
