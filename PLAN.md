@@ -15,12 +15,11 @@ The original milestones (section 6) are built, and the display runs day to day. 
 - **Maps:** stored on the **microSD card** as Web Mercator **tile packs** (256 px tiles, one pack per zoom level), not as PNGs in LittleFS. This allows panning up to 10 nm and zoom levels from 0.5 to 10 nm. The LittleFS partition is unused.
 - **AIS parser:** lives in `firmware/components/ais`; the vessel table and network client are in `main/ais`.
 - **Host tests:** plain C programs in `firmware/test/host` (run with `run_tests.sh`), not Unity. A host **UI preview** renders the real screens to PNG.
-- **Licence:** the RTL-SDR tuner code is ported from librtlsdr, so the firmware is GPL-2.0-or-later (decided in `RTL_SDR_PLAN.md`). The ported files carry GPL headers, but there's no top-level `LICENSE` file yet.
+- **Licence:** the RTL-SDR tuner code is ported from librtlsdr, so the firmware is GPL-2.0-or-later (decided in `RTL_SDR_PLAN.md`). The ported files carry GPL headers, and the GPL-2.0 text is in the top-level `LICENSE` file.
 
 **Next:**
 1. **Display firmware updates from the web page** (next section): **built, not yet tested on the display.** It needs one last USB flash, for the new partition table and bootloader; then a test update, and a test of rollback with a deliberately broken image.
 2. **RTL-SDR:** confirm the live decoder on hardware with a second scored recording, test unplug/replug, then re-sending what it receives (`RTL_SDR_PLAN.md`, steps 5 and 6).
-3. **Add the `LICENSE` file** (GPL-2.0-or-later).
 
 ## Firmware updates over the web (built 2026-10-05)
 

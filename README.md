@@ -137,3 +137,7 @@ firmware/test/host/preview/build.sh mapbuilder/seattle     # PNGs in firmware/te
 `enclosure/desk_stand.scad` (`desk_stand.stl`) is a one-piece stand that screws into the four M4 threaded holes on the back of the display (a centred 75 × 75 mm square, the VESA 75 pattern): an X-shaped bracket on four posts, a single leg and a 110 × 95 mm base. Nothing wraps around the screen. The display leans back 15° with its bottom edge about 20 mm above the desk, so the USB-C cable can bend down; it then runs in a groove in the base and out of the back. Print it base down with no supports, and fix it with four M4 × 16 mm screws, which bite about 4 mm into the display. Check how deep the threaded holes are first, so the screws can't bottom out against the display; adjust `thread_engage` at the top of the file if needed.
 
 `enclosure/display_case.scad` is an alternative full case (bezel, back lid and a cradle stand) that wraps around the display.
+
+## Licence
+
+GPL-2.0-or-later: you can redistribute and modify this under the terms of the GNU General Public License, version 2 or (at your option) any later version. The full text is in `LICENSE`. The firmware is GPL because the RTL-SDR tuner driver is ported from librtlsdr.
