@@ -60,29 +60,48 @@ TCP feed (nmea_client) ───────────────────
 | 5 | **Performance and soak:** profile CPU per stage, and check map panning stays smooth while decoding. Then a 24 h run on a busy channel. | Under 50% of one core for the demodulator, no UI stutter, and no leaks or resets over 24 h. |
 | 6 | **Re-send what we receive.** First, a TCP NMEA server (port 10110, several clients at once) so OpenCPN or a chartplotter can use the display as its AIS receiver. Second, UDP forwarding of the raw `!AIVDM` sentences to a list of host:port destinations, which is how MarineTraffic, AISHub, VesselFinder and aiscatcher.org take station feeds. By default only what the dongle receives is forwarded, not the TCP feed: sending another station's data on would duplicate it, or loop it straight back to its source. Each output's on/off setting, destinations and sent count are on the web page. | OpenCPN shows the same targets as the display, and an online service lists the station as receiving. |
 
-## Progress
+## Progress (2026-10-05)
 
 - **Step 1 done.** The dongle enumerates at High Speed and streams 2.4 MS/s with no errors.
-- **Step 2 partly done:** the R820T tuner is ported (`main/sdr/r82xx.c`), and the probe tunes to 162.000 MHz and records I/Q captures to the microSD card from the web page. Still to do: the `components/rtlsdr` driver with a ring buffer, gain/ppm settings, the bias-tee, and the one-hour streaming test.
-- **Step 3 done** (`components/ais_demod`, tests in `test/host/test_ais_demod.c`). It runs two demodulators per sampling phase, FM discriminator and coherent, and merges what they decode.
-  - **Real capture** (60 s, ground-floor antenna): 8 packets, the same 8 as AIS-catcher's most sensitive model ("AIS engine v1 high"). AIS-catcher's default model gets 6.
-  - **Synthetic packets**, SNR in a 10 kHz bandwidth: about 80% decode at 10 dB, 95% at 12 dB, 100% at 14 dB.
-  - **Frequency tracking** locks onto offsets up to ±5 kHz within a few packets.
-  - **Target revised:** the original "every packet at ≥ 10 dB" isn't reached. The tests check ≥ 90% at 12 dB and 100% at 14 dB instead.
-  - **CPU:** 60 s of samples takes 3.7 s on a desktop core. It still needs measuring on the P4 (step 5).
-  - **10-minute scored recording** (I/Q plus the roof station's NMEA, recorded together from the web page; `test/host/ais_capture_score`): the packet detector was badly broken. Its noise estimate tracked the minimum, so noise kept triggering it, and real packets often started with no fresh carrier-offset estimate. Clean, strong packets were lost. Fixed: roof packets decoded went from 61% to 74% (of 182), and unique packets from 105 to 126, against 128 for AIS-catcher's most sensitive model.
-- **Step 4 in progress.** When the dongle is plugged in, it's tuned and decoded continuously (a decoder task on core 1, fed through a 2 MB PSRAM ring buffer), into the same vessel table as the network feed.
-  - **Comparison:** each vessel records how many messages came from each source. The vessel screen's **Receiver** tab and the web page show packets per channel for both sources (last minute and since boot), and how many vessels each source heard.
-  - **CPU:** the decoder's share of a core is measured live and shown in the same places, along with any samples dropped because it fell behind.
-  - **Settings** on the web page, applied live without a restart: each source on or off, SDR gain (auto or the R820T's 29 steps), ppm correction (applied in the demodulator's NCOs), and the bias-tee (asks for confirmation; off whenever the SDR is off). The Network screen shows the SDR's state, and the map counts vessels while either source is live.
-  - **Still to do:** confirm on hardware that unplugging and replugging the dongle recovers by itself.
+- **Step 2 mostly done.**
+  - **Built:** the R820T tuner is ported (`main/sdr/r82xx.c`), and the probe (`main/sdr/sdr_probe.c`) streams 288 kS/s at 162.000 MHz into PSRAM ring buffers.
+  - **Settings:** gain (best fixed gain, the tuner AGC, or the 29 manual steps), ppm and bias-tee, all applied live.
+  - **Recording:** the web page's Record button saves I/Q captures, plus the NMEA sentences heard meanwhile, to the microSD card.
+  - **Different from the plan:** the driver lives in `main/sdr`, not in a `components/rtlsdr` component.
+  - **Still to do:** the one-hour streaming test (step 5's soak covers it), and the R828D (Blog V4) tuner.
+- **Step 3 done** (`components/ais_demod`, tests in `test/host`).
+  - **How it works:** two demodulators run per sampling phase, an FM discriminator and a coherent one, and their results are merged. Each channel has its own packet detector and carrier-offset (DC) estimate, and good packets steer the frequency tracking.
+  - **Synthetic packets** (SNR in a 10 kHz bandwidth): about 80% decode at 10 dB, 97% at 12 dB, 100% at 14 dB. Offsets up to ±5 kHz lock within a few packets, then decode at least 90%.
+  - **Target revised:** the plan's "every packet at ≥ 10 dB" isn't reached. The tests check ≥ 90% at 12 dB and 100% at 14 dB.
+  - **Scored 10-minute recording** (ground-floor antenna, against the roof station's feed; `test/host/ais_capture_score`):
+    - We decode 74% of the roof's packets (134 of 182), with no false decodes, and 126 unique packets against 128 for AIS-catcher's most sensitive model.
+    - Of the 48 misses, 34 had bursts under 6 dB and only 4 were at 9 dB or more, so the antenna is now the main limit.
+    - This recording also found a broken packet detector. Its noise estimate tracked the minimum, so noise kept triggering it, and real packets often started with no fresh offset estimate. Fixing it took us from 61% to 74%.
+  - **Not done** (small gains on this data): bit-flip retries on failed packets, a per-packet frequency estimate, Viterbi.
+- **Step 4 mostly done.**
+  - **Decoding:** while the dongle is plugged in, it's decoded continuously by a task on core 1, into the same vessel table as the network feed.
+  - **CPU:** about 60% of one core (measured live).
+  - **Comparison:** each vessel counts messages per source. The vessel screen's **Receiver** tab and the web page show packets per channel per source, and which vessels each source heard.
+  - **Settings:** each source can be turned on and off, live.
+  - **Status:** the Network screen shows the SDR's state, and the map counts vessels while either source is live.
+  - **Still to do:**
+    - Confirm the fixed decoder live: the firmware with the detector fix hasn't been scored on the device yet.
+    - Confirm on hardware that unplugging and replugging the dongle recovers by itself.
+- **Step 5:** CPU is measured at about 60% of one core. The map hasn't been checked for stutter while decoding, and there's been no 24 h soak test yet.
+- **Step 6:** not started.
+
+**Best fixed gain:**
+- A sweep at plug-in picks the highest gain whose noise floor stays under −22 dBFS (about 20 dB of headroom) without clipping.
+- A clip guard steps it down for strong nearby signals.
+- A first version picked the "knee" where the noise floor starts rising. It chose about 28 dB and heard half as much as 40 dB: the R820T's noise figure keeps improving with LNA gain.
+- The −22 dBFS ceiling is calibrated from one site.
 
 ## Risks
 
-- **USB host on the P4:** compatibility with the RTL2832U's bulk endpoint, and the High-Speed vs Full-Speed question. Step 1 settles this before anything else is built.
+- **USB host on the P4:** settled. High Speed, 2.4 MS/s with no errors. Plugging in can log `Root port reset failed` for a few seconds before the dongle enumerates.
 - **Power:** the dongle on top of the display may exceed what the USB-C supply or the board's port switch delivers. The fallback is a powered USB hub, or a dongle with lower draw.
 - **RF self-interference** from the display and Wi-Fi reduces sensitivity. The fallbacks are a short USB extension, a ferrite, and keeping the antenna away from the unit.
-- **CPU:** if both channels plus the UI are too much, use the P4's PIE SIMD instructions for the FIRs, decimate harder before the matched filter, or move to fixed point.
+- **CPU:** about 60% of one core in practice, which is fine. If more is needed, the 64-tap channel filter is most of the work: use the P4's PIE SIMD instructions there first.
 - **Licensing:** see the decision above.
 
 ## Still to decide

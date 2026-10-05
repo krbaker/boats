@@ -11,6 +11,7 @@
 #include "esp_timer.h"
 
 #include "cp_update.h"
+#include "fw_update.h"
 #include "map_store.h"
 #include "nmea_client.h"
 #include "rx_stats.h"
@@ -303,6 +304,16 @@ static esp_err_t status_get(httpd_req_t *req)
     cJSON_AddNumberToObject(vj, "sdr_only", sdr_only);
     cJSON_AddNumberToObject(vj, "both", both);
 
+    fw_info_t fw;
+    fw_update_info(&fw);
+    cJSON *fj = cJSON_AddObjectToObject(o, "firmware");
+    cJSON_AddStringToObject(fj, "version", fw.version);
+    cJSON_AddStringToObject(fj, "built", fw.build_date);
+    cJSON_AddStringToObject(fj, "slot", fw.running);
+    cJSON_AddBoolToObject(fj, "on_trial", fw.pending_verify);
+    cJSON_AddBoolToObject(fj, "rolled_back", fw.rolled_back);
+    cJSON_AddBoolToObject(fj, "can_update", fw.can_update);
+
     cJSON *sj = cJSON_AddObjectToObject(o, "system");
     cJSON_AddNumberToObject(sj, "uptime_s", now_us / 1000000);
     cJSON_AddNumberToObject(sj, "time", clock_is_set() ? (double)time(NULL) : 0);
@@ -391,6 +402,37 @@ static esp_err_t map_post(httpd_req_t *req)
         return send_error(req, "400 Bad Request", msg);
     }
     return config_get(req);
+}
+
+// Display firmware update: the body is firmware/build/ais_display.bin.
+static esp_err_t firmware_post(httpd_req_t *req)
+{
+    char msg[128] = "";
+    if (req->content_len <= 0) return send_error(req, "400 Bad Request", "upload firmware/build/ais_display.bin");
+    fw_update_t *u = fw_update_begin(req->content_len, msg, sizeof(msg));
+    if (!u) return send_error(req, "400 Bad Request", msg);
+    char *buf = malloc(4096);
+    if (!buf) {
+        fw_update_finish(u, msg, sizeof(msg));
+        return send_error(req, "500 Internal Server Error", "out of memory");
+    }
+    int remaining = req->content_len;
+    bool ok = true;
+    while (remaining > 0) {
+        int n = httpd_req_recv(req, buf, MIN(remaining, 4096));
+        if (n == HTTPD_SOCK_ERR_TIMEOUT) continue;
+        if (n <= 0) break;
+        remaining -= n;
+        if (ok && !fw_update_feed(u, (uint8_t *)buf, n)) ok = false;  // keep draining so the browser sees the error
+    }
+    free(buf);
+    if (remaining > 0) {
+        fw_update_finish(u, msg, sizeof(msg));  // abandons the half-written slot
+        return ESP_FAIL;                         // connection lost
+    }
+    if (!fw_update_finish(u, msg, sizeof(msg))) return send_error(req, "400 Bad Request", msg);
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_sendstr(req, "{\"ok\":true}");
 }
 
 // Wi-Fi co-processor firmware update: the body is an ESP32-C6 .bin image.
@@ -513,7 +555,7 @@ void web_server_start(void)
 {
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.stack_size = 8192;
-    cfg.max_uri_handlers = 12;
+    cfg.max_uri_handlers = 16;
     cfg.lru_purge_enable = true;
     cfg.recv_wait_timeout = 30;
     cfg.send_wait_timeout = 30;
@@ -532,6 +574,7 @@ void web_server_start(void)
         {.uri = "/api/vessels", .method = HTTP_GET, .handler = vessels_get},
         {.uri = "/api/map", .method = HTTP_POST, .handler = map_post},
         {.uri = "/api/coprocessor", .method = HTTP_POST, .handler = coprocessor_post},
+        {.uri = "/api/firmware", .method = HTTP_POST, .handler = firmware_post},
         {.uri = "/api/sdr/capture", .method = HTTP_POST, .handler = sdr_capture_post},
         {.uri = "/api/sdr/capture", .method = HTTP_GET, .handler = sdr_capture_get},
         {.uri = "/api/sdr/capture.nmea", .method = HTTP_GET, .handler = sdr_capture_nmea_get},

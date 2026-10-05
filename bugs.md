@@ -1,3 +1,5 @@
+Status (2026-10-05): everything below is implemented, except where noted. Checked against the code, not on the device.
+
 # critical inaccuracies
 * boats are sometimes appearing on land.  a quick comparison to a comercial AIS system shows our positions are slightly off.  Are we doing lat/lon math correctly?
 * the heading line is very nice for boats underway, but the angle of the heading line and boat icon sometimes are off by enough that you can easily see it.
@@ -36,6 +38,6 @@
 * remove the recenter button, this isn't meant for precise location of the user
 * remove the heading lines from boats under 1kt
 * add current tide level to the tide bubble (<ft>ft <rise/fall icon> <HH:MM AM/PM> <ft>ft)
-* Make everything around the perimeter the same thickness (height of font/bubble) (right now 2nm and the +- around it differ)
+* Make everything around the perimeter the same thickness (height of font/bubble) (right now 2nm and the +- around it differ) — *not verified from the code; check on the display*
 * the actual ship icon can still seem to 'stack' in the wrong order (I saw a vessel underway behind a stantionary circle icon)
 * the timeout to 'grey out' a vessel seems to short for AIS class B at rest

@@ -1,5 +1,49 @@
 # AIS Round Display — Implementation Plan
 
+## Status (2026-10-05)
+
+The original milestones (section 6) are built, and the display runs day to day. Sections 1–8 below are the original plan; where the build turned out differently, the list here says so.
+
+**Built:**
+- **Milestones 1–10.** Board bring-up, LVGL, Wi-Fi through the C6, settings and web page, the AIS stack, map builder, map screen, detail screen, time and tide, and the Network screen.
+- **Milestone 11 (hardening):** not done as a formal 24 h soak test.
+- **Feature requests in `bugs.md`:** implemented (see the notes there).
+- **Wi-Fi chip (ESP32-C6) firmware updates from the web page.** The image is built from `coprocessor/` and goes through ESP-Hosted's OTA calls; a failed update leaves the old firmware running. This settles the "C6 firmware version" risk in section 7.
+- **RTL-SDR receiver** (see `RTL_SDR_PLAN.md`). A dongle on the USB-A port decodes AIS by itself, alongside the network feed. The decoder matches AIS-catcher's most sensitive model on a scored 10-minute recording.
+
+**Different from the plan:**
+- **Maps:** stored on the **microSD card** as Web Mercator **tile packs** (256 px tiles, one pack per zoom level), not as PNGs in LittleFS. This allows panning up to 10 nm and zoom levels from 0.5 to 10 nm. The LittleFS partition is unused.
+- **AIS parser:** lives in `firmware/components/ais`; the vessel table and network client are in `main/ais`.
+- **Host tests:** plain C programs in `firmware/test/host` (run with `run_tests.sh`), not Unity. A host **UI preview** renders the real screens to PNG.
+- **Licence:** the RTL-SDR tuner code is ported from librtlsdr, so the firmware is GPL-2.0-or-later (decided in `RTL_SDR_PLAN.md`). The ported files carry GPL headers, but there's no top-level `LICENSE` file yet.
+
+**Next:**
+1. **Display firmware updates from the web page** (next section): **built, not yet tested on the display.** It needs one last USB flash, for the new partition table and bootloader; then a test update, and a test of rollback with a deliberately broken image.
+2. **RTL-SDR:** confirm the live decoder on hardware with a second scored recording, test unplug/replug, then re-sending what it receives (`RTL_SDR_PLAN.md`, steps 5 and 6).
+3. **Add the `LICENSE` file** (GPL-2.0-or-later).
+
+## Firmware updates over the web (built 2026-10-05)
+
+Upload `firmware/build/ais_display.bin` on the config page, the same way the Wi-Fi chip's firmware is updated now.
+
+- **Partition table:**
+  - Two 4 MB app slots, `ota_0` and `ota_1` (the app is about 2.2 MB), plus `otadata`, replacing `factory` and the unused LittleFS `storage` partition.
+  - NVS stays at the same offset, so the settings survive the change.
+  - Changing the table means flashing over USB once (`idf.py flash`, which writes the bootloader, partition table and app). After that, all updates go through the web page.
+- **Upload (`POST /api/firmware`):**
+  - Streams into the inactive slot with `esp_ota_write`.
+  - Before anything is written, the image header is checked: right chip (ESP32-P4), right magic byte. `esp_ota_end` then verifies the whole image (SHA-256).
+  - Only then does it switch the boot slot and restart.
+  - A failed or interrupted upload leaves the running firmware untouched.
+- **Rollback** (`CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE`):
+  - A new image boots on trial.
+  - It marks itself good once it's running properly: the display up, the web server started, and a minute passed without crashing.
+  - If it crashes or resets before that, the bootloader goes back to the previous image on the next boot.
+  - Without this, a bad update could only be fixed over USB.
+- **Version:**
+  - The page shows the running version (`git describe`, through `PROJECT_VER`) and its build date.
+  - After an update, it shows whether the display is running the new image or rolled back.
+
 ## 1. Hardware (derived from `waveshare-esphome`)
 
 | Item | Detail | Source in ESPHome config |

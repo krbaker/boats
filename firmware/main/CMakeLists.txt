@@ -5,6 +5,7 @@ idf_component_register(
         "net/wifi_mgr.c"
         "net/web_server.c"
         "net/cp_update.c"
+        "net/fw_update.c"
         "ais/vessel_db.c"
         "ais/nmea_client.c"
         "ais/rx_stats.c"
@@ -24,5 +25,5 @@ idf_component_register(
         "ui/map_tile_decode.c"
     INCLUDE_DIRS "." "config" "net" "ais" "tide" "geo" "map" "ui" "sdr"
     EMBED_TXTFILES "web/index.html"
-    REQUIRES ais ais_demod esp_http_server esp_http_client esp-tls json nvs_flash esp_wifi esp_netif esp_timer lwip usb esp_hosted bootloader_support
+    REQUIRES ais ais_demod app_update esp_http_server esp_http_client esp-tls json nvs_flash esp_wifi esp_netif esp_timer lwip usb esp_hosted bootloader_support
 )

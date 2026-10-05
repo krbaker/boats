@@ -97,6 +97,21 @@
   </section>
 
   <section>
+    <h2>Display firmware</h2>
+    <table>
+      <tr><td>Running</td><td id="fw_version">…</td></tr>
+    </table>
+    <div class="hint">Upload <code>firmware/build/ais_display.bin</code> to update the display. It restarts into the new
+      firmware on trial: if that doesn't run for a minute (it crashes, or restarts), the display goes back to the
+      current one by itself. A failed or interrupted upload changes nothing.</div>
+    <label for="fw_file">Display firmware (.bin)</label>
+    <input id="fw_file" type="file" accept=".bin,application/octet-stream">
+    <button id="fw_btn" onclick="uploadFirmware()">Update</button>
+    <progress id="fw_progress" max="1" value="0" hidden></progress>
+    <div class="msg" id="fw_msg"></div>
+  </section>
+
+  <section>
     <h2>Wi-Fi chip firmware</h2>
     <div class="hint">Wi-Fi runs on a separate ESP32-C6 chip with its own firmware: currently version <b id="cp_version">…</b>.
       To update it, upload its firmware image (<code>coprocessor/build/eh_cp_ota_coprocessor_ota.bin</code>). The display restarts when it's done.
@@ -384,6 +399,52 @@ function showSdr(r, x) {
   $("sdr_dl_size").textContent = c.file_bytes ? `(${mb(c.file_bytes)})` : "";
 }
 
+let fwUpdating = null;  // version we were running when an update was sent
+function uploadFirmware() {
+  const f = $("fw_file").files[0];
+  if (!f) return setMsg("fw_msg", "Choose firmware/build/ais_display.bin first.", "bad");
+  $("fw_btn").disabled = true;
+  const bar = $("fw_progress");
+  bar.hidden = false;
+  bar.value = 0;
+  setMsg("fw_msg", "Sending the firmware… don't power off the display.", "warn");
+  const xhr = new XMLHttpRequest();
+  xhr.open("POST", "/api/firmware");
+  xhr.setRequestHeader("Content-Type", "application/octet-stream");
+  xhr.upload.onprogress = e => {
+    if (!e.lengthComputable) return;
+    bar.value = e.loaded / e.total;
+    if (e.loaded === e.total) setMsg("fw_msg", "Checking the image…", "warn");
+  };
+  const done = (ok, text) => { $("fw_btn").disabled = false; bar.hidden = true; setMsg("fw_msg", text, ok ? "ok" : "bad"); };
+  xhr.onload = () => {
+    let body = {};
+    try { body = JSON.parse(xhr.responseText); } catch (e) {}
+    if (xhr.status === 200) {
+      fwUpdating = $("fw_version").dataset.version || "";
+      done(true, "Written. The display is restarting into the new firmware; this page reconnects in about 20 seconds.");
+    } else done(false, "Update failed: " + (body.error || "HTTP " + xhr.status) + ". The display is still running its current firmware.");
+  };
+  xhr.onerror = () => done(false, "Lost contact with the display during the upload. Nothing was changed; try again.");
+  xhr.send(f);
+}
+
+function showFirmware(fw) {
+  if (!fw) return;
+  const el = $("fw_version");
+  el.dataset.version = fw.version;
+  el.textContent = `${fw.version} (built ${fw.built})` + (fw.on_trial ? " — on trial, kept after a minute" : "") +
+    (fw.rolled_back ? " — the last update failed and was rolled back" : "");
+  el.className = fw.rolled_back ? "warn" : "";
+  $("fw_btn").disabled = !fw.can_update;
+  if (!fw.can_update) setMsg("fw_msg", "This display's flash layout predates web updates: flash it over USB once (idf.py flash).", "warn");
+  if (fwUpdating !== null && fw.version) {
+    if (fw.rolled_back) setMsg("fw_msg", "The new firmware failed to start, so the display went back to " + fw.version + ".", "bad");
+    else if (fw.version !== fwUpdating || fw.on_trial) setMsg("fw_msg", "Now running " + fw.version + ".", "ok");
+    fwUpdating = null;
+  }
+}
+
 let wifiPending = false;
 async function saveWifi() {
   const ssid = $("wifi_ssid").value.trim(), password = $("wifi_pass").value;
@@ -429,6 +490,7 @@ async function pollStatus() {
     html += row("Uptime", ago(s.system.uptime_s).replace(" ago", "") + `, free RAM ${Math.round(s.system.heap_internal / 1024)} KiB + ${Math.round(s.system.heap_psram / 1048576)} MiB PSRAM`);
     $("status").innerHTML = html;
     showSdr(s.sdr, s.receivers);
+    showFirmware(s.firmware);
 
     if (wifiPending && w.test !== "testing") {
       wifiPending = false;

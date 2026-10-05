@@ -3,6 +3,8 @@
 #include "bsp/esp-bsp.h"
 #include "esp_log.h"
 
+#include "fw_update.h"
+
 #include "map_tiles.h"
 #include "map_store.h"
 #include "nmea_client.h"
@@ -58,5 +60,6 @@ void app_main(void)
 #endif
 
     ui_start(); // also applies the saved backlight brightness
+    fw_update_confirm_later(); // a trial image (just updated from the web) is kept once it has run a minute
     ESP_LOGI(TAG, "running");
 }
