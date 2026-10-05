@@ -130,13 +130,6 @@ static int write_reg(uint8_t block, uint16_t addr, uint16_t val, uint8_t len)
     return ctrl(false, addr, (block << 8) | 0x10, d, len);
 }
 
-static uint16_t read_reg(uint8_t block, uint16_t addr, uint8_t len)
-{
-    uint8_t d[2] = {0};
-    ctrl(true, addr, block << 8, d, len);
-    return (d[1] << 8) | d[0];
-}
-
 static uint16_t demod_read_reg(uint8_t page, uint16_t addr, uint8_t len)
 {
     uint8_t d[2] = {0};
@@ -330,8 +323,11 @@ static void probe_device(uint8_t addr)
     if (write_reg(USBB, USB_SYSCTL, 0x09, 1) < 0) ESP_LOGW(TAG, "first register write failed");
     init_baseband();
 
+    // Probe the V3's tuner first: reading an absent tuner's address makes the
+    // dongle STALL the request, which the USB host logs as an error.
     set_i2c_repeater(true);
-    uint8_t r820 = i2c_read_reg(R820T_I2C_ADDR, 0x00), r828 = i2c_read_reg(R828D_I2C_ADDR, 0x00);
+    uint8_t r820 = i2c_read_reg(R820T_I2C_ADDR, 0x00), r828 = 0;
+    if (r820 != R82XX_CHECK_VAL) r828 = i2c_read_reg(R828D_I2C_ADDR, 0x00);
     set_i2c_repeater(false);
     if (r820 == R82XX_CHECK_VAL) ESP_LOGI(TAG, "tuner: Rafael Micro R820T/R820T2 (RTL-SDR Blog V3)");
     else if (r828 == R82XX_CHECK_VAL) ESP_LOGI(TAG, "tuner: Rafael Micro R828D (RTL-SDR Blog V4)");
@@ -361,7 +357,21 @@ static void probe_task(void *arg)
     usb_host_transfer_alloc(sizeof(usb_setup_packet_t) + 64, 0, &s_ctrl);
     s_ctrl_done = xSemaphoreCreateBinary();
     xTaskCreatePinnedToCore(event_task, "sdr_usb_ev", 4096, NULL, 6, NULL, 1);
-    ESP_LOGI(TAG, "USB host ready: plug the RTL-SDR into the USB-A port");
+
+    // A dongle plugged in at boot was enumerated before this client registered,
+    // so no NEW_DEV event comes for it: look for it directly.
+    vTaskDelay(pdMS_TO_TICKS(1500));
+    uint8_t addrs[8];
+    int n = 0;
+    usb_host_device_addr_list_fill(sizeof(addrs), addrs, &n);
+    if (n == 0) ESP_LOGI(TAG, "USB host ready: plug the RTL-SDR into the USB-A port");
+    for (int i = 0; i < n; i++) {
+        ESP_LOGI(TAG, "found a USB device already connected (address %u)", addrs[i]);
+        s_gone = false;
+        probe_device(addrs[i]);
+    }
+    ulTaskNotifyTake(pdTRUE, 0); // drop any NEW_DEV notification for a device just probed
+    s_new_addr = 0;
 
     for (;;) {
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
