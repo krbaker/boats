@@ -9,6 +9,14 @@ menu "AIS Display"
             hanging down. The printed case in enclosure/ is designed for this.
             Turn it off if the USB-C ports are along the top.
 
+    config AIS_SDR_PROBE
+        bool "RTL-SDR USB test (temporary)"
+        default y
+        help
+            Starts USB host on the USB-A port and, when an RTL2832U dongle is
+            plugged in, logs its details and measures its sample stream over USB.
+            Bring-up step for receiving AIS directly (RTL_SDR_PLAN.md, step 1).
+
     config AIS_TOUCH_SWAP_XY
         int "Touch: swap X and Y (0/1)"
         range 0 1

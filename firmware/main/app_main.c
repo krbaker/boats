@@ -6,6 +6,7 @@
 #include "map_tiles.h"
 #include "map_store.h"
 #include "nmea_client.h"
+#include "sdr_probe.h"
 #include "settings.h"
 #include "tide.h"
 #include "ui.h"
@@ -52,6 +53,9 @@ void app_main(void)
     nmea_client_start();
     map_tiles_init();
     web_server_start();
+#if CONFIG_AIS_SDR_PROBE
+    sdr_probe_start();
+#endif
 
     ui_start(); // also applies the saved backlight brightness
     ESP_LOGI(TAG, "running");

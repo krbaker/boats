@@ -10,6 +10,7 @@ idf_component_register(
         "geo/geo.c"
         "map/map_store.c"
         "map/map_pack.c"
+        "sdr/sdr_probe.c"
         "ui/ui.c"
         "ui/ui_map.c"
         "ui/ui_detail.c"
@@ -18,7 +19,7 @@ idf_component_register(
         "ui/ui_tide.c"
         "ui/map_tiles.c"
         "ui/map_tile_decode.c"
-    INCLUDE_DIRS "." "config" "net" "ais" "tide" "geo" "map" "ui"
+    INCLUDE_DIRS "." "config" "net" "ais" "tide" "geo" "map" "ui" "sdr"
     EMBED_TXTFILES "web/index.html"
-    REQUIRES ais esp_http_server esp_http_client esp-tls json nvs_flash esp_wifi esp_netif esp_timer lwip
+    REQUIRES ais esp_http_server esp_http_client esp-tls json nvs_flash esp_wifi esp_netif esp_timer lwip usb
 )
