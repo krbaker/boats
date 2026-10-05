@@ -12,6 +12,7 @@ idf_component_register(
         "map/map_store.c"
         "map/map_pack.c"
         "sdr/sdr_probe.c"
+        "sdr/r82xx.c"
         "ui/ui.c"
         "ui/ui_map.c"
         "ui/ui_detail.c"

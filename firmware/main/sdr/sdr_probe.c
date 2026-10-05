@@ -1,7 +1,8 @@
 /*
- * RTL-SDR bring-up test (RTL_SDR_PLAN.md, step 1): find an RTL2832U dongle on
- * the USB-A port, report what it is and how it connected, start its sample
- * stream, and measure USB throughput. Results go to the serial log only.
+ * RTL-SDR bring-up test (RTL_SDR_PLAN.md, steps 1-2): find an RTL2832U dongle
+ * on the USB-A port, report what it is and how it connected, tune an R820T to
+ * the AIS channels, stream samples, and measure USB throughput and the signal
+ * power on each AIS channel. Results go to the serial log only.
  *
  * The RTL2832U register access and baseband set-up are ported from librtlsdr
  * (rtl-sdr-blog fork): Copyright (C) 2012-2014 Steve Markgraf, (C) 2012
@@ -15,6 +16,8 @@
 
 #include "sdr_probe.h"
 
+#include <math.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "bsp/esp-bsp.h"
@@ -26,6 +29,8 @@
 #include "freertos/task.h"
 #include "usb/usb_host.h"
 
+#include "r82xx.h"
+
 static const char *TAG = "sdr_probe";
 
 #define RTL_VID             0x0bda
@@ -35,6 +40,10 @@ static const char *TAG = "sdr_probe";
 #define BULK_XFERS          4
 #define CTRL_TIMEOUT_MS     300
 #define RUN_MS              10000
+#define AIS_RUN_MS          60000
+#define AIS_CENTER_HZ       162000000   // channel A at -25 kHz, B at +25 kHz
+#define AIS_RATE            288000
+#define AIS_GAIN_TENTH_DB   402
 
 // librtlsdr register blocks
 enum { DEMODB = 0, USBB = 1, SYSB = 2, IICB = 6 };
@@ -158,6 +167,25 @@ static void set_i2c_repeater(bool on)
     demod_write_reg(1, 0x01, on ? 0x18 : 0x10, 1);
 }
 
+static int tuner_i2c_write(uint8_t addr, const uint8_t *buf, int len)
+{
+    return ctrl(false, addr, (IICB << 8) | 0x10, (uint8_t *)buf, len);
+}
+
+static int tuner_i2c_read(uint8_t addr, uint8_t *buf, int len)
+{
+    return ctrl(true, addr, IICB << 8, buf, len);
+}
+
+// The frequency the RTL2832U mixes down from (the tuner's IF).
+static void set_if_freq(uint32_t hz)
+{
+    int32_t v = -(int32_t)(((uint64_t)hz << 22) / RTL_XTAL_HZ);
+    demod_write_reg(1, 0x19, (v >> 16) & 0x3f, 1);
+    demod_write_reg(1, 0x1a, (v >> 8) & 0xff, 1);
+    demod_write_reg(1, 0x1b, v & 0xff, 1);
+}
+
 static void set_fir(void)
 {
     uint8_t fir[20];
@@ -215,6 +243,154 @@ static void reset_buffer(void)
 }
 
 // ---------------------------------------------------------------------------
+// R820T tuning (librtlsdr's open sequence for an R820T, then the AIS settings)
+// ---------------------------------------------------------------------------
+
+static bool tune_r820t(uint32_t freq, uint32_t rate, int gain_tenth_db)
+{
+    demod_write_reg(1, 0xb1, 0x1a, 1);  // zero-IF off: the R820T has a low IF
+    demod_write_reg(0, 0x08, 0x4d, 1);  // in-phase ADC input only
+    demod_write_reg(1, 0x15, 0x01, 1);  // spectrum inversion
+
+    static r82xx_t tuner;
+    memset(&tuner, 0, sizeof(tuner));
+    tuner.i2c_write = tuner_i2c_write;
+    tuner.i2c_read = tuner_i2c_read;
+    tuner.i2c_addr = R820T_I2C_ADDR;
+    tuner.xtal_hz = RTL_XTAL_HZ;
+
+    set_i2c_repeater(true);
+    int if_hz = -1;
+    const char *fail = NULL;
+    if (r82xx_init(&tuner) < 0) fail = "init";
+    else if ((if_hz = r82xx_set_bandwidth(&tuner, rate)) < 0) fail = "bandwidth";
+    else if (r82xx_set_freq(&tuner, freq) < 0) fail = "frequency (PLL did not lock)";
+    else if (r82xx_set_gain(&tuner, true, gain_tenth_db) < 0) fail = "gain";
+    set_i2c_repeater(false);
+    bool ok = !fail;
+    if (fail) ESP_LOGE(TAG, "tuner set-up failed: %s", fail);
+    if (if_hz >= 0) set_if_freq(if_hz);
+    if (ok) {
+        ESP_LOGI(TAG, "tuned to %.3f MHz (IF %.3f MHz, filter cal %u), gain %.1f dB", freq / 1e6, if_hz / 1e6,
+                 tuner.fil_cal_code, gain_tenth_db / 10.0);
+    }
+    return ok;
+}
+
+// ---------------------------------------------------------------------------
+// AIS channel power: no demodulator yet, just the power in a 12 kHz slice at
+// each channel and at a quiet reference frequency, in 2 ms windows. An AIS
+// packet is a 26.7 ms burst, so it shows as a run of windows well above the
+// channel's noise floor.
+// ---------------------------------------------------------------------------
+
+#define LUT_N     288   // one cycle of 1 kHz at 288 kS/s
+#define BOX       24    // boxcar low-pass: first null at 12 kHz
+#define WIN_BOXES 24    // boxcar outputs per 2 ms window
+#define WIN_RING  1024  // windows kept (2 s worth, plus slack)
+#define BURST_DB  10.0f // a window this far above the floor counts as signal
+#define BURST_MIN 4     // windows in a row (8 ms) to count as a burst
+
+enum { CH_A, CH_B, CH_REF, NCH };
+static const int k_ch_khz[NCH] = {-25, 25, 75};
+static const char *const k_ch_name[NCH] = {"A 161.975", "B 162.025", "ref +75k"};
+
+static bool s_ais_on;
+static float s_cos[LUT_N], s_sin[LUT_N];
+static uint16_t s_idx[NCH], s_step[NCH];
+static float s_acc_i[NCH], s_acc_q[NCH], s_win_sum[NCH];
+static int s_box_n, s_win_n;
+static float s_win[NCH][WIN_RING];
+static volatile uint32_t s_wcount;
+static volatile uint32_t s_clipped;
+
+static void ais_reset(void)
+{
+    for (int i = 0; i < LUT_N; i++) {
+        s_cos[i] = cosf(2 * (float)M_PI * i / LUT_N);
+        s_sin[i] = sinf(2 * (float)M_PI * i / LUT_N);
+    }
+    for (int c = 0; c < NCH; c++) {
+        s_step[c] = ((-k_ch_khz[c]) % LUT_N + LUT_N) % LUT_N;  // shifts the channel down to 0 Hz
+        s_idx[c] = 0;
+        s_acc_i[c] = s_acc_q[c] = s_win_sum[c] = 0;
+    }
+    s_box_n = s_win_n = 0;
+    s_wcount = s_clipped = 0;
+}
+
+static void ais_measure(const uint8_t *d, int n)
+{
+    const float scale = 1.0f / ((float)BOX * BOX * 127.5f * 127.5f);
+    for (int i = 0; i + 1 < n; i += 2) {
+        if (d[i] == 0 || d[i] == 255 || d[i + 1] == 0 || d[i + 1] == 255) s_clipped++;
+        float x = d[i] - 127.5f, y = d[i + 1] - 127.5f;
+        for (int c = 0; c < NCH; c++) {
+            float co = s_cos[s_idx[c]], si = s_sin[s_idx[c]];
+            s_acc_i[c] += x * co - y * si;
+            s_acc_q[c] += x * si + y * co;
+            s_idx[c] += s_step[c];
+            if (s_idx[c] >= LUT_N) s_idx[c] -= LUT_N;
+        }
+        if (++s_box_n < BOX) continue;
+        s_box_n = 0;
+        for (int c = 0; c < NCH; c++) {
+            s_win_sum[c] += (s_acc_i[c] * s_acc_i[c] + s_acc_q[c] * s_acc_q[c]) * scale;
+            s_acc_i[c] = s_acc_q[c] = 0;
+        }
+        if (++s_win_n < WIN_BOXES) continue;
+        s_win_n = 0;
+        uint32_t w = s_wcount % WIN_RING;
+        for (int c = 0; c < NCH; c++) {
+            s_win[c][w] = s_win_sum[c] / WIN_BOXES;
+            s_win_sum[c] = 0;
+        }
+        s_wcount++;
+    }
+}
+
+static int cmp_float(const void *a, const void *b)
+{
+    float x = *(const float *)a, y = *(const float *)b;
+    return x < y ? -1 : x > y;
+}
+
+static float db(float p)
+{
+    return 10 * log10f(p > 1e-12f ? p : 1e-12f);
+}
+
+// Logs each channel's floor, peak and bursts for the windows since last time.
+static void ais_report(uint32_t *from, uint32_t total_bursts[NCH])
+{
+    static float tmp[WIN_RING], sorted[WIN_RING];
+    uint32_t end = s_wcount, start = *from;
+    if (end - start > WIN_RING) start = end - WIN_RING;
+    *from = end;
+    int n = end - start;
+    if (n < 10) return;
+    for (int c = 0; c < NCH; c++) {
+        for (int j = 0; j < n; j++) tmp[j] = s_win[c][(start + j) % WIN_RING];
+        // Floor from the median of a sorted copy; bursts from the time order.
+        memcpy(sorted, tmp, n * sizeof(float));
+        qsort(sorted, n, sizeof(float), cmp_float);
+        float floor_p = sorted[n / 2], peak_p = sorted[n - 1];
+        float thresh = floor_p * powf(10, BURST_DB / 10);
+        int bursts = 0, run = 0;
+        for (int j = 0; j < n; j++) {
+            if (tmp[j] > thresh) {
+                if (++run == BURST_MIN) bursts++;
+            } else {
+                run = 0;
+            }
+        }
+        total_bursts[c] += bursts;
+        ESP_LOGI(TAG, "    %-9s floor %6.1f dBFS, peak %+5.1f dB, bursts %d (total %lu)", k_ch_name[c], db(floor_p),
+                 db(peak_p) - db(floor_p), bursts, (unsigned long)total_bursts[c]);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Streaming test
 // ---------------------------------------------------------------------------
 
@@ -237,13 +413,16 @@ static void bulk_cb(usb_transfer_t *t)
         s_hist_max = hi;
         s_sum += sum;
         s_count += n;
+        if (s_ais_on) ais_measure(t->data_buffer, t->actual_num_bytes);
     } else {
         s_xfer_errors++;
     }
     if (s_streaming && usb_host_transfer_submit(t) != ESP_OK) s_xfer_errors++;
 }
 
-static void stream_test(uint32_t rate)
+// Streams for run_ms. With ais set, also measures the AIS channels (the tuner
+// must already be on AIS_CENTER_HZ and rate must be AIS_RATE).
+static void stream_test(uint32_t rate, int run_ms, bool ais)
 {
     uint32_t real = set_sample_rate(rate);
     reset_buffer();
@@ -251,6 +430,9 @@ static void stream_test(uint32_t rate)
     s_hist_min = 255;
     s_hist_max = 0;
     s_sum = s_count = 0;
+    if (ais) ais_reset();
+    s_ais_on = ais;
+    uint32_t ais_from = 0, ais_bursts[NCH] = {0};
     s_streaming = true;
 
     usb_transfer_t *xfers[BULK_XFERS] = {0};
@@ -274,17 +456,25 @@ static void stream_test(uint32_t rate)
 
     int64_t t0 = esp_timer_get_time();
     uint64_t last = 0;
-    for (int s = 1; s * 2000 <= RUN_MS && s_streaming && !s_gone; s++) {
+    for (int s = 1; s * 2000 <= run_ms && s_streaming && !s_gone; s++) {
         vTaskDelay(pdMS_TO_TICKS(2000));
         uint64_t b = s_bytes;
         ESP_LOGI(TAG, "  %u S/s: %.2f MB/s this period (need %.2f), errors %lu, short %lu", (unsigned)real,
                  (b - last) / 2.0 / 1e6, real * 2 / 1e6, (unsigned long)s_xfer_errors, (unsigned long)s_short_xfers);
         last = b;
+        if (ais) {
+            ESP_LOGI(TAG, "    ADC %lu..%lu, clipped %.2f%%", (unsigned long)s_hist_min, (unsigned long)s_hist_max,
+                     100.0 * s_clipped / ((double)real * 2 * s));
+            ais_report(&ais_from, ais_bursts);
+        }
     }
-    s_streaming = false;
-    vTaskDelay(pdMS_TO_TICKS(300)); // let in-flight transfers finish
+    // Rate over the streaming time only, not the drain below.
+    uint64_t bytes = s_bytes;
     double secs = (esp_timer_get_time() - t0) / 1e6;
-    double got = s_bytes / secs, need = real * 2.0;
+    s_streaming = false;
+    s_ais_on = false;
+    vTaskDelay(pdMS_TO_TICKS(300)); // let in-flight transfers finish
+    double got = bytes / secs, need = real * 2.0;
     ESP_LOGI(TAG, "RESULT %u S/s: %.2f MB/s of %.2f MB/s needed (%.0f%%), %lu errors, samples %lu..%lu mean %.1f",
              (unsigned)real, got / 1e6, need / 1e6, 100 * got / need, (unsigned long)s_xfer_errors,
              (unsigned long)s_hist_min, (unsigned long)s_hist_max, s_count ? (double)s_sum / s_count : 0.0);
@@ -335,9 +525,13 @@ static void probe_device(uint8_t addr)
 
     ESP_LOGI(TAG, "internal RAM free %u, PSRAM free %u", (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
-    // The rate AIS will use, then the dongle's usual top rate as a stress test.
-    stream_test(288000);
-    if (!s_gone) stream_test(2400000);
+    // Throughput is settled (step 1), so with an R820T, listen on the AIS
+    // channels instead; other tuners just get the throughput test.
+    if (r820 == R82XX_CHECK_VAL && tune_r820t(AIS_CENTER_HZ, AIS_RATE, AIS_GAIN_TENTH_DB)) {
+        stream_test(AIS_RATE, AIS_RUN_MS, true);
+    } else {
+        stream_test(AIS_RATE, RUN_MS, false);
+    }
     ESP_LOGI(TAG, "test finished; unplug and replug the dongle to run it again");
     usb_host_interface_release(s_client, s_dev, 0);
 out:
