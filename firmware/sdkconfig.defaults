@@ -21,6 +21,11 @@ CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=4096
 CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=65536
 CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
 CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y
+# Run the firmware from PSRAM (copied there at boot), not flash. Flash and PSRAM
+# are separate buses on the P4, so writing flash (web firmware updates) no
+# longer stops the cache and holds off interrupts, including the one that
+# restarts the display DMA every frame: without this the screen flickers.
+CONFIG_SPIRAM_XIP_FROM_PSRAM=y
 
 CONFIG_FREERTOS_HZ=1000
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
