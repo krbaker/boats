@@ -10,6 +10,9 @@
 #include "map_store.h"
 
 #define SDR_CAPTURE_PATH  MAP_ROOT "/sdr/capture.cu8"
+// Sentences heard during the recording, one per line:
+// "<seconds since the I/Q file started> <N network | S SDR decoder> <sentence>".
+#define SDR_CAPTURE_NMEA_PATH MAP_ROOT "/sdr/capture.nmea"
 #define SDR_CAPTURE_MAX_S 600
 
 // SDR_OFF: no SDR support running; SDR_DISABLED: dongle present but turned off
@@ -25,6 +28,7 @@ typedef struct {
     int cap_seconds;
     uint64_t cap_bytes, cap_total, cap_dropped, cap_file_bytes;
     char cap_error[80];
+    uint32_t cap_log_lines;     // sentences logged so far
     // Decoder
     float cpu_pct;              // time in the demodulator, % of one core
     uint64_t dropped_bytes;     // samples the decoder fell too far behind to take
@@ -47,3 +51,6 @@ void sdr_get_status(sdr_status_t *out);
 // Records `seconds` of I/Q to SDR_CAPTURE_PATH, in the background. On failure
 // err says why.
 bool sdr_capture_start(int seconds, char *err, size_t errlen);
+// Adds a sentence to the recording's NMEA log (does nothing unless recording).
+// source: 'N' network feed, 'S' SDR decoder.
+void sdr_capture_log(char source, const char *sentence);

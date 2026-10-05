@@ -139,7 +139,9 @@
     <button id="sdr_btn" onclick="startCapture()" disabled>Record</button>
     <progress id="sdr_progress" max="1" value="0" hidden></progress>
     <div class="msg" id="sdr_msg"></div>
-    <div id="sdr_dl" hidden><a href="/api/sdr/capture" download>Download the capture</a> <span class="hint" id="sdr_dl_size"></span></div>
+    <div id="sdr_dl" hidden><a href="/api/sdr/capture" download>Download the I/Q capture</a> <span class="hint" id="sdr_dl_size"></span>
+      · <a href="/api/sdr/capture.nmea" download>Download the NMEA log</a>
+      <span class="hint">(network feed and SDR decoder sentences heard while recording)</span></div>
   </section>
 </main>
 
@@ -371,7 +373,7 @@ function showSdr(r, x) {
   bar.hidden = r.state !== "recording";
   if (r.state === "recording") {
     bar.value = c.total ? c.bytes / c.total : 0;
-    setMsg("sdr_msg", `Recording ${c.seconds} s: ${mb(c.bytes)} of ${mb(c.total)}` + (c.dropped ? `, ${mb(c.dropped)} dropped` : ""), "warn");
+    setMsg("sdr_msg", `Recording ${c.seconds} s: ${mb(c.bytes)} of ${mb(c.total)}, ${c.log_lines} sentences` + (c.dropped ? `, ${mb(c.dropped)} dropped` : ""), "warn");
     sdrWasCapturing = true;
   } else if (sdrWasCapturing) {
     sdrWasCapturing = false;

@@ -52,6 +52,7 @@ static const char *TAG = "sdr_probe";
 #define CAP_RING            (4 * 1024 * 1024)  // PSRAM: ~7 s of slack if the card stalls
 #define CAP_CHUNK           (32 * 1024)        // written through an internal-RAM bounce buffer
 #define CAP_DIR             MAP_ROOT "/sdr"
+#define CAP_LOG             (512 * 1024)       // PSRAM: AIS sentences heard while recording
 #define DEC_RING            (2 * 1024 * 1024)  // PSRAM: ~3.6 s of samples
 #define DEC_CHUNK           (16 * 1024)
 #define CPU_PERIOD_US       2000000
@@ -134,6 +135,13 @@ typedef struct {
 // Capture: the transfer callback fills the ring, the probe task drains it to the card.
 static ring_t s_cap_ring;
 static volatile bool s_cap_on;
+// ...and the sentences heard meanwhile (network feed and SDR decoder), kept in
+// RAM and written alongside when the recording ends.
+static char *s_cap_log;
+static size_t s_cap_log_len;
+static volatile uint32_t s_cap_log_lines, s_cap_log_dropped;
+static int64_t s_cap_t0;
+static portMUX_TYPE s_cap_log_mux = portMUX_INITIALIZER_UNLOCKED;
 
 // Decoding: the transfer callback fills the ring, the decoder task drains it
 // through the demodulator into the vessel table.
@@ -602,6 +610,28 @@ static void cap_fail(const char *msg)
     if (!s_cap_error[0]) snprintf(s_cap_error, sizeof(s_cap_error), "%s", msg);
 }
 
+void sdr_capture_log(char source, const char *sentence)
+{
+    if (!s_cap_on || !s_cap_log) return;
+    char line[160];
+    double t = (esp_timer_get_time() - s_cap_t0) / 1e6;
+    int n = snprintf(line, sizeof(line), "%.3f %c %s\n", t, source, sentence);
+    if (n >= (int)sizeof(line)) n = sizeof(line) - 1, line[n - 1] = '\n';
+    // Trim a CR the network line may carry.
+    if (n >= 2 && line[n - 2] == '\r') line[n - 2] = '\n', n--;
+    taskENTER_CRITICAL(&s_cap_log_mux);
+    if (!s_cap_log) {
+        // The recording just ended.
+    } else if (s_cap_log_len + n <= CAP_LOG) {
+        memcpy(s_cap_log + s_cap_log_len, line, n);
+        s_cap_log_len += n;
+        s_cap_log_lines++;
+    } else {
+        s_cap_log_dropped++;
+    }
+    taskEXIT_CRITICAL(&s_cap_log_mux);
+}
+
 static void run_capture(int seconds)
 {
     uint64_t total = (uint64_t)seconds * AIS_RATE * 2;
@@ -615,8 +645,11 @@ static void run_capture(int seconds)
     // through a small internal buffer.
     s_cap_ring = (ring_t){.buf = heap_caps_malloc(CAP_RING, MALLOC_CAP_SPIRAM), .size = CAP_RING};
     uint8_t *bounce = heap_caps_aligned_alloc(64, CAP_CHUNK, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+    s_cap_log = heap_caps_malloc(CAP_LOG, MALLOC_CAP_SPIRAM);
+    s_cap_log_len = 0;
+    s_cap_log_lines = s_cap_log_dropped = 0;
     FILE *f = NULL;
-    if (!s_cap_ring.buf || !bounce) {
+    if (!s_cap_ring.buf || !bounce || !s_cap_log) {
         cap_fail("out of memory");
     } else {
         mkdir(CAP_DIR, 0777);
@@ -624,7 +657,10 @@ static void run_capture(int seconds)
         if (!f) cap_fail("could not create the file on the microSD card");
         else setvbuf(f, NULL, _IONBF, 0);
     }
-    if (f) s_cap_on = true;  // the stream is already running, for the decoder
+    if (f) {
+        s_cap_t0 = esp_timer_get_time();
+        s_cap_on = true;  // the stream is already running, for the decoder
+    }
 
     int64_t last_data = esp_timer_get_time();
     while (!s_cap_error[0] && s_cap_bytes < total) {
@@ -658,12 +694,26 @@ static void run_capture(int seconds)
     s_cap_ring.buf = NULL;
     free(bounce);
 
+    // The sentences, timed from the start of the I/Q file.
+    if (!s_cap_error[0] && s_cap_log) {
+        FILE *lf = fopen(SDR_CAPTURE_NMEA_PATH, "w");
+        if (!lf || fwrite(s_cap_log, 1, s_cap_log_len, lf) != s_cap_log_len) cap_fail("writing the NMEA log failed");
+        if (lf) fclose(lf);
+    }
+    taskENTER_CRITICAL(&s_cap_log_mux);
+    char *log = s_cap_log;
+    s_cap_log = NULL;
+    taskEXIT_CRITICAL(&s_cap_log_mux);
+    free(log);
+
     if (s_cap_error[0]) {
         ESP_LOGE(TAG, "capture failed after %.1f MB: %s", s_cap_bytes / 1e6, s_cap_error);
         remove(SDR_CAPTURE_PATH);
+        remove(SDR_CAPTURE_NMEA_PATH);
     } else {
         s_cap_file_bytes = s_cap_bytes;
-        ESP_LOGI(TAG, "capture done: %.1f MB, %.1f MB dropped", s_cap_bytes / 1e6, s_cap_dropped / 1e6);
+        ESP_LOGI(TAG, "capture done: %.1f MB, %.1f MB dropped; %lu sentences logged (%lu didn't fit)", s_cap_bytes / 1e6,
+                 s_cap_dropped / 1e6, (unsigned long)s_cap_log_lines, (unsigned long)s_cap_log_dropped);
     }
 }
 
@@ -786,6 +836,7 @@ out:
 
 static void on_sentence(void *ctx, const char *sentence)
 {
+    sdr_capture_log('S', sentence);
     ais_report_t r;
     ais_result_t res = ais_parse_line(&s_parser, sentence, (uint32_t)(esp_timer_get_time() / 1000), &r);
     if (res == AIS_RESULT_REPORT || res == AIS_RESULT_UNSUPPORTED) rx_stats_count(RX_SDR, rx_sentence_channel(sentence));
@@ -908,6 +959,7 @@ void sdr_get_status(sdr_status_t *out)
     out->cap_total = s_cap_total;
     out->cap_dropped = s_cap_dropped;
     out->cap_file_bytes = s_cap_file_bytes;
+    out->cap_log_lines = s_cap_log_lines;
     snprintf(out->cap_error, sizeof(out->cap_error), "%s", s_cap_error);
     out->cpu_pct = s_cpu_pct;
     out->gain = s_gain_now;

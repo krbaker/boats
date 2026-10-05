@@ -271,6 +271,7 @@ static esp_err_t status_get(httpd_req_t *req)
     cJSON_AddNumberToObject(cj, "dropped", (double)r.cap_dropped);
     cJSON_AddNumberToObject(cj, "file_bytes", (double)r.cap_file_bytes);
     cJSON_AddStringToObject(cj, "error", r.cap_error);
+    cJSON_AddNumberToObject(cj, "log_lines", r.cap_log_lines);
     cJSON_AddNumberToObject(rj, "cpu_pct", r.cpu_pct);
     cJSON_AddNumberToObject(rj, "dropped_bytes", (double)r.dropped_bytes);
     cJSON_AddNumberToObject(rj, "bad_crc", r.demod.bad_crc);
@@ -470,6 +471,28 @@ static esp_err_t sdr_capture_get(httpd_req_t *req)
     return httpd_resp_send_chunk(req, NULL, 0);
 }
 
+// Download the sentences logged during the last capture.
+static esp_err_t sdr_capture_nmea_get(httpd_req_t *req)
+{
+    sdr_status_t r;
+    sdr_get_status(&r);
+    if (r.state == SDR_CAPTURING) return send_error(req, "409 Conflict", "a capture is still being recorded");
+    FILE *f = fopen(SDR_CAPTURE_NMEA_PATH, "r");
+    if (!f) return send_error(req, "404 Not Found", "no NMEA log recorded yet");
+    httpd_resp_set_type(req, "text/plain");
+    httpd_resp_set_hdr(req, "Content-Disposition", "attachment; filename=\"ais_capture.nmea\"");
+    char *buf = malloc(4096);
+    esp_err_t err = buf ? ESP_OK : ESP_ERR_NO_MEM;
+    size_t n;
+    while (buf && (n = fread(buf, 1, 4096, f)) > 0) {
+        if ((err = httpd_resp_send_chunk(req, buf, n)) != ESP_OK) break;
+    }
+    fclose(f);
+    free(buf);
+    if (err != ESP_OK) return err;
+    return httpd_resp_send_chunk(req, NULL, 0);
+}
+
 // In AP mode, send every unknown URL to the config page (captive portal).
 static esp_err_t not_found(httpd_req_t *req, httpd_err_code_t code)
 {
@@ -511,6 +534,7 @@ void web_server_start(void)
         {.uri = "/api/coprocessor", .method = HTTP_POST, .handler = coprocessor_post},
         {.uri = "/api/sdr/capture", .method = HTTP_POST, .handler = sdr_capture_post},
         {.uri = "/api/sdr/capture", .method = HTTP_GET, .handler = sdr_capture_get},
+        {.uri = "/api/sdr/capture.nmea", .method = HTTP_GET, .handler = sdr_capture_nmea_get},
     };
     for (size_t i = 0; i < sizeof(uris) / sizeof(uris[0]); i++) {
         httpd_register_uri_handler(server, &uris[i]);
