@@ -126,6 +126,20 @@ void vessel_db_init(void)
     xTaskCreate(cache_task, "vessel_cache", 4096, NULL, 2, NULL);
 }
 
+bool vessel_db_cache_stats(vc_stats_t *out)
+{
+    if (!cache()) return false;
+    vc_get_stats(cache(), out);
+    return true;
+}
+
+void vessel_db_forget_all(void)
+{
+    if (!cache()) return;
+    vc_clear(cache());
+    ESP_LOGI(TAG, "vessel cache cleared");
+}
+
 void vessel_db_save(void)
 {
     if (!cache()) return;

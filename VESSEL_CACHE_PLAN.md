@@ -89,7 +89,11 @@ One append-only log, `/sdcard/vessels/cache.log`, of fixed 64-byte records:
   - **No card at startup:** the cache runs in RAM only.
   - **Saving first:** the web Restart button, the display firmware update and the Wi-Fi chip update all save the cache before restarting. The Wi-Fi chip update saves before it shuts down the link to the chip, because the card shares that SDMMC host.
   - **Still to do:** the step's on-device checks: a vessel heard again shows its name straight away, and a renamed one keeps its new name after a restart.
-- **Steps 3–4:** not started.
+- **Step 3 built, not yet tested on the display.**
+  - **`/api/status`:** a `vessel_cache` object with `state` (`loading`, `ok`, `no card` or `error`), `vessels`, `capacity`, `file_bytes`, `writes`, `compactions` and `error`.
+  - **Status table:** a "Remembered vessels" row.
+  - **Forget all vessels:** a button under Restart, with a confirmation, calls `POST /api/vessels/forget`. Vessels in the table keep what they've sent themselves.
+- **Step 4:** not started.
 
 ## Decisions
 

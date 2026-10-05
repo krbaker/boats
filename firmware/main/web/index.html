@@ -38,6 +38,10 @@
     <table id="status"><tr><td>Loading…</td><td></td></tr></table>
     <button id="restart_btn" onclick="restartDisplay()">Restart display</button>
     <div class="msg" id="restart_msg"></div>
+    <div class="hint">The display remembers the name, call sign, type and size of every vessel it has heard, on the
+      microSD card, so a vessel it has heard before shows its name as soon as it's back in range.</div>
+    <button id="forget_btn" onclick="forgetVessels()">Forget all vessels</button>
+    <div class="msg" id="forget_msg"></div>
   </section>
 
   <section>
@@ -485,6 +489,24 @@ function fmtTime(t) { return new Date(t * 1000).toLocaleString([], { weekday: "s
 function row(k, v, cls) { return `<tr><td>${k}</td><td class="${cls || ""}">${v}</td></tr>`; }
 function esc(s) { return String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]); }
 
+function cacheStatus(c) {
+  if (c.state === "loading") return "loading…";
+  let t = `${c.vessels.toLocaleString()} of ${c.capacity.toLocaleString()}`;
+  if (c.state === "no card") return t + ", in memory only (no microSD card): forgotten on restart";
+  t += `, ${Math.round(c.file_bytes / 1024).toLocaleString()} KB on the card, ${c.writes.toLocaleString()} writes`;
+  if (c.error) t += ` — ${esc(c.error)}`;
+  return t;
+}
+
+async function forgetVessels() {
+  if (!confirm("Forget every vessel the display remembers? Names come back as each vessel sends them again.")) return;
+  try {
+    await api("/api/vessels/forget", { method: "POST" });
+    setMsg("forget_msg", "Forgotten.", "ok");
+    pollStatus();
+  } catch (e) { setMsg("forget_msg", "Failed: " + e.message, "bad"); }
+}
+
 let lastUptime = Infinity;
 async function pollStatus() {
   try {
@@ -505,6 +527,7 @@ async function pollStatus() {
       (a.last_rx_s >= 0 ? `, data ${ago(a.last_rx_s)}` : ""), a.state === "connected" ? "ok" : a.state === "off" ? "" : "bad");
     html += row("Messages", `${a.reports} decoded, ${a.unsupported} unsupported, ${a.ignored} ignored, ${a.bad_checksum} bad checksum`);
     html += row("Vessels", s.vessels);
+    html += row("Remembered vessels", cacheStatus(s.vessel_cache), s.vessel_cache.state === "error" ? "bad" : s.vessel_cache.state === "no card" ? "warn" : "");
     let tide = esc(t.state);
     if (t.next) tide = `next ${t.next.high ? "high" : "low"} ${fmtTime(t.next.time)}, ${t.next.height_ft.toFixed(1)} ft`;
     if (t.error) tide += ` (${esc(t.error)})`;

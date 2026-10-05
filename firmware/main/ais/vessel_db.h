@@ -8,6 +8,7 @@
 
 #include "ais.h"
 #include "rx_stats.h"
+#include "vessel_cache.h"
 
 #define VESSEL_MAX          500
 #define VESSEL_EXPIRY_S     (10 * 60)
@@ -52,6 +53,13 @@ void vessel_db_source_counts(int *net_only, int *sdr_only, int *both);
 
 // Write any unsaved changes to the vessel cache now. Call before a planned restart.
 void vessel_db_save(void);
+
+// The vessel cache's state. False while it's still loading at startup.
+bool vessel_db_cache_stats(vc_stats_t *out);
+
+// Forget every remembered vessel, on the card too. Vessels in the table keep
+// what they've sent.
+void vessel_db_forget_all(void);
 
 // Increments whenever a vessel is added, updated or expired.
 uint32_t vessel_db_generation(void);

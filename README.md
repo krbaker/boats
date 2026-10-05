@@ -36,8 +36,11 @@ Open `http://<display-ip>/`. The Network screen shows the address. In setup mode
 - **Display firmware**: shows the running version and its build date, and updates the display from an uploaded `firmware/build/ais_display.bin`. The display restarts into the new firmware on trial. If that doesn't keep running for a minute (it crashes or restarts), it goes back to the previous firmware by itself, and the page says so. A failed or interrupted upload changes nothing.
 - **Wi-Fi chip firmware**: shows the ESP32-C6's firmware version, and updates it from an uploaded image (`coprocessor/build/eh_cp_ota_coprocessor_ota.bin`). The display restarts afterwards. A failed update leaves the old firmware running.
 - **RTL-SDR receiver**: see below.
+- **Restart display**, and **Forget all vessels** (see below).
 
-The page also shows live status: Wi-Fi, AIS feed and message counters, vessel count, tide, map, microSD card space and memory. `GET /api/vessels` returns the current vessel table as JSON, including how many messages came from each source.
+The page also shows live status: Wi-Fi, AIS feed and message counters, vessel count, remembered vessels, tide, map, microSD card space and memory.
+
+**Remembered vessels:** the display keeps the name, call sign, type and size of every vessel it has heard (up to 20,000) in `vessels/cache.log` on the microSD card. A vessel heard again shows its name with its first position report, instead of waiting up to 6 minutes for its next static data message. What a vessel sends always replaces what was remembered. Destination isn't remembered, since it changes every voyage. Without a card it's kept in memory only, until the next restart. `GET /api/vessels` returns the current vessel table as JSON, including how many messages came from each source.
 
 ## RTL-SDR receiver
 
