@@ -36,7 +36,7 @@ static time_t wall_now(void)
     return now > 1600000000 ? now : 0; // treat an unset clock as unknown
 }
 
-void vessel_db_update(const ais_report_t *r)
+void vessel_db_update(const ais_report_t *r, rx_source_t src)
 {
     if (r->mmsi == 0) return;
     xSemaphoreTake(s_lock, portMAX_DELAY);
@@ -73,6 +73,7 @@ void vessel_db_update(const ais_report_t *r)
         v->fields = (v->fields & ~dynamic) | (r->fields & dynamic);
     }
     v->fields |= r->fields;
+    if (src < RX_NSRC) v->msgs[src]++;
     v->last_heard_us = esp_timer_get_time();
     v->last_heard_wall = wall_now();
     s_generation++;
@@ -118,6 +119,19 @@ bool vessel_db_get(uint32_t mmsi, vessel_t *out)
 int vessel_db_count(void)
 {
     return s_count;
+}
+
+void vessel_db_source_counts(int *net_only, int *sdr_only, int *both)
+{
+    *net_only = *sdr_only = *both = 0;
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    for (int i = 0; i < s_count; i++) {
+        bool net = s_vessels[i].msgs[RX_NET], sdr = s_vessels[i].msgs[RX_SDR];
+        if (net && sdr) (*both)++;
+        else if (net) (*net_only)++;
+        else if (sdr) (*sdr_only)++;
+    }
+    xSemaphoreGive(s_lock);
 }
 
 uint32_t vessel_db_generation(void)

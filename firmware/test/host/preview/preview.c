@@ -18,6 +18,8 @@
 #include "settings.h"
 #include "tide.h"
 #include "ui.h"
+#include "rx_stats.h"
+#include "sdr_probe.h"
 #include "vessel_db.h"
 #include "wifi_mgr.h"
 
@@ -264,6 +266,32 @@ bool vessel_db_get(uint32_t mmsi, vessel_t *out)
 int vessel_db_count(void) { return FLEET_N; }
 uint32_t vessel_db_generation(void) { return 1; }
 
+void vessel_db_source_counts(int *net_only, int *sdr_only, int *both)
+{
+    *net_only = 9;
+    *sdr_only = 1;
+    *both = 7;
+}
+
+// The RTL-SDR receiver, decoding.
+void sdr_get_status(sdr_status_t *out)
+{
+    memset(out, 0, sizeof(*out));
+    out->state = SDR_READY;
+    strcpy(out->tuner, "R820T (RTL-SDR Blog V3)");
+    out->rate = 288000;
+    out->cpu_pct = 23.4f;
+    out->demod.noise_dbfs[0] = out->demod.noise_dbfs[1] = -38.6f;
+    out->demod.ppm = -2.2f;
+}
+
+const char *sdr_state_str(sdr_state_t st) { return st == SDR_READY ? "receiving" : "?"; }
+
+void rx_stats_get(rx_stats_t *out)
+{
+    *out = (rx_stats_t){.total = {{412, 398}, {61, 57}}, .last_min = {{14, 12}, {3, 4}}};
+}
+
 // Screens we don't preview.
 lv_obj_t *ui_detail_create(void) { return lv_obj_create(NULL); }
 void ui_detail_set_vessel(uint32_t mmsi) {}
@@ -389,6 +417,9 @@ int main(int argc, char **argv)
     tap_edge(180); // vessel count -> Vessels overlay
     snap("vessels");
     lv_tabview_set_active(find_class(scr, &lv_tabview_class), 1, LV_ANIM_OFF);
+    lv_obj_send_event(find_class(scr, &lv_tabview_class), LV_EVENT_VALUE_CHANGED, NULL);
+    snap("receiver");
+    lv_tabview_set_active(find_class(scr, &lv_tabview_class), 2, LV_ANIM_OFF);
     snap("options");
     hide_overlays(scr);
 

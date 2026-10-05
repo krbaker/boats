@@ -1,4 +1,4 @@
-// RTL-SDR bring-up: see sdr_probe.c and RTL_SDR_PLAN.md (steps 1-2).
+// RTL-SDR receiver: see sdr_probe.c and RTL_SDR_PLAN.md.
 
 #pragma once
 
@@ -6,6 +6,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "ais_demod.h"
 #include "map_store.h"
 
 #define SDR_CAPTURE_PATH  MAP_ROOT "/sdr/capture.cu8"
@@ -22,11 +23,16 @@ typedef struct {
     int cap_seconds;
     uint64_t cap_bytes, cap_total, cap_dropped, cap_file_bytes;
     char cap_error[80];
+    // Decoder
+    float cpu_pct;              // time in the demodulator, % of one core
+    uint64_t dropped_bytes;     // samples the decoder fell too far behind to take
+    ais_demod_stats_t demod;
 } sdr_status_t;
 
-// Starts USB host on the USB-A port and tests any RTL2832U dongle plugged in,
-// logging the results. An R820T dongle then stays tuned to the AIS channels,
-// ready to record captures. Only called with CONFIG_AIS_SDR_PROBE.
+// Starts USB host on the USB-A port. An RTL-SDR Blog V3 (R820T) dongle plugged
+// in is tuned to the AIS channels and decoded continuously into the vessel
+// table, and can record I/Q captures; other RTL2832U dongles just get a
+// throughput test. Only called with CONFIG_AIS_SDR_PROBE.
 void sdr_probe_start(void);
 
 const char *sdr_state_str(sdr_state_t st);

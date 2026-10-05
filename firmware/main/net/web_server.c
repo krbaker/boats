@@ -13,6 +13,7 @@
 #include "cp_update.h"
 #include "map_store.h"
 #include "nmea_client.h"
+#include "rx_stats.h"
 #include "sdr_probe.h"
 #include "settings.h"
 #include "tide.h"
@@ -245,6 +246,30 @@ static esp_err_t status_get(httpd_req_t *req)
     cJSON_AddNumberToObject(cj, "dropped", (double)r.cap_dropped);
     cJSON_AddNumberToObject(cj, "file_bytes", (double)r.cap_file_bytes);
     cJSON_AddStringToObject(cj, "error", r.cap_error);
+    cJSON_AddNumberToObject(rj, "cpu_pct", r.cpu_pct);
+    cJSON_AddNumberToObject(rj, "dropped_bytes", (double)r.dropped_bytes);
+    cJSON_AddNumberToObject(rj, "bad_crc", r.demod.bad_crc);
+    cJSON_AddNumberToObject(rj, "noise_dbfs", (r.demod.noise_dbfs[0] + r.demod.noise_dbfs[1]) / 2);
+    cJSON_AddNumberToObject(rj, "ppm", r.demod.ppm);
+
+    // Packets per source and channel, and which source each vessel came from.
+    rx_stats_t rx;
+    rx_stats_get(&rx);
+    cJSON *xj = cJSON_AddObjectToObject(o, "receivers");
+    static const char *const src_names[RX_NSRC] = {"network", "sdr"};
+    for (int i = 0; i < RX_NSRC; i++) {
+        cJSON *sj2 = cJSON_AddObjectToObject(xj, src_names[i]);
+        cJSON_AddNumberToObject(sj2, "a", rx.total[i][0]);
+        cJSON_AddNumberToObject(sj2, "b", rx.total[i][1]);
+        cJSON_AddNumberToObject(sj2, "a_min", rx.last_min[i][0]);
+        cJSON_AddNumberToObject(sj2, "b_min", rx.last_min[i][1]);
+    }
+    int net_only, sdr_only, both;
+    vessel_db_source_counts(&net_only, &sdr_only, &both);
+    cJSON *vj = cJSON_AddObjectToObject(xj, "vessels");
+    cJSON_AddNumberToObject(vj, "network_only", net_only);
+    cJSON_AddNumberToObject(vj, "sdr_only", sdr_only);
+    cJSON_AddNumberToObject(vj, "both", both);
 
     cJSON *sj = cJSON_AddObjectToObject(o, "system");
     cJSON_AddNumberToObject(sj, "uptime_s", now_us / 1000000);
@@ -276,6 +301,8 @@ static esp_err_t vessels_get(httpd_req_t *req)
         if (v->fields & AIS_F_HEADING) cJSON_AddNumberToObject(o, "heading", v->heading);
         cJSON_AddStringToObject(o, "type", ais_ship_type_str(v->ship_type));
         cJSON_AddNumberToObject(o, "age_s", (now - v->last_heard_us) / 1000000);
+        cJSON_AddNumberToObject(o, "msgs_network", v->msgs[RX_NET]);
+        cJSON_AddNumberToObject(o, "msgs_sdr", v->msgs[RX_SDR]);
         cJSON_AddItemToArray(arr, o);
     }
     free(list);

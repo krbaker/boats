@@ -12,6 +12,7 @@
 #include "lwip/netdb.h"
 #include "lwip/sockets.h"
 
+#include "rx_stats.h"
 #include "settings.h"
 #include "vessel_db.h"
 #include "wifi_mgr.h"
@@ -97,9 +98,9 @@ static void handle_line(const char *line)
 {
     ais_report_t report;
     uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
-    if (ais_parse_line(&s_parser, line, now_ms, &report) == AIS_RESULT_REPORT) {
-        vessel_db_update(&report);
-    }
+    ais_result_t res = ais_parse_line(&s_parser, line, now_ms, &report);
+    if (res == AIS_RESULT_REPORT || res == AIS_RESULT_UNSUPPORTED) rx_stats_count(RX_NET, rx_sentence_channel(line));
+    if (res == AIS_RESULT_REPORT) vessel_db_update(&report, RX_NET);
 }
 
 // Read lines until the connection drops or the settings change.

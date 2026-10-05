@@ -60,6 +60,21 @@ TCP feed (nmea_client) ───────────────────
 | 5 | **Performance and soak:** profile CPU per stage, and check map panning stays smooth while decoding. Then a 24 h run on a busy channel. | Under 50% of one core for the demodulator, no UI stutter, and no leaks or resets over 24 h. |
 | 6 | **Re-send what we receive.** First, a TCP NMEA server (port 10110, several clients at once) so OpenCPN or a chartplotter can use the display as its AIS receiver. Second, UDP forwarding of the raw `!AIVDM` sentences to a list of host:port destinations, which is how MarineTraffic, AISHub, VesselFinder and aiscatcher.org take station feeds. By default only what the dongle receives is forwarded, not the TCP feed: sending another station's data on would duplicate it, or loop it straight back to its source. Each output's on/off setting, destinations and sent count are on the web page. | OpenCPN shows the same targets as the display, and an online service lists the station as receiving. |
 
+## Progress
+
+- **Step 1 done.** The dongle enumerates at High Speed and streams 2.4 MS/s with no errors.
+- **Step 2 partly done:** the R820T tuner is ported (`main/sdr/r82xx.c`), and the probe tunes to 162.000 MHz and records I/Q captures to the microSD card from the web page. Still to do: the `components/rtlsdr` driver with a ring buffer, gain/ppm settings, the bias-tee, and the one-hour streaming test.
+- **Step 3 done** (`components/ais_demod`, tests in `test/host/test_ais_demod.c`). It runs two demodulators per sampling phase, FM discriminator and coherent, and merges what they decode.
+  - **Real capture** (60 s, ground-floor antenna): 8 packets, the same 8 as AIS-catcher's most sensitive model ("AIS engine v1 high"). AIS-catcher's default model gets 6.
+  - **Synthetic packets**, SNR in a 10 kHz bandwidth: about 80% decode at 10 dB, 95% at 12 dB, 100% at 14 dB.
+  - **Frequency tracking** locks onto offsets up to ±5 kHz within a few packets.
+  - **Target revised:** the original "every packet at ≥ 10 dB" isn't reached. The tests check ≥ 90% at 12 dB and 100% at 14 dB instead.
+  - **CPU:** 60 s of samples takes 3.7 s on a desktop core. It still needs measuring on the P4 (step 5).
+- **Step 4 in progress.** When the dongle is plugged in, it's tuned and decoded continuously (a decoder task on core 1, fed through a 2 MB PSRAM ring buffer), into the same vessel table as the network feed.
+  - **Comparison:** each vessel records how many messages came from each source. The vessel screen's **Receiver** tab and the web page show packets per channel for both sources (last minute and since boot), and how many vessels each source heard.
+  - **CPU:** the decoder's share of a core is measured live and shown in the same places, along with any samples dropped because it fell behind.
+  - **Still to do:** settings (gain, ppm, bias-tee, turning each source on or off) and unplug/replug testing.
+
 ## Risks
 
 - **USB host on the P4:** compatibility with the RTL2832U's bulk endpoint, and the High-Speed vs Full-Speed question. Step 1 settles this before anything else is built.

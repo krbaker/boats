@@ -1,5 +1,6 @@
 // Vessels overlay (tap the vessel count on the map): a list of all traffic,
-// nearest first, and the map's vessel filter / label options.
+// nearest first, how the two receivers (local RTL-SDR and network feed)
+// compare, and the map's vessel filter / label options.
 
 #include <math.h>
 #include <stdio.h>
@@ -9,6 +10,8 @@
 #include "esp_heap_caps.h"
 
 #include "geo.h"
+#include "rx_stats.h"
+#include "sdr_probe.h"
 #include "settings.h"
 #include "ui.h"
 #include "vessel_db.h"
@@ -19,6 +22,8 @@
 #define COL_NAME_W  250
 #define COL_NUM_W   ((BOX_W - COL_NAME_W) / 2)
 #define POLL_MS     250
+#define RX_POLL_MS  1000
+enum { TAB_LIST, TAB_RX, TAB_OPTIONS };
 
 typedef struct {
     uint32_t mmsi;
@@ -27,6 +32,7 @@ typedef struct {
 } row_t;
 
 static lv_obj_t *s_root, *s_tabs, *s_table, *s_empty;
+static lv_obj_t *s_rx_status, *s_rx_table, *s_rx_vessels;
 static lv_obj_t *s_len_lbl, *s_len_slider, *s_speed_lbl, *s_speed_slider;
 static lv_obj_t *s_unknown_cb, *s_mode_dd, *s_order_dd, *s_name_cb, *s_speed_cb;
 static vessel_t *s_vessels;
@@ -104,8 +110,89 @@ static void table_draw_cb(lv_event_t *e)
 
 static void poll_timer_cb(lv_timer_t *t)
 {
-    if (lv_obj_is_hidden(s_root) || lv_tabview_get_tab_active(s_tabs) != 0) return;
+    if (lv_obj_is_hidden(s_root) || lv_tabview_get_tab_active(s_tabs) != TAB_LIST) return;
     if (vessel_db_generation() != s_generation) refresh_list();
+}
+
+// ---------------------------------------------------------------------------
+// Receivers: local RTL-SDR against the network feed
+// ---------------------------------------------------------------------------
+
+static void refresh_rx(void)
+{
+    sdr_status_t r;
+    sdr_get_status(&r);
+    char buf[256];
+    int n = snprintf(buf, sizeof(buf), "RTL-SDR: %s%s%s", r.tuner, r.tuner[0] ? ", " : "", sdr_state_str(r.state));
+    if (r.state == SDR_READY || r.state == SDR_CAPTURING) {
+        n += snprintf(buf + n, sizeof(buf) - n, "\nDecoder: %.0f%% of one CPU core", r.cpu_pct);
+        if (r.dropped_bytes) n += snprintf(buf + n, sizeof(buf) - n, ", %.1f s of samples dropped", r.dropped_bytes / (2.0 * r.rate));
+        snprintf(buf + n, sizeof(buf) - n, "\nNoise %.1f dBFS, tuning %+.1f ppm", (r.demod.noise_dbfs[0] + r.demod.noise_dbfs[1]) / 2,
+                 r.demod.ppm);
+    }
+    lv_label_set_text(s_rx_status, buf);
+
+    rx_stats_t x;
+    rx_stats_get(&x);
+    for (int src = 0; src < RX_NSRC; src++) {
+        int col = src == RX_SDR ? 1 : 2;
+        lv_table_set_cell_value_fmt(s_rx_table, 1, col, "%lu", (unsigned long)x.last_min[src][0]);
+        lv_table_set_cell_value_fmt(s_rx_table, 2, col, "%lu", (unsigned long)x.last_min[src][1]);
+        lv_table_set_cell_value_fmt(s_rx_table, 3, col, "%lu", (unsigned long)(x.total[src][0] + x.total[src][1]));
+    }
+    int net_only, sdr_only, both;
+    vessel_db_source_counts(&net_only, &sdr_only, &both);
+    lv_table_set_cell_value_fmt(s_rx_table, 4, 1, "%d", sdr_only);
+    lv_table_set_cell_value_fmt(s_rx_table, 4, 2, "%d", net_only);
+    lv_label_set_text_fmt(s_rx_vessels, "Vessels heard by both: %d", both);
+}
+
+static void rx_timer_cb(lv_timer_t *t)
+{
+    if (lv_obj_is_hidden(s_root) || lv_tabview_get_tab_active(s_tabs) != TAB_RX) return;
+    refresh_rx();
+}
+
+static void style_table(lv_obj_t *t)
+{
+    lv_obj_set_style_bg_opa(t, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(t, 0, 0);
+    lv_obj_set_style_bg_opa(t, LV_OPA_TRANSP, LV_PART_ITEMS);
+    lv_obj_set_style_text_color(t, UI_COLOR_TEXT, LV_PART_ITEMS);
+    lv_obj_set_style_border_color(t, UI_COLOR_PANEL, LV_PART_ITEMS);
+    lv_obj_set_style_border_side(t, LV_BORDER_SIDE_BOTTOM, LV_PART_ITEMS);
+    lv_obj_set_style_pad_ver(t, 12, LV_PART_ITEMS);
+    lv_obj_set_style_pad_hor(t, 14, LV_PART_ITEMS);
+    lv_obj_add_event_cb(t, table_draw_cb, LV_EVENT_DRAW_TASK_ADDED, NULL);
+    lv_obj_set_send_draw_task_events(t, true);
+}
+
+static lv_obj_t *text(lv_obj_t *parent, const char *t, lv_color_t color);
+
+static void build_rx(lv_obj_t *tab)
+{
+    lv_obj_set_flex_flow(tab, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(tab, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_hor(tab, 28, 0);
+    lv_obj_set_style_pad_ver(tab, 16, 0);
+    lv_obj_set_style_pad_row(tab, 12, 0);
+
+    s_rx_status = text(tab, "", UI_COLOR_TEXT);
+    lv_obj_set_width(s_rx_status, lv_pct(100));
+    lv_label_set_long_mode(s_rx_status, LV_LABEL_LONG_WRAP);
+
+    s_rx_table = lv_table_create(tab);
+    lv_table_set_column_count(s_rx_table, 3);
+    lv_table_set_column_width(s_rx_table, 0, 210);
+    lv_table_set_column_width(s_rx_table, 1, 130);
+    lv_table_set_column_width(s_rx_table, 2, 130);
+    static const char *const rows[] = {"Packets", "Ch A, last min", "Ch B, last min", "Since boot", "Vessels only here"};
+    for (int i = 0; i < 5; i++) lv_table_set_cell_value(s_rx_table, i, 0, rows[i]);
+    lv_table_set_cell_value(s_rx_table, 0, 1, "SDR");
+    lv_table_set_cell_value(s_rx_table, 0, 2, "Network");
+    style_table(s_rx_table);
+
+    s_rx_vessels = text(tab, "", UI_COLOR_MUTED);
 }
 
 // ---------------------------------------------------------------------------
@@ -253,7 +340,9 @@ static void close_cb(lv_event_t *e)
 
 static void tab_changed_cb(lv_event_t *e)
 {
-    if (lv_tabview_get_tab_active(s_tabs) == 0) refresh_list();
+    uint32_t tab = lv_tabview_get_tab_active(s_tabs);
+    if (tab == TAB_LIST) refresh_list();
+    else if (tab == TAB_RX) refresh_rx();
 }
 
 lv_obj_t *ui_vessels_create(lv_obj_t *parent)
@@ -278,6 +367,7 @@ lv_obj_t *ui_vessels_create(lv_obj_t *parent)
     lv_obj_add_event_cb(s_tabs, tab_changed_cb, LV_EVENT_VALUE_CHANGED, NULL);
 
     lv_obj_t *list_tab = lv_tabview_add_tab(s_tabs, "Vessels");
+    lv_obj_t *rx_tab = lv_tabview_add_tab(s_tabs, "Receiver");
     lv_obj_t *opt_tab = lv_tabview_add_tab(s_tabs, "Options");
     for (uint32_t i = 0; i < lv_obj_get_child_count(bar); i++) {
         lv_obj_set_style_text_color(lv_obj_get_child(bar, i), UI_COLOR_TEXT, 0);
@@ -293,31 +383,24 @@ lv_obj_t *ui_vessels_create(lv_obj_t *parent)
     lv_table_set_cell_value(s_table, 0, 0, "Name / MMSI");
     lv_table_set_cell_value(s_table, 0, 1, "Distance");
     lv_table_set_cell_value(s_table, 0, 2, "Speed");
-    lv_obj_set_style_bg_opa(s_table, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(s_table, 0, 0);
-    lv_obj_set_style_bg_opa(s_table, LV_OPA_TRANSP, LV_PART_ITEMS);
-    lv_obj_set_style_text_color(s_table, UI_COLOR_TEXT, LV_PART_ITEMS);
-    lv_obj_set_style_border_color(s_table, UI_COLOR_PANEL, LV_PART_ITEMS);
-    lv_obj_set_style_border_side(s_table, LV_BORDER_SIDE_BOTTOM, LV_PART_ITEMS);
-    lv_obj_set_style_pad_ver(s_table, 12, LV_PART_ITEMS);
-    lv_obj_set_style_pad_hor(s_table, 14, LV_PART_ITEMS);
+    style_table(s_table);
     lv_obj_add_event_cb(s_table, table_cb, LV_EVENT_VALUE_CHANGED, NULL);
-    lv_obj_add_event_cb(s_table, table_draw_cb, LV_EVENT_DRAW_TASK_ADDED, NULL);
-    lv_obj_set_send_draw_task_events(s_table, true);
 
     s_empty = text(list_tab, "No vessels heard yet", UI_COLOR_MUTED);
     lv_obj_center(s_empty);
 
+    build_rx(rx_tab);
     build_options(opt_tab);
 
     lv_timer_create(poll_timer_cb, POLL_MS, NULL);
+    lv_timer_create(rx_timer_cb, RX_POLL_MS, NULL);
     return s_root;
 }
 
 void ui_vessels_open(void)
 {
     load_options();
-    lv_tabview_set_active(s_tabs, 0, LV_ANIM_OFF);
+    lv_tabview_set_active(s_tabs, TAB_LIST, LV_ANIM_OFF);
     refresh_list();
     lv_obj_scroll_to_y(s_table, 0, LV_ANIM_OFF);
     lv_obj_set_hidden(s_root, false);

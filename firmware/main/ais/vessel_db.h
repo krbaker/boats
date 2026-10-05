@@ -7,6 +7,7 @@
 #include <time.h>
 
 #include "ais.h"
+#include "rx_stats.h"
 
 #define VESSEL_MAX          500
 #define VESSEL_EXPIRY_S     (10 * 60)
@@ -27,10 +28,11 @@ typedef struct {
     char destination[21];
     int64_t last_heard_us;  // esp_timer_get_time() of the last message
     time_t last_heard_wall; // wall clock of the last message (0 if clock not set)
+    uint32_t msgs[RX_NSRC]; // messages from each source (network, SDR)
 } vessel_t;
 
 void vessel_db_init(void);
-void vessel_db_update(const ais_report_t *r);
+void vessel_db_update(const ais_report_t *r, rx_source_t src);
 void vessel_db_expire(void);
 
 // Copy all vessels into out (up to max). Returns the number copied.
@@ -40,6 +42,10 @@ int vessel_db_snapshot(vessel_t *out, int max);
 bool vessel_db_get(uint32_t mmsi, vessel_t *out);
 
 int vessel_db_count(void);
+
+// How many vessels have been heard only on the network feed, only by the
+// local SDR, and by both.
+void vessel_db_source_counts(int *net_only, int *sdr_only, int *both);
 
 // Increments whenever a vessel is added, updated or expired.
 uint32_t vessel_db_generation(void);

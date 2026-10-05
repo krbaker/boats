@@ -31,8 +31,11 @@
 #include "freertos/task.h"
 #include "usb/usb_host.h"
 
+#include "ais_demod.h"
 #include "map_store.h"
 #include "r82xx.h"
+#include "rx_stats.h"
+#include "vessel_db.h"
 
 static const char *TAG = "sdr_probe";
 
@@ -43,13 +46,15 @@ static const char *TAG = "sdr_probe";
 #define BULK_XFERS          4
 #define CTRL_TIMEOUT_MS     300
 #define RUN_MS              10000
-#define AIS_RUN_MS          20000
-#define AIS_CENTER_HZ       162000000   // channel A at -25 kHz, B at +25 kHz
-#define AIS_RATE            288000
+#define AIS_CENTER_HZ       AIS_DEMOD_CENTER_HZ  // channel A at -25 kHz, B at +25 kHz
+#define AIS_RATE            AIS_DEMOD_RATE
 #define AIS_GAIN_TENTH_DB   402
 #define CAP_RING            (4 * 1024 * 1024)  // PSRAM: ~7 s of slack if the card stalls
 #define CAP_CHUNK           (32 * 1024)        // written through an internal-RAM bounce buffer
 #define CAP_DIR             MAP_ROOT "/sdr"
+#define DEC_RING            (2 * 1024 * 1024)  // PSRAM: ~3.6 s of samples
+#define DEC_CHUNK           (16 * 1024)
+#define CPU_PERIOD_US       2000000
 
 // librtlsdr register blocks
 enum { DEMODB = 0, USBB = 1, SYSB = 2, IICB = 6 };
@@ -91,10 +96,25 @@ static volatile int s_cap_seconds;
 static volatile uint64_t s_cap_bytes, s_cap_total, s_cap_dropped, s_cap_file_bytes;
 static char s_cap_error[80];
 
-// Capture ring: the transfer callback fills it, the probe task drains it to the card.
-static uint8_t *s_ring;
-static volatile uint32_t s_ring_head, s_ring_tail;
+typedef struct {
+    uint8_t *buf;
+    uint32_t size;
+    volatile uint32_t head, tail;   // bytes written / read, ever (wrapping)
+    volatile uint64_t dropped;
+} ring_t;
+
+// Capture: the transfer callback fills the ring, the probe task drains it to the card.
+static ring_t s_cap_ring;
 static volatile bool s_cap_on;
+
+// Decoding: the transfer callback fills the ring, the decoder task drains it
+// through the demodulator into the vessel table.
+static ring_t s_dec_ring;
+static volatile bool s_dec_on, s_dec_reset;
+static TaskHandle_t s_dec_task;
+static ais_demod_t *s_demod;
+static ais_parser_t s_parser;
+static volatile float s_cpu_pct;
 
 // ---------------------------------------------------------------------------
 // USB plumbing
@@ -298,132 +318,29 @@ static bool tune_r820t(uint32_t freq, uint32_t rate, int gain_tenth_db)
 }
 
 // ---------------------------------------------------------------------------
-// AIS channel power: no demodulator yet, just the power in a 12 kHz slice at
-// each channel and at a quiet reference frequency, in 2 ms windows. An AIS
-// packet is a 26.7 ms burst, so it shows as a run of windows well above the
-// channel's noise floor.
-// ---------------------------------------------------------------------------
-
-#define LUT_N     288   // one cycle of 1 kHz at 288 kS/s
-#define BOX       24    // boxcar low-pass: first null at 12 kHz
-#define WIN_BOXES 24    // boxcar outputs per 2 ms window
-#define WIN_RING  1024  // windows kept (2 s worth, plus slack)
-#define BURST_DB  10.0f // a window this far above the floor counts as signal
-#define BURST_MIN 4     // windows in a row (8 ms) to count as a burst
-
-enum { CH_A, CH_B, CH_REF, NCH };
-static const int k_ch_khz[NCH] = {-25, 25, 75};
-static const char *const k_ch_name[NCH] = {"A 161.975", "B 162.025", "ref +75k"};
-
-static bool s_ais_on;
-static float s_cos[LUT_N], s_sin[LUT_N];
-static uint16_t s_idx[NCH], s_step[NCH];
-static float s_acc_i[NCH], s_acc_q[NCH], s_win_sum[NCH];
-static int s_box_n, s_win_n;
-static float s_win[NCH][WIN_RING];
-static volatile uint32_t s_wcount;
-static volatile uint32_t s_clipped;
-
-static void ais_reset(void)
-{
-    for (int i = 0; i < LUT_N; i++) {
-        s_cos[i] = cosf(2 * (float)M_PI * i / LUT_N);
-        s_sin[i] = sinf(2 * (float)M_PI * i / LUT_N);
-    }
-    for (int c = 0; c < NCH; c++) {
-        s_step[c] = ((-k_ch_khz[c]) % LUT_N + LUT_N) % LUT_N;  // shifts the channel down to 0 Hz
-        s_idx[c] = 0;
-        s_acc_i[c] = s_acc_q[c] = s_win_sum[c] = 0;
-    }
-    s_box_n = s_win_n = 0;
-    s_wcount = s_clipped = 0;
-}
-
-static void ais_measure(const uint8_t *d, int n)
-{
-    const float scale = 1.0f / ((float)BOX * BOX * 127.5f * 127.5f);
-    for (int i = 0; i + 1 < n; i += 2) {
-        if (d[i] == 0 || d[i] == 255 || d[i + 1] == 0 || d[i + 1] == 255) s_clipped++;
-        float x = d[i] - 127.5f, y = d[i + 1] - 127.5f;
-        for (int c = 0; c < NCH; c++) {
-            float co = s_cos[s_idx[c]], si = s_sin[s_idx[c]];
-            s_acc_i[c] += x * co - y * si;
-            s_acc_q[c] += x * si + y * co;
-            s_idx[c] += s_step[c];
-            if (s_idx[c] >= LUT_N) s_idx[c] -= LUT_N;
-        }
-        if (++s_box_n < BOX) continue;
-        s_box_n = 0;
-        for (int c = 0; c < NCH; c++) {
-            s_win_sum[c] += (s_acc_i[c] * s_acc_i[c] + s_acc_q[c] * s_acc_q[c]) * scale;
-            s_acc_i[c] = s_acc_q[c] = 0;
-        }
-        if (++s_win_n < WIN_BOXES) continue;
-        s_win_n = 0;
-        uint32_t w = s_wcount % WIN_RING;
-        for (int c = 0; c < NCH; c++) {
-            s_win[c][w] = s_win_sum[c] / WIN_BOXES;
-            s_win_sum[c] = 0;
-        }
-        s_wcount++;
-    }
-}
-
-static int cmp_float(const void *a, const void *b)
-{
-    float x = *(const float *)a, y = *(const float *)b;
-    return x < y ? -1 : x > y;
-}
-
-static float db(float p)
-{
-    return 10 * log10f(p > 1e-12f ? p : 1e-12f);
-}
-
-// Logs each channel's floor, peak and bursts for the windows since last time.
-static void ais_report(uint32_t *from, uint32_t total_bursts[NCH])
-{
-    static float tmp[WIN_RING], sorted[WIN_RING];
-    uint32_t end = s_wcount, start = *from;
-    if (end - start > WIN_RING) start = end - WIN_RING;
-    *from = end;
-    int n = end - start;
-    if (n < 10) return;
-    for (int c = 0; c < NCH; c++) {
-        for (int j = 0; j < n; j++) tmp[j] = s_win[c][(start + j) % WIN_RING];
-        // Floor from the median of a sorted copy; bursts from the time order.
-        memcpy(sorted, tmp, n * sizeof(float));
-        qsort(sorted, n, sizeof(float), cmp_float);
-        float floor_p = sorted[n / 2], peak_p = sorted[n - 1];
-        float thresh = floor_p * powf(10, BURST_DB / 10);
-        int bursts = 0, run = 0;
-        for (int j = 0; j < n; j++) {
-            if (tmp[j] > thresh) {
-                if (++run == BURST_MIN) bursts++;
-            } else {
-                run = 0;
-            }
-        }
-        total_bursts[c] += bursts;
-        ESP_LOGI(TAG, "    %-9s floor %6.1f dBFS, peak %+5.1f dB, bursts %d (total %lu)", k_ch_name[c], db(floor_p),
-                 db(peak_p) - db(floor_p), bursts, (unsigned long)total_bursts[c]);
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Streaming test
 // ---------------------------------------------------------------------------
 
-static void cap_push(const uint8_t *d, uint32_t n)
+// Single-producer (the transfer callback), single-consumer byte ring. A
+// buffer that doesn't fit is dropped whole and counted.
+static void ring_push(ring_t *r, const uint8_t *d, uint32_t n)
 {
-    if (n > CAP_RING - (s_ring_head - s_ring_tail)) {
-        s_cap_dropped += n;  // the card fell more than CAP_RING behind
+    if (n > r->size - (r->head - r->tail)) {
+        r->dropped += n;
         return;
     }
-    uint32_t at = s_ring_head % CAP_RING, first = MIN(n, CAP_RING - at);
-    memcpy(s_ring + at, d, first);
-    memcpy(s_ring, d + first, n - first);
-    s_ring_head += n;
+    uint32_t at = r->head % r->size, first = MIN(n, r->size - at);
+    memcpy(r->buf + at, d, first);
+    memcpy(r->buf, d + first, n - first);
+    r->head += n;
+}
+
+// The longest contiguous run of unread bytes, up to max.
+static uint32_t ring_peek(ring_t *r, const uint8_t **p, uint32_t max)
+{
+    uint32_t at = r->tail % r->size;
+    *p = r->buf + at;
+    return MIN(MIN(r->head - r->tail, r->size - at), max);
 }
 
 static void bulk_cb(usb_transfer_t *t)
@@ -445,16 +362,17 @@ static void bulk_cb(usb_transfer_t *t)
         s_hist_max = hi;
         s_sum += sum;
         s_count += n;
-        if (s_ais_on) ais_measure(t->data_buffer, t->actual_num_bytes);
-        if (s_cap_on) cap_push(t->data_buffer, t->actual_num_bytes);
+        if (s_dec_on) {
+            ring_push(&s_dec_ring, t->data_buffer, t->actual_num_bytes);
+            xTaskNotifyGive(s_dec_task);
+        }
+        if (s_cap_on) ring_push(&s_cap_ring, t->data_buffer, t->actual_num_bytes);
     } else {
         s_xfer_errors++;
     }
     if (s_streaming && usb_host_transfer_submit(t) != ESP_OK) s_xfer_errors++;
 }
 
-// Streams for run_ms. With ais set, also measures the AIS channels (the tuner
-// must already be on AIS_CENTER_HZ and rate must be AIS_RATE).
 // Starts the bulk sample stream. Returns the exact rate, or 0 if it failed.
 static uint32_t stream_start(uint32_t rate)
 {
@@ -496,11 +414,9 @@ static void stream_stop(void)
     }
 }
 
-static void stream_test(uint32_t rate, int run_ms, bool ais)
+// Streams for run_ms and reports the throughput.
+static void stream_test(uint32_t rate, int run_ms)
 {
-    if (ais) ais_reset();
-    s_ais_on = ais;
-    uint32_t ais_from = 0, ais_bursts[NCH] = {0};
     uint32_t real = stream_start(rate);
     if (!real) real = rate;
 
@@ -512,16 +428,10 @@ static void stream_test(uint32_t rate, int run_ms, bool ais)
         ESP_LOGI(TAG, "  %u S/s: %.2f MB/s this period (need %.2f), errors %lu, short %lu", (unsigned)real,
                  (b - last) / 2.0 / 1e6, real * 2 / 1e6, (unsigned long)s_xfer_errors, (unsigned long)s_short_xfers);
         last = b;
-        if (ais) {
-            ESP_LOGI(TAG, "    ADC %lu..%lu, clipped %.2f%%", (unsigned long)s_hist_min, (unsigned long)s_hist_max,
-                     100.0 * s_clipped / ((double)real * 2 * s));
-            ais_report(&ais_from, ais_bursts);
-        }
     }
     // Rate over the streaming time only, not the drain below.
     uint64_t bytes = s_bytes;
     double secs = (esp_timer_get_time() - t0) / 1e6;
-    s_ais_on = false;
     stream_stop();
     double got = bytes / secs, need = real * 2.0;
     ESP_LOGI(TAG, "RESULT %u S/s: %.2f MB/s of %.2f MB/s needed (%.0f%%), %lu errors, samples %lu..%lu mean %.1f",
@@ -549,10 +459,10 @@ static void run_capture(int seconds)
 
     // The SD driver needs DMA-capable memory, so the ring (PSRAM) is copied
     // through a small internal buffer.
-    s_ring = heap_caps_malloc(CAP_RING, MALLOC_CAP_SPIRAM);
+    s_cap_ring = (ring_t){.buf = heap_caps_malloc(CAP_RING, MALLOC_CAP_SPIRAM), .size = CAP_RING};
     uint8_t *bounce = heap_caps_aligned_alloc(64, CAP_CHUNK, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
     FILE *f = NULL;
-    if (!s_ring || !bounce) {
+    if (!s_cap_ring.buf || !bounce) {
         cap_fail("out of memory");
     } else {
         mkdir(CAP_DIR, 0777);
@@ -560,11 +470,7 @@ static void run_capture(int seconds)
         if (!f) cap_fail("could not create the file on the microSD card");
         else setvbuf(f, NULL, _IONBF, 0);
     }
-    if (f) {
-        s_ring_head = s_ring_tail = 0;
-        s_cap_on = true;
-        if (!stream_start(AIS_RATE)) cap_fail("could not start the sample stream");
-    }
+    if (f) s_cap_on = true;  // the stream is already running, for the decoder
 
     int64_t last_data = esp_timer_get_time();
     while (!s_cap_error[0] && s_cap_bytes < total) {
@@ -572,29 +478,30 @@ static void run_capture(int seconds)
             cap_fail("the dongle was unplugged");
             break;
         }
-        uint32_t avail = s_ring_head - s_ring_tail;
-        if (!avail) {
+        const uint8_t *p;
+        uint32_t n = ring_peek(&s_cap_ring, &p, CAP_CHUNK);
+        if (!n) {
             if (esp_timer_get_time() - last_data > 2000000) cap_fail("no samples from the dongle");
             else vTaskDelay(pdMS_TO_TICKS(10));
             continue;
         }
         last_data = esp_timer_get_time();
-        uint32_t at = s_ring_tail % CAP_RING;
-        uint32_t n = MIN(MIN(avail, CAP_RING - at), CAP_CHUNK);
         n = MIN((uint64_t)n, total - s_cap_bytes);
-        memcpy(bounce, s_ring + at, n);
-        s_ring_tail += n;
+        memcpy(bounce, p, n);
+        s_cap_ring.tail += n;
         if (fwrite(bounce, 1, n, f) != n) {
             cap_fail("writing to the microSD card failed (is it full?)");
             break;
         }
         s_cap_bytes += n;
+        s_cap_dropped = s_cap_ring.dropped;
     }
     s_cap_on = false;
-    stream_stop();
+    vTaskDelay(pdMS_TO_TICKS(50));  // let a callback that's mid-push finish
+    s_cap_dropped = s_cap_ring.dropped;
     if (f && fclose(f) != 0) cap_fail("closing the file on the microSD card failed");
-    free(s_ring);
-    s_ring = NULL;
+    free(s_cap_ring.buf);
+    s_cap_ring.buf = NULL;
     free(bounce);
 
     if (s_cap_error[0]) {
@@ -649,14 +556,15 @@ static void probe_device(uint8_t addr)
 
     ESP_LOGI(TAG, "internal RAM free %u, PSRAM free %u", (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
-    // Throughput is settled (step 1), so with an R820T, listen on the AIS
-    // channels instead; other tuners just get the throughput test.
+    // With an R820T, decode AIS; other tuners just get the throughput test.
     if (r820 == R82XX_CHECK_VAL && tune_r820t(AIS_CENTER_HZ, AIS_RATE, AIS_GAIN_TENTH_DB)) {
         snprintf(s_tuner, sizeof(s_tuner), "R820T (RTL-SDR Blog V3)");
-        stream_test(AIS_RATE, AIS_RUN_MS, true);
-        // Stay tuned, ready to record captures for the web page.
+        // Stream continuously into the decoder; captures tap the same stream.
+        s_dec_reset = true;
+        s_dec_on = true;
+        if (!stream_start(AIS_RATE)) ESP_LOGE(TAG, "could not start the sample stream");
         s_state = SDR_READY;
-        ESP_LOGI(TAG, "ready: record an I/Q capture from the web page");
+        ESP_LOGI(TAG, "receiving: decoding AIS on 161.975 and 162.025 MHz");
         while (!s_gone) {
             ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
             int seconds = s_cap_req;
@@ -667,9 +575,11 @@ static void probe_device(uint8_t addr)
                 s_state = SDR_READY;
             }
         }
+        s_dec_on = false;
+        stream_stop();
     } else {
         snprintf(s_tuner, sizeof(s_tuner), r828 == R82XX_CHECK_VAL ? "R828D (not supported yet)" : "unknown");
-        stream_test(AIS_RATE, RUN_MS, false);
+        stream_test(AIS_RATE, RUN_MS);
         ESP_LOGI(TAG, "test finished; unplug and replug the dongle to run it again");
     }
     usb_host_interface_release(s_client, s_dev, 0);
@@ -678,6 +588,54 @@ out:
     s_dev = NULL;
     s_tuner[0] = '\0';
     s_state = SDR_NONE;
+}
+
+// ---------------------------------------------------------------------------
+// Decoder task
+// ---------------------------------------------------------------------------
+
+static void on_sentence(void *ctx, const char *sentence)
+{
+    ais_report_t r;
+    ais_result_t res = ais_parse_line(&s_parser, sentence, (uint32_t)(esp_timer_get_time() / 1000), &r);
+    if (res == AIS_RESULT_REPORT || res == AIS_RESULT_UNSUPPORTED) rx_stats_count(RX_SDR, rx_sentence_channel(sentence));
+    if (res == AIS_RESULT_REPORT) vessel_db_update(&r, RX_SDR);
+}
+
+static void decode_task(void *arg)
+{
+    int64_t period_start = esp_timer_get_time(), busy = 0, last_expire = 0;
+    for (;;) {
+        if (s_dec_reset) {
+            s_dec_reset = false;
+            ais_demod_init(s_demod, on_sentence, NULL);
+            ais_parser_init(&s_parser);
+            s_dec_ring.tail = s_dec_ring.head;
+            s_dec_ring.dropped = 0;
+        }
+        const uint8_t *p;
+        uint32_t n = ring_peek(&s_dec_ring, &p, DEC_CHUNK);
+        if (n) {
+            int64_t t0 = esp_timer_get_time();
+            ais_demod_feed(s_demod, p, n);
+            busy += esp_timer_get_time() - t0;
+            s_dec_ring.tail += n;
+        } else {
+            ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(200));
+        }
+
+        int64_t now = esp_timer_get_time();
+        if (now - period_start >= CPU_PERIOD_US) {
+            // Time spent in the demodulator, as a share of one core.
+            s_cpu_pct = s_dec_on ? 100.0f * busy / (now - period_start) : 0;
+            period_start = now;
+            busy = 0;
+        }
+        if (now - last_expire > 1000000) {
+            vessel_db_expire();  // the network client does this too, but may not be running
+            last_expire = now;
+        }
+    }
 }
 
 static void probe_task(void *arg)
@@ -724,12 +682,21 @@ static void probe_task(void *arg)
 
 void sdr_probe_start(void)
 {
+    // The demodulator's state is touched for every sample: keep it in internal RAM.
+    s_demod = heap_caps_malloc(ais_demod_size(), MALLOC_CAP_INTERNAL);
+    s_dec_ring = (ring_t){.buf = heap_caps_malloc(DEC_RING, MALLOC_CAP_SPIRAM), .size = DEC_RING};
+    if (!s_demod || !s_dec_ring.buf) {
+        ESP_LOGE(TAG, "out of memory for the AIS decoder");
+        return;
+    }
+    ais_demod_init(s_demod, on_sentence, NULL);
+    xTaskCreatePinnedToCore(decode_task, "sdr_decode", 6144, NULL, 3, &s_dec_task, 1);
     xTaskCreatePinnedToCore(probe_task, "sdr_probe", 8192, NULL, 4, &s_probe_task, 1);
 }
 
 const char *sdr_state_str(sdr_state_t st)
 {
-    static const char *const names[] = {"off", "no dongle", "testing", "ready", "capturing"};
+    static const char *const names[] = {"off", "no dongle", "starting", "receiving", "recording"};
     return st < sizeof(names) / sizeof(names[0]) ? names[st] : "?";
 }
 
@@ -746,6 +713,9 @@ void sdr_get_status(sdr_status_t *out)
     out->cap_dropped = s_cap_dropped;
     out->cap_file_bytes = s_cap_file_bytes;
     snprintf(out->cap_error, sizeof(out->cap_error), "%s", s_cap_error);
+    out->cpu_pct = s_cpu_pct;
+    out->dropped_bytes = s_dec_ring.dropped;
+    if (s_demod) ais_demod_get_stats(s_demod, &out->demod);
 }
 
 bool sdr_capture_start(int seconds, char *err, size_t errlen)
@@ -756,7 +726,7 @@ bool sdr_capture_start(int seconds, char *err, size_t errlen)
     }
     if (s_state != SDR_READY || s_cap_req) {
         snprintf(err, errlen, "%s", s_state == SDR_CAPTURING ? "a capture is already running"
-                                    : s_state == SDR_TESTING ? "the dongle is still being tested; try again in a moment"
+                                    : s_state == SDR_TESTING ? "the dongle is still starting; try again in a moment"
                                                               : "no RTL-SDR dongle ready");
         return false;
     }
