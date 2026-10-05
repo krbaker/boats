@@ -4,7 +4,7 @@ A standalone display for local AIS traffic. It runs on the Waveshare ESP32-P4-WI
 
 ```
 firmware/        ESP-IDF project (C, LVGL 9) for the display
-enclosure/       OpenSCAD case (front bezel + back lid) and ready-to-print STLs
+enclosure/       OpenSCAD desk stand (and a full case), with ready-to-print STLs
 mapbuilder/      Python tool that renders NOAA ENC charts into a map set for the display
 tools/ais_sim.py AIS test server (simulated traffic or replay of a capture)
 ```
@@ -100,8 +100,8 @@ To see the screens without the hardware, the host preview runs the real UI code 
 firmware/test/host/preview/build.sh mapbuilder/seattle     # PNGs in firmware/test/host/preview/out/
 ```
 
-## Case
+## Desk stand
 
-`enclosure/display_case.scad` is a two-part printed case: a front bezel and wall that the display drops into from behind, and a back lid that clamps it in place with three M3 × 10 countersunk screws through lugs on the outside. The USB-C cable leaves through a notch in the top of the wall, and the lid has keyhole slots for hanging the case on two screws 60 mm apart. Take the lid off to reach the microSD card.
+`enclosure/desk_stand.scad` (`desk_stand.stl`) is a one-piece stand that screws into the four M4 threaded holes on the back of the display (a centred 75 × 75 mm square, the VESA 75 pattern): an X-shaped bracket on four posts, a single leg and a 110 × 95 mm base. Nothing wraps around the screen. The display leans back 15° with its bottom edge about 20 mm above the desk, so the USB-C cable can bend down; it then runs in a groove in the base and out of the back. Print it base down with no supports, and fix it with four M4 × 16 mm screws, which bite about 4 mm into the display. Check how deep the threaded holes are first, so the screws can't bottom out against the display; adjust `thread_engage` at the top of the file if needed.
 
-Print `display_case_shell.stl` front face down and `display_case_lid.stl` outside face down, with no supports. The STLs use the defaults; open the `.scad` file in OpenSCAD to change the fit clearance, which USB-C port(s) get a notch, the keyholes or the vents, and export again.
+`enclosure/display_case.scad` is an alternative full case (bezel, back lid and a cradle stand) that wraps around the display.
