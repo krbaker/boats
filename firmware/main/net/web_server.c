@@ -13,6 +13,7 @@
 #include "cp_update.h"
 #include "map_store.h"
 #include "nmea_client.h"
+#include "sdr_probe.h"
 #include "settings.h"
 #include "tide.h"
 #include "vessel_db.h"
@@ -230,6 +231,21 @@ static esp_err_t status_get(httpd_req_t *req)
     cJSON_AddNumberToObject(mj, "storage_free", (double)free_bytes);
     cJSON_AddNumberToObject(mj, "storage_total", (double)total);
 
+    sdr_status_t r;
+    sdr_get_status(&r);
+    cJSON *rj = cJSON_AddObjectToObject(o, "sdr");
+    cJSON_AddStringToObject(rj, "state", sdr_state_str(r.state));
+    cJSON_AddStringToObject(rj, "tuner", r.tuner);
+    cJSON_AddNumberToObject(rj, "center_hz", r.center_hz);
+    cJSON_AddNumberToObject(rj, "rate", r.rate);
+    cJSON *cj = cJSON_AddObjectToObject(rj, "capture");
+    cJSON_AddNumberToObject(cj, "seconds", r.cap_seconds);
+    cJSON_AddNumberToObject(cj, "bytes", (double)r.cap_bytes);
+    cJSON_AddNumberToObject(cj, "total", (double)r.cap_total);
+    cJSON_AddNumberToObject(cj, "dropped", (double)r.cap_dropped);
+    cJSON_AddNumberToObject(cj, "file_bytes", (double)r.cap_file_bytes);
+    cJSON_AddStringToObject(cj, "error", r.cap_error);
+
     cJSON *sj = cJSON_AddObjectToObject(o, "system");
     cJSON_AddNumberToObject(sj, "uptime_s", now_us / 1000000);
     cJSON_AddNumberToObject(sj, "time", clock_is_set() ? (double)time(NULL) : 0);
@@ -354,6 +370,48 @@ static esp_err_t coprocessor_post(httpd_req_t *req)
     return httpd_resp_sendstr(req, "{\"ok\":true,\"message\":\"Wi-Fi chip updated; the display is restarting\"}");
 }
 
+static esp_err_t sdr_capture_post(httpd_req_t *req)
+{
+    cJSON *root = read_json(req);
+    cJSON *v = cJSON_GetObjectItem(root, "seconds");
+    int seconds = cJSON_IsNumber(v) ? v->valueint : 0;
+    cJSON_Delete(root);
+    char err[96];
+    if (!sdr_capture_start(seconds, err, sizeof(err))) return send_error(req, "400 Bad Request", err);
+    httpd_resp_set_status(req, "202 Accepted");
+    return httpd_resp_sendstr(req, "{}");
+}
+
+// Download the last I/Q capture (raw unsigned 8-bit I/Q, as rtl_sdr writes).
+static esp_err_t sdr_capture_get(httpd_req_t *req)
+{
+    sdr_status_t r;
+    sdr_get_status(&r);
+    if (r.state == SDR_CAPTURING) return send_error(req, "409 Conflict", "a capture is still being recorded");
+    FILE *f = fopen(SDR_CAPTURE_PATH, "rb");
+    if (!f) return send_error(req, "404 Not Found", "no capture recorded yet");
+
+    char disp[96];
+    snprintf(disp, sizeof(disp), "attachment; filename=\"ais_%lu_%lusps.cu8\"", (unsigned long)r.center_hz,
+             (unsigned long)r.rate);
+    httpd_resp_set_type(req, "application/octet-stream");
+    httpd_resp_set_hdr(req, "Content-Disposition", disp);
+    char *buf = heap_caps_malloc(UPLOAD_CHUNK, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+    if (!buf) {
+        fclose(f);
+        return send_error(req, "500 Internal Server Error", "out of memory");
+    }
+    esp_err_t err = ESP_OK;
+    size_t n;
+    while ((n = fread(buf, 1, UPLOAD_CHUNK, f)) > 0) {
+        if ((err = httpd_resp_send_chunk(req, buf, n)) != ESP_OK) break;
+    }
+    fclose(f);
+    free(buf);
+    if (err != ESP_OK) return err; // browser went away
+    return httpd_resp_send_chunk(req, NULL, 0);
+}
+
 // In AP mode, send every unknown URL to the config page (captive portal).
 static esp_err_t not_found(httpd_req_t *req, httpd_err_code_t code)
 {
@@ -393,6 +451,8 @@ void web_server_start(void)
         {.uri = "/api/vessels", .method = HTTP_GET, .handler = vessels_get},
         {.uri = "/api/map", .method = HTTP_POST, .handler = map_post},
         {.uri = "/api/coprocessor", .method = HTTP_POST, .handler = coprocessor_post},
+        {.uri = "/api/sdr/capture", .method = HTTP_POST, .handler = sdr_capture_post},
+        {.uri = "/api/sdr/capture", .method = HTTP_GET, .handler = sdr_capture_get},
     };
     for (size_t i = 0; i < sizeof(uris) / sizeof(uris[0]); i++) {
         httpd_register_uri_handler(server, &uris[i]);

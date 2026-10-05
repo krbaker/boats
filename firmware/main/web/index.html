@@ -104,6 +104,20 @@
     <progress id="cp_progress" max="1" value="0" hidden></progress>
     <div class="msg" id="cp_msg"></div>
   </section>
+
+  <section>
+    <h2>RTL-SDR receiver</h2>
+    <table><tr><td>Dongle</td><td id="sdr_state">…</td></tr></table>
+    <div class="hint">Records the raw signal from the dongle on the USB-A port to the microSD card, for testing the
+      AIS decoder on a PC: unsigned 8-bit I/Q (the same as <code>rtl_sdr</code>), centred on 162.000 MHz at
+      288 kS/s. One minute is about 35 MB.</div>
+    <label for="sdr_seconds">Length (seconds)</label>
+    <input id="sdr_seconds" type="number" min="1" max="600" value="60" style="max-width:140px">
+    <button id="sdr_btn" onclick="startCapture()" disabled>Record</button>
+    <progress id="sdr_progress" max="1" value="0" hidden></progress>
+    <div class="msg" id="sdr_msg"></div>
+    <div id="sdr_dl" hidden><a href="/api/sdr/capture" download>Download the capture</a> <span class="hint" id="sdr_dl_size"></span></div>
+  </section>
 </main>
 
 <script>
@@ -270,6 +284,39 @@ function uploadCoprocessor() {
   xhr.send(f);
 }
 
+async function startCapture() {
+  const seconds = parseInt($("sdr_seconds").value, 10);
+  try {
+    await api("/api/sdr/capture", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ seconds }) });
+    $("sdr_btn").disabled = true;
+    setMsg("sdr_msg", "Recording…", "warn");
+  } catch (e) { setMsg("sdr_msg", e.message, "bad"); }
+}
+
+let sdrWasCapturing = false;
+function showSdr(r) {
+  if (!r) return;
+  const mb = b => (b / 1e6).toFixed(1) + " MB";
+  const states = { "off": "SDR support is off in this firmware", "no dongle": "not plugged in",
+    "testing": "testing (about 20 s)…", "ready": "ready", "capturing": "recording" };
+  $("sdr_state").textContent = (r.tuner ? r.tuner + ", " : "") + (states[r.state] || r.state);
+  $("sdr_state").className = r.state === "ready" || r.state === "capturing" ? "ok" : "warn";
+  $("sdr_btn").disabled = r.state !== "ready";
+  const c = r.capture, bar = $("sdr_progress");
+  bar.hidden = r.state !== "capturing";
+  if (r.state === "capturing") {
+    bar.value = c.total ? c.bytes / c.total : 0;
+    setMsg("sdr_msg", `Recording ${c.seconds} s: ${mb(c.bytes)} of ${mb(c.total)}` + (c.dropped ? `, ${mb(c.dropped)} dropped` : ""), "warn");
+    sdrWasCapturing = true;
+  } else if (sdrWasCapturing) {
+    sdrWasCapturing = false;
+    if (c.error) setMsg("sdr_msg", "Recording failed: " + c.error, "bad");
+    else setMsg("sdr_msg", `Recorded ${c.seconds} s` + (c.dropped ? ` — but ${mb(c.dropped)} of samples were dropped (the card was too slow), so the file has gaps.` : ", nothing dropped."), c.dropped ? "warn" : "ok");
+  }
+  $("sdr_dl").hidden = r.state === "capturing" || !c.file_bytes;
+  $("sdr_dl_size").textContent = c.file_bytes ? `(${mb(c.file_bytes)})` : "";
+}
+
 let wifiPending = false;
 async function saveWifi() {
   const ssid = $("wifi_ssid").value.trim(), password = $("wifi_pass").value;
@@ -314,6 +361,7 @@ async function pollStatus() {
     html += row("microSD card", m.card ? `${(m.storage_free / 1048576).toFixed(0)} MB free of ${(m.storage_total / 1048576).toFixed(0)} MB` : "not found (insert a FAT32 card and restart)", m.card ? "" : "bad");
     html += row("Uptime", ago(s.system.uptime_s).replace(" ago", "") + `, free RAM ${Math.round(s.system.heap_internal / 1024)} KiB + ${Math.round(s.system.heap_psram / 1048576)} MiB PSRAM`);
     $("status").innerHTML = html;
+    showSdr(s.sdr);
 
     if (wifiPending && w.test !== "testing") {
       wifiPending = false;

@@ -19,6 +19,8 @@
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/param.h>
+#include <sys/stat.h>
 
 #include "bsp/esp-bsp.h"
 #include "esp_heap_caps.h"
@@ -29,6 +31,7 @@
 #include "freertos/task.h"
 #include "usb/usb_host.h"
 
+#include "map_store.h"
 #include "r82xx.h"
 
 static const char *TAG = "sdr_probe";
@@ -40,10 +43,13 @@ static const char *TAG = "sdr_probe";
 #define BULK_XFERS          4
 #define CTRL_TIMEOUT_MS     300
 #define RUN_MS              10000
-#define AIS_RUN_MS          60000
+#define AIS_RUN_MS          20000
 #define AIS_CENTER_HZ       162000000   // channel A at -25 kHz, B at +25 kHz
 #define AIS_RATE            288000
 #define AIS_GAIN_TENTH_DB   402
+#define CAP_RING            (4 * 1024 * 1024)  // PSRAM: ~7 s of slack if the card stalls
+#define CAP_CHUNK           (32 * 1024)        // written through an internal-RAM bounce buffer
+#define CAP_DIR             MAP_ROOT "/sdr"
 
 // librtlsdr register blocks
 enum { DEMODB = 0, USBB = 1, SYSB = 2, IICB = 6 };
@@ -75,6 +81,20 @@ static volatile uint32_t s_xfer_errors, s_short_xfers;
 static volatile bool s_streaming;
 static volatile uint32_t s_hist_min = 255, s_hist_max;
 static volatile uint64_t s_sum, s_count;
+static usb_transfer_t *s_xfers[BULK_XFERS];
+
+// What the web page sees.
+static volatile sdr_state_t s_state = SDR_OFF;
+static char s_tuner[40];
+static volatile int s_cap_req;  // seconds asked for, picked up by the probe task
+static volatile int s_cap_seconds;
+static volatile uint64_t s_cap_bytes, s_cap_total, s_cap_dropped, s_cap_file_bytes;
+static char s_cap_error[80];
+
+// Capture ring: the transfer callback fills it, the probe task drains it to the card.
+static uint8_t *s_ring;
+static volatile uint32_t s_ring_head, s_ring_tail;
+static volatile bool s_cap_on;
 
 // ---------------------------------------------------------------------------
 // USB plumbing
@@ -394,6 +414,18 @@ static void ais_report(uint32_t *from, uint32_t total_bursts[NCH])
 // Streaming test
 // ---------------------------------------------------------------------------
 
+static void cap_push(const uint8_t *d, uint32_t n)
+{
+    if (n > CAP_RING - (s_ring_head - s_ring_tail)) {
+        s_cap_dropped += n;  // the card fell more than CAP_RING behind
+        return;
+    }
+    uint32_t at = s_ring_head % CAP_RING, first = MIN(n, CAP_RING - at);
+    memcpy(s_ring + at, d, first);
+    memcpy(s_ring, d + first, n - first);
+    s_ring_head += n;
+}
+
 static void bulk_cb(usb_transfer_t *t)
 {
     if (t->status == USB_TRANSFER_STATUS_COMPLETED) {
@@ -414,6 +446,7 @@ static void bulk_cb(usb_transfer_t *t)
         s_sum += sum;
         s_count += n;
         if (s_ais_on) ais_measure(t->data_buffer, t->actual_num_bytes);
+        if (s_cap_on) cap_push(t->data_buffer, t->actual_num_bytes);
     } else {
         s_xfer_errors++;
     }
@@ -422,7 +455,8 @@ static void bulk_cb(usb_transfer_t *t)
 
 // Streams for run_ms. With ais set, also measures the AIS channels (the tuner
 // must already be on AIS_CENTER_HZ and rate must be AIS_RATE).
-static void stream_test(uint32_t rate, int run_ms, bool ais)
+// Starts the bulk sample stream. Returns the exact rate, or 0 if it failed.
+static uint32_t stream_start(uint32_t rate)
 {
     uint32_t real = set_sample_rate(rate);
     reset_buffer();
@@ -430,29 +464,45 @@ static void stream_test(uint32_t rate, int run_ms, bool ais)
     s_hist_min = 255;
     s_hist_max = 0;
     s_sum = s_count = 0;
-    if (ais) ais_reset();
-    s_ais_on = ais;
-    uint32_t ais_from = 0, ais_bursts[NCH] = {0};
     s_streaming = true;
-
-    usb_transfer_t *xfers[BULK_XFERS] = {0};
-    for (int i = 0; i < BULK_XFERS; i++) {
-        if (usb_host_transfer_alloc(BULK_XFER_BYTES, 0, &xfers[i]) != ESP_OK) {
+    for (int i = 0; i < BULK_XFERS && s_streaming; i++) {
+        if (usb_host_transfer_alloc(BULK_XFER_BYTES, 0, &s_xfers[i]) != ESP_OK) {
             ESP_LOGE(TAG, "transfer alloc failed (internal RAM free: %u)",
                      (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+            s_xfers[i] = NULL;
             s_streaming = false;
             break;
         }
-        xfers[i]->device_handle = s_dev;
-        xfers[i]->bEndpointAddress = BULK_EP;
-        xfers[i]->callback = bulk_cb;
-        xfers[i]->num_bytes = BULK_XFER_BYTES;
-        xfers[i]->timeout_ms = 0;
-        if (usb_host_transfer_submit(xfers[i]) != ESP_OK) {
+        s_xfers[i]->device_handle = s_dev;
+        s_xfers[i]->bEndpointAddress = BULK_EP;
+        s_xfers[i]->callback = bulk_cb;
+        s_xfers[i]->num_bytes = BULK_XFER_BYTES;
+        s_xfers[i]->timeout_ms = 0;
+        if (usb_host_transfer_submit(s_xfers[i]) != ESP_OK) {
             ESP_LOGE(TAG, "bulk submit failed");
             s_streaming = false;
         }
     }
+    return s_streaming ? real : 0;
+}
+
+static void stream_stop(void)
+{
+    s_streaming = false;
+    vTaskDelay(pdMS_TO_TICKS(300)); // let in-flight transfers finish
+    for (int i = 0; i < BULK_XFERS; i++) {
+        if (s_xfers[i]) usb_host_transfer_free(s_xfers[i]);
+        s_xfers[i] = NULL;
+    }
+}
+
+static void stream_test(uint32_t rate, int run_ms, bool ais)
+{
+    if (ais) ais_reset();
+    s_ais_on = ais;
+    uint32_t ais_from = 0, ais_bursts[NCH] = {0};
+    uint32_t real = stream_start(rate);
+    if (!real) real = rate;
 
     int64_t t0 = esp_timer_get_time();
     uint64_t last = 0;
@@ -471,15 +521,88 @@ static void stream_test(uint32_t rate, int run_ms, bool ais)
     // Rate over the streaming time only, not the drain below.
     uint64_t bytes = s_bytes;
     double secs = (esp_timer_get_time() - t0) / 1e6;
-    s_streaming = false;
     s_ais_on = false;
-    vTaskDelay(pdMS_TO_TICKS(300)); // let in-flight transfers finish
+    stream_stop();
     double got = bytes / secs, need = real * 2.0;
     ESP_LOGI(TAG, "RESULT %u S/s: %.2f MB/s of %.2f MB/s needed (%.0f%%), %lu errors, samples %lu..%lu mean %.1f",
              (unsigned)real, got / 1e6, need / 1e6, 100 * got / need, (unsigned long)s_xfer_errors,
              (unsigned long)s_hist_min, (unsigned long)s_hist_max, s_count ? (double)s_sum / s_count : 0.0);
-    for (int i = 0; i < BULK_XFERS; i++) {
-        if (xfers[i]) usb_host_transfer_free(xfers[i]);
+}
+
+// ---------------------------------------------------------------------------
+// I/Q capture to the microSD card, in rtl_sdr's format (unsigned 8-bit I/Q)
+// ---------------------------------------------------------------------------
+
+static void cap_fail(const char *msg)
+{
+    if (!s_cap_error[0]) snprintf(s_cap_error, sizeof(s_cap_error), "%s", msg);
+}
+
+static void run_capture(int seconds)
+{
+    uint64_t total = (uint64_t)seconds * AIS_RATE * 2;
+    s_cap_seconds = seconds;
+    s_cap_total = total;
+    s_cap_bytes = s_cap_dropped = s_cap_file_bytes = 0;
+    s_cap_error[0] = '\0';
+    ESP_LOGI(TAG, "capture: %d s (%.1f MB) to %s", seconds, total / 1e6, SDR_CAPTURE_PATH);
+
+    // The SD driver needs DMA-capable memory, so the ring (PSRAM) is copied
+    // through a small internal buffer.
+    s_ring = heap_caps_malloc(CAP_RING, MALLOC_CAP_SPIRAM);
+    uint8_t *bounce = heap_caps_aligned_alloc(64, CAP_CHUNK, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+    FILE *f = NULL;
+    if (!s_ring || !bounce) {
+        cap_fail("out of memory");
+    } else {
+        mkdir(CAP_DIR, 0777);
+        f = fopen(SDR_CAPTURE_PATH, "wb");
+        if (!f) cap_fail("could not create the file on the microSD card");
+        else setvbuf(f, NULL, _IONBF, 0);
+    }
+    if (f) {
+        s_ring_head = s_ring_tail = 0;
+        s_cap_on = true;
+        if (!stream_start(AIS_RATE)) cap_fail("could not start the sample stream");
+    }
+
+    int64_t last_data = esp_timer_get_time();
+    while (!s_cap_error[0] && s_cap_bytes < total) {
+        if (s_gone) {
+            cap_fail("the dongle was unplugged");
+            break;
+        }
+        uint32_t avail = s_ring_head - s_ring_tail;
+        if (!avail) {
+            if (esp_timer_get_time() - last_data > 2000000) cap_fail("no samples from the dongle");
+            else vTaskDelay(pdMS_TO_TICKS(10));
+            continue;
+        }
+        last_data = esp_timer_get_time();
+        uint32_t at = s_ring_tail % CAP_RING;
+        uint32_t n = MIN(MIN(avail, CAP_RING - at), CAP_CHUNK);
+        n = MIN((uint64_t)n, total - s_cap_bytes);
+        memcpy(bounce, s_ring + at, n);
+        s_ring_tail += n;
+        if (fwrite(bounce, 1, n, f) != n) {
+            cap_fail("writing to the microSD card failed (is it full?)");
+            break;
+        }
+        s_cap_bytes += n;
+    }
+    s_cap_on = false;
+    stream_stop();
+    if (f && fclose(f) != 0) cap_fail("closing the file on the microSD card failed");
+    free(s_ring);
+    s_ring = NULL;
+    free(bounce);
+
+    if (s_cap_error[0]) {
+        ESP_LOGE(TAG, "capture failed after %.1f MB: %s", s_cap_bytes / 1e6, s_cap_error);
+        remove(SDR_CAPTURE_PATH);
+    } else {
+        s_cap_file_bytes = s_cap_bytes;
+        ESP_LOGI(TAG, "capture done: %.1f MB, %.1f MB dropped", s_cap_bytes / 1e6, s_cap_dropped / 1e6);
     }
 }
 
@@ -503,6 +626,7 @@ static void probe_device(uint8_t addr)
         ESP_LOGW(TAG, "not an RTL2832U dongle; ignoring it");
         goto out;
     }
+    s_state = SDR_TESTING;
     if (info.speed != USB_SPEED_HIGH) ESP_LOGW(TAG, "dongle is not on High Speed USB: high sample rates won't fit");
     if (usb_host_interface_claim(s_client, s_dev, 0, 0) != ESP_OK) {
         ESP_LOGE(TAG, "could not claim interface 0");
@@ -528,19 +652,39 @@ static void probe_device(uint8_t addr)
     // Throughput is settled (step 1), so with an R820T, listen on the AIS
     // channels instead; other tuners just get the throughput test.
     if (r820 == R82XX_CHECK_VAL && tune_r820t(AIS_CENTER_HZ, AIS_RATE, AIS_GAIN_TENTH_DB)) {
+        snprintf(s_tuner, sizeof(s_tuner), "R820T (RTL-SDR Blog V3)");
         stream_test(AIS_RATE, AIS_RUN_MS, true);
+        // Stay tuned, ready to record captures for the web page.
+        s_state = SDR_READY;
+        ESP_LOGI(TAG, "ready: record an I/Q capture from the web page");
+        while (!s_gone) {
+            ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+            int seconds = s_cap_req;
+            if (seconds && !s_gone) {
+                s_state = SDR_CAPTURING;
+                run_capture(seconds);
+                s_cap_req = 0;
+                s_state = SDR_READY;
+            }
+        }
     } else {
+        snprintf(s_tuner, sizeof(s_tuner), r828 == R82XX_CHECK_VAL ? "R828D (not supported yet)" : "unknown");
         stream_test(AIS_RATE, RUN_MS, false);
+        ESP_LOGI(TAG, "test finished; unplug and replug the dongle to run it again");
     }
-    ESP_LOGI(TAG, "test finished; unplug and replug the dongle to run it again");
     usb_host_interface_release(s_client, s_dev, 0);
 out:
     usb_host_device_close(s_client, s_dev);
     s_dev = NULL;
+    s_tuner[0] = '\0';
+    s_state = SDR_NONE;
 }
 
 static void probe_task(void *arg)
 {
+    s_state = SDR_NONE;
+    struct stat st;
+    if (stat(SDR_CAPTURE_PATH, &st) == 0) s_cap_file_bytes = st.st_size;  // from before a restart
     ESP_ERROR_CHECK(bsp_usb_host_start(BSP_USB_HOST_POWER_MODE_USB_DEV, true));
     usb_host_client_config_t cfg = {
         .is_synchronous = false,
@@ -580,5 +724,55 @@ static void probe_task(void *arg)
 
 void sdr_probe_start(void)
 {
-    xTaskCreatePinnedToCore(probe_task, "sdr_probe", 6144, NULL, 4, &s_probe_task, 1);
+    xTaskCreatePinnedToCore(probe_task, "sdr_probe", 8192, NULL, 4, &s_probe_task, 1);
+}
+
+const char *sdr_state_str(sdr_state_t st)
+{
+    static const char *const names[] = {"off", "no dongle", "testing", "ready", "capturing"};
+    return st < sizeof(names) / sizeof(names[0]) ? names[st] : "?";
+}
+
+void sdr_get_status(sdr_status_t *out)
+{
+    memset(out, 0, sizeof(*out));
+    out->state = s_state;
+    snprintf(out->tuner, sizeof(out->tuner), "%s", s_tuner);
+    out->center_hz = AIS_CENTER_HZ;
+    out->rate = AIS_RATE;
+    out->cap_seconds = s_cap_seconds;
+    out->cap_bytes = s_cap_bytes;
+    out->cap_total = s_cap_total;
+    out->cap_dropped = s_cap_dropped;
+    out->cap_file_bytes = s_cap_file_bytes;
+    snprintf(out->cap_error, sizeof(out->cap_error), "%s", s_cap_error);
+}
+
+bool sdr_capture_start(int seconds, char *err, size_t errlen)
+{
+    if (seconds < 1 || seconds > SDR_CAPTURE_MAX_S) {
+        snprintf(err, errlen, "length must be 1-%d seconds", SDR_CAPTURE_MAX_S);
+        return false;
+    }
+    if (s_state != SDR_READY || s_cap_req) {
+        snprintf(err, errlen, "%s", s_state == SDR_CAPTURING ? "a capture is already running"
+                                    : s_state == SDR_TESTING ? "the dongle is still being tested; try again in a moment"
+                                                              : "no RTL-SDR dongle ready");
+        return false;
+    }
+    if (!map_store_card_ok()) {
+        snprintf(err, errlen, "no microSD card in the display");
+        return false;
+    }
+    uint64_t total, free_bytes;
+    map_store_usage(&total, &free_bytes);
+    uint64_t need = (uint64_t)seconds * AIS_RATE * 2 + (1 << 20);
+    if (need > free_bytes + s_cap_file_bytes) {
+        snprintf(err, errlen, "not enough free space on the microSD card");
+        return false;
+    }
+    s_cap_req = seconds;
+    s_cap_error[0] = '\0';
+    xTaskNotifyGive(s_probe_task);
+    return true;
 }
