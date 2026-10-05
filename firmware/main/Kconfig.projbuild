@@ -1,5 +1,14 @@
 menu "AIS Display"
 
+    config AIS_DISPLAY_UPSIDE_DOWN
+        bool "Board mounted upside down (USB-C ports at the bottom)"
+        default y
+        help
+            Rotates the picture and the touch input by 180 degrees, so the board can
+            be mounted with its USB-C ports along the bottom edge and the cable
+            hanging down. The printed case in enclosure/ is designed for this.
+            Turn it off if the USB-C ports are along the top.
+
     config AIS_TOUCH_SWAP_XY
         int "Touch: swap X and Y (0/1)"
         range 0 1

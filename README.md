@@ -4,6 +4,7 @@ A standalone display for local AIS traffic. It runs on the Waveshare ESP32-P4-WI
 
 ```
 firmware/        ESP-IDF project (C, LVGL 9) for the display
+enclosure/       OpenSCAD case (front bezel + back lid) and ready-to-print STLs
 mapbuilder/      Python tool that renders NOAA ENC charts into a map set for the display
 tools/ais_sim.py AIS test server (simulated traffic or replay of a capture)
 ```
@@ -98,3 +99,9 @@ To see the screens without the hardware, the host preview runs the real UI code 
 ```sh
 firmware/test/host/preview/build.sh mapbuilder/seattle     # PNGs in firmware/test/host/preview/out/
 ```
+
+## Case
+
+`enclosure/display_case.scad` is a two-part printed case: a front bezel and wall that the display drops into from behind, and a back lid that clamps it in place with three M3 × 10 countersunk screws through lugs on the outside. The USB-C cable leaves through a notch in the top of the wall, and the lid has keyhole slots for hanging the case on two screws 60 mm apart. Take the lid off to reach the microSD card.
+
+Print `display_case_shell.stl` front face down and `display_case_lid.stl` outside face down, with no supports. The STLs use the defaults; open the `.scad` file in OpenSCAD to change the fit clearance, which USB-C port(s) get a notch, the keyholes or the vents, and export again.

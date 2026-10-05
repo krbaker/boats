@@ -22,14 +22,22 @@ void app_main(void)
     map_store_init();
     vessel_db_init();
 
+    // Upside down, the adapter rotates the picture as it goes to the panel but
+    // LVGL still works upright, so the touch points need the same 180 degree
+    // turn: mirrored in both x and y.
+#if CONFIG_AIS_DISPLAY_UPSIDE_DOWN
+    const bool flip = true;
+#else
+    const bool flip = false;
+#endif
     bsp_display_cfg_t disp_cfg = {
         .lv_adapter_cfg = ESP_LV_ADAPTER_DEFAULT_CONFIG(),
-        .rotation = ESP_LV_ADAPTER_ROTATE_0,
+        .rotation = flip ? ESP_LV_ADAPTER_ROTATE_180 : ESP_LV_ADAPTER_ROTATE_0,
         .tear_avoid_mode = ESP_LV_ADAPTER_TEAR_AVOID_MODE_TRIPLE_PARTIAL,
         .touch_flags = {
             .swap_xy = CONFIG_AIS_TOUCH_SWAP_XY,
-            .mirror_x = CONFIG_AIS_TOUCH_MIRROR_X,
-            .mirror_y = CONFIG_AIS_TOUCH_MIRROR_Y,
+            .mirror_x = CONFIG_AIS_TOUCH_MIRROR_X ^ flip,
+            .mirror_y = CONFIG_AIS_TOUCH_MIRROR_Y ^ flip,
         },
     };
     disp_cfg.lv_adapter_cfg.task_core_id = 0;
