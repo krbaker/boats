@@ -35,6 +35,7 @@
 #include "map_store.h"
 #include "r82xx.h"
 #include "rx_stats.h"
+#include "settings.h"
 #include "vessel_db.h"
 
 static const char *TAG = "sdr_probe";
@@ -48,7 +49,6 @@ static const char *TAG = "sdr_probe";
 #define RUN_MS              10000
 #define AIS_CENTER_HZ       AIS_DEMOD_CENTER_HZ  // channel A at -25 kHz, B at +25 kHz
 #define AIS_RATE            AIS_DEMOD_RATE
-#define AIS_GAIN_TENTH_DB   402
 #define CAP_RING            (4 * 1024 * 1024)  // PSRAM: ~7 s of slack if the card stalls
 #define CAP_CHUNK           (32 * 1024)        // written through an internal-RAM bounce buffer
 #define CAP_DIR             MAP_ROOT "/sdr"
@@ -63,6 +63,10 @@ enum { DEMODB = 0, USBB = 1, SYSB = 2, IICB = 6 };
 #define USB_EPA_MAXPKT      0x2158
 #define DEMOD_CTL           0x3000
 #define DEMOD_CTL_1         0x300b
+#define GPO                 0x3001
+#define GPOE                0x3003
+#define GPD                 0x3004
+#define BIAS_TEE_GPIO       0                  // RTL-SDR Blog V3
 #define R820T_I2C_ADDR      0x34
 #define R828D_I2C_ADDR      0x74
 #define R82XX_CHECK_VAL     0x69
@@ -77,6 +81,8 @@ static usb_device_handle_t s_dev;
 static uint8_t s_new_addr;
 static bool s_gone;
 static TaskHandle_t s_probe_task;
+static EventGroupHandle_t s_events;
+static r82xx_t s_r82xx;
 static SemaphoreHandle_t s_ctrl_done;
 static usb_transfer_t *s_ctrl;
 
@@ -112,6 +118,8 @@ static volatile bool s_cap_on;
 static ring_t s_dec_ring;
 static volatile bool s_dec_on, s_dec_reset;
 static TaskHandle_t s_dec_task;
+static volatile float s_ppm;
+static volatile bool s_ppm_changed;
 static ais_demod_t *s_demod;
 static ais_parser_t s_parser;
 static volatile float s_cpu_pct;
@@ -177,6 +185,22 @@ static int write_reg(uint8_t block, uint16_t addr, uint16_t val, uint8_t len)
 {
     uint8_t d[2] = {len == 1 ? (uint8_t)val : (uint8_t)(val >> 8), (uint8_t)val};
     return ctrl(false, addr, (block << 8) | 0x10, d, len);
+}
+
+static uint16_t read_reg(uint8_t block, uint16_t addr, uint8_t len)
+{
+    uint8_t d[2] = {0};
+    ctrl(true, addr, block << 8, d, len);
+    return d[0] | (d[1] << 8);
+}
+
+static void set_gpio(int gpio, bool on)
+{
+    uint8_t bit = 1 << gpio;
+    write_reg(SYSB, GPD, read_reg(SYSB, GPD, 1) & ~bit, 1);   // output
+    write_reg(SYSB, GPOE, read_reg(SYSB, GPOE, 1) | bit, 1);
+    uint8_t v = read_reg(SYSB, GPO, 1);
+    write_reg(SYSB, GPO, on ? v | bit : v & ~bit, 1);
 }
 
 static uint16_t demod_read_reg(uint8_t page, uint16_t addr, uint8_t len)
@@ -286,35 +310,48 @@ static void reset_buffer(void)
 // R820T tuning (librtlsdr's open sequence for an R820T, then the AIS settings)
 // ---------------------------------------------------------------------------
 
-static bool tune_r820t(uint32_t freq, uint32_t rate, int gain_tenth_db)
+static bool tune_r820t(uint32_t freq, uint32_t rate)
 {
     demod_write_reg(1, 0xb1, 0x1a, 1);  // zero-IF off: the R820T has a low IF
     demod_write_reg(0, 0x08, 0x4d, 1);  // in-phase ADC input only
     demod_write_reg(1, 0x15, 0x01, 1);  // spectrum inversion
 
-    static r82xx_t tuner;
-    memset(&tuner, 0, sizeof(tuner));
-    tuner.i2c_write = tuner_i2c_write;
-    tuner.i2c_read = tuner_i2c_read;
-    tuner.i2c_addr = R820T_I2C_ADDR;
-    tuner.xtal_hz = RTL_XTAL_HZ;
+    r82xx_t *tuner = &s_r82xx;
+    memset(tuner, 0, sizeof(*tuner));
+    tuner->i2c_write = tuner_i2c_write;
+    tuner->i2c_read = tuner_i2c_read;
+    tuner->i2c_addr = R820T_I2C_ADDR;
+    tuner->xtal_hz = RTL_XTAL_HZ;
 
     set_i2c_repeater(true);
     int if_hz = -1;
     const char *fail = NULL;
-    if (r82xx_init(&tuner) < 0) fail = "init";
-    else if ((if_hz = r82xx_set_bandwidth(&tuner, rate)) < 0) fail = "bandwidth";
-    else if (r82xx_set_freq(&tuner, freq) < 0) fail = "frequency (PLL did not lock)";
-    else if (r82xx_set_gain(&tuner, true, gain_tenth_db) < 0) fail = "gain";
+    if (r82xx_init(tuner) < 0) fail = "init";
+    else if ((if_hz = r82xx_set_bandwidth(tuner, rate)) < 0) fail = "bandwidth";
+    else if (r82xx_set_freq(tuner, freq) < 0) fail = "frequency (PLL did not lock)";
     set_i2c_repeater(false);
     bool ok = !fail;
     if (fail) ESP_LOGE(TAG, "tuner set-up failed: %s", fail);
     if (if_hz >= 0) set_if_freq(if_hz);
     if (ok) {
-        ESP_LOGI(TAG, "tuned to %.3f MHz (IF %.3f MHz, filter cal %u), gain %.1f dB", freq / 1e6, if_hz / 1e6,
-                 tuner.fil_cal_code, gain_tenth_db / 10.0);
+        ESP_LOGI(TAG, "tuned to %.3f MHz (IF %.3f MHz, filter cal %u)", freq / 1e6, if_hz / 1e6, tuner->fil_cal_code);
     }
     return ok;
+}
+
+// Gain and bias-tee from the settings; the ppm goes to the decoder task.
+static void apply_settings(const settings_t *cfg)
+{
+    set_i2c_repeater(true);
+    bool manual = cfg->sdr_gain != SDR_GAIN_AUTO;
+    if (r82xx_set_gain(&s_r82xx, manual, cfg->sdr_gain) < 0) ESP_LOGE(TAG, "setting the tuner gain failed");
+    set_i2c_repeater(false);
+    bool bias = cfg->sdr_enabled && cfg->sdr_bias_tee;
+    set_gpio(BIAS_TEE_GPIO, bias);
+    s_ppm = cfg->sdr_ppm_tenths / 10.0f;
+    s_ppm_changed = true;
+    if (manual) ESP_LOGI(TAG, "gain %.1f dB, bias-tee %s, %+.1f ppm", cfg->sdr_gain / 10.0, bias ? "on" : "off", s_ppm);
+    else ESP_LOGI(TAG, "gain auto, bias-tee %s, %+.1f ppm", bias ? "on" : "off", s_ppm);
 }
 
 // ---------------------------------------------------------------------------
@@ -557,26 +594,43 @@ static void probe_device(uint8_t addr)
     ESP_LOGI(TAG, "internal RAM free %u, PSRAM free %u", (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
     // With an R820T, decode AIS; other tuners just get the throughput test.
-    if (r820 == R82XX_CHECK_VAL && tune_r820t(AIS_CENTER_HZ, AIS_RATE, AIS_GAIN_TENTH_DB)) {
+    if (r820 == R82XX_CHECK_VAL && tune_r820t(AIS_CENTER_HZ, AIS_RATE)) {
         snprintf(s_tuner, sizeof(s_tuner), "R820T (RTL-SDR Blog V3)");
-        // Stream continuously into the decoder; captures tap the same stream.
-        s_dec_reset = true;
-        s_dec_on = true;
-        if (!stream_start(AIS_RATE)) ESP_LOGE(TAG, "could not start the sample stream");
-        s_state = SDR_READY;
-        ESP_LOGI(TAG, "receiving: decoding AIS on 161.975 and 162.025 MHz");
-        while (!s_gone) {
-            ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        // Stream continuously into the decoder (captures tap the same stream),
+        // following the settings as they change.
+        bool streaming = false;
+        for (bool first = true; !s_gone; first = false) {
+            if (first || (xEventGroupClearBits(s_events, SETTINGS_EV_SDR) & SETTINGS_EV_SDR)) {
+                settings_t cfg;
+                settings_get(&cfg);
+                apply_settings(&cfg);
+                if (cfg.sdr_enabled && !streaming) {
+                    s_dec_reset = true;
+                    s_dec_on = true;
+                    streaming = stream_start(AIS_RATE) != 0;
+                    if (!streaming) ESP_LOGE(TAG, "could not start the sample stream");
+                    ESP_LOGI(TAG, "receiving: decoding AIS on 161.975 and 162.025 MHz");
+                } else if (!cfg.sdr_enabled && streaming) {
+                    s_dec_on = false;
+                    stream_stop();
+                    streaming = false;
+                    ESP_LOGI(TAG, "turned off in the settings");
+                }
+                s_state = cfg.sdr_enabled ? SDR_READY : SDR_DISABLED;
+            }
+            ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(500));
             int seconds = s_cap_req;
-            if (seconds && !s_gone) {
-                s_state = SDR_CAPTURING;
-                run_capture(seconds);
+            if (seconds) {
+                if (streaming && !s_gone) {
+                    s_state = SDR_CAPTURING;
+                    run_capture(seconds);
+                    s_state = SDR_READY;
+                }
                 s_cap_req = 0;
-                s_state = SDR_READY;
             }
         }
         s_dec_on = false;
-        stream_stop();
+        if (streaming) stream_stop();
     } else {
         snprintf(s_tuner, sizeof(s_tuner), r828 == R82XX_CHECK_VAL ? "R828D (not supported yet)" : "unknown");
         stream_test(AIS_RATE, RUN_MS);
@@ -610,8 +664,13 @@ static void decode_task(void *arg)
             s_dec_reset = false;
             ais_demod_init(s_demod, on_sentence, NULL);
             ais_parser_init(&s_parser);
+            s_ppm_changed = true;
             s_dec_ring.tail = s_dec_ring.head;
             s_dec_ring.dropped = 0;
+        }
+        if (s_ppm_changed) {
+            s_ppm_changed = false;
+            ais_demod_set_ppm(s_demod, s_ppm);
         }
         const uint8_t *p;
         uint32_t n = ring_peek(&s_dec_ring, &p, DEC_CHUNK);
@@ -690,13 +749,14 @@ void sdr_probe_start(void)
         return;
     }
     ais_demod_init(s_demod, on_sentence, NULL);
+    s_events = settings_subscribe();
     xTaskCreatePinnedToCore(decode_task, "sdr_decode", 6144, NULL, 3, &s_dec_task, 1);
     xTaskCreatePinnedToCore(probe_task, "sdr_probe", 8192, NULL, 4, &s_probe_task, 1);
 }
 
 const char *sdr_state_str(sdr_state_t st)
 {
-    static const char *const names[] = {"off", "no dongle", "starting", "receiving", "recording"};
+    static const char *const names[] = {"off", "no dongle", "starting", "receiving", "recording", "turned off"};
     return st < sizeof(names) / sizeof(names[0]) ? names[st] : "?";
 }
 
@@ -725,7 +785,8 @@ bool sdr_capture_start(int seconds, char *err, size_t errlen)
         return false;
     }
     if (s_state != SDR_READY || s_cap_req) {
-        snprintf(err, errlen, "%s", s_state == SDR_CAPTURING ? "a capture is already running"
+        snprintf(err, errlen, "%s", s_state == SDR_CAPTURING  ? "a capture is already running"
+                                    : s_state == SDR_DISABLED ? "the SDR is turned off in the settings"
                                     : s_state == SDR_TESTING ? "the dongle is still starting; try again in a moment"
                                                               : "no RTL-SDR dongle ready");
         return false;

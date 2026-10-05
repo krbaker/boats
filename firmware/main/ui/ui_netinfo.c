@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "nmea_client.h"
+#include "sdr_probe.h"
 #include "tide.h"
 #include "ui.h"
 #include "vessel_db.h"
@@ -76,6 +77,15 @@ static void refresh(void)
     }
     len += snprintf(buf + len, sizeof(buf) - len, "\n%lu messages, %d vessels", (unsigned long)n.stats.reports,
                     vessel_db_count());
+    sdr_status_t r;
+    sdr_get_status(&r);
+    if (r.state != SDR_OFF) {
+        len += snprintf(buf + len, sizeof(buf) - len, "\nRTL-SDR: %s", sdr_state_str(r.state));
+        if (r.state == SDR_READY || r.state == SDR_CAPTURING) {
+            len += snprintf(buf + len, sizeof(buf) - len, ", %lu packets, CPU %.0f%%",
+                            (unsigned long)(r.demod.packets[0] + r.demod.packets[1]), r.cpu_pct);
+        }
+    }
     if (t.station[0]) {
         len += snprintf(buf + len, sizeof(buf) - len, "\nTide station: %s %s", t.station, t.station_name);
     }

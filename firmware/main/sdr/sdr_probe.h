@@ -12,7 +12,9 @@
 #define SDR_CAPTURE_PATH  MAP_ROOT "/sdr/capture.cu8"
 #define SDR_CAPTURE_MAX_S 600
 
-typedef enum { SDR_OFF, SDR_NONE, SDR_TESTING, SDR_READY, SDR_CAPTURING } sdr_state_t;
+// SDR_OFF: no SDR support running; SDR_DISABLED: dongle present but turned off
+// in the settings.
+typedef enum { SDR_OFF, SDR_NONE, SDR_TESTING, SDR_READY, SDR_CAPTURING, SDR_DISABLED } sdr_state_t;
 
 typedef struct {
     sdr_state_t state;

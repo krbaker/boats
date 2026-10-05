@@ -73,7 +73,8 @@ TCP feed (nmea_client) ───────────────────
 - **Step 4 in progress.** When the dongle is plugged in, it's tuned and decoded continuously (a decoder task on core 1, fed through a 2 MB PSRAM ring buffer), into the same vessel table as the network feed.
   - **Comparison:** each vessel records how many messages came from each source. The vessel screen's **Receiver** tab and the web page show packets per channel for both sources (last minute and since boot), and how many vessels each source heard.
   - **CPU:** the decoder's share of a core is measured live and shown in the same places, along with any samples dropped because it fell behind.
-  - **Still to do:** settings (gain, ppm, bias-tee, turning each source on or off) and unplug/replug testing.
+  - **Settings** on the web page, applied live without a restart: each source on or off, SDR gain (auto or the R820T's 29 steps), ppm correction (applied in the demodulator's NCOs), and the bias-tee (asks for confirmation; off whenever the SDR is off). The Network screen shows the SDR's state, and the map counts vessels while either source is live.
+  - **Still to do:** confirm on hardware that unplugging and replugging the dongle recovers by itself.
 
 ## Risks
 

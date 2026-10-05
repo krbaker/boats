@@ -13,6 +13,7 @@
 #include "geo.h"
 #include "map_tiles.h"
 #include "nmea_client.h"
+#include "sdr_probe.h"
 #include "settings.h"
 #include "tide.h"
 #include "ui.h"
@@ -747,11 +748,15 @@ static void update_border_text(void)
     }
     pill_set_text(&s_pills[PILL_TIDE], buf);
 
+    // Vessel count while either AIS source (network feed, RTL-SDR) is live.
     nmea_status_t ns;
     nmea_client_get_status(&ns);
-    if (ns.state == NMEA_STATE_CONNECTED) {
+    sdr_status_t ss;
+    sdr_get_status(&ss);
+    bool sdr_live = ss.state == SDR_READY || ss.state == SDR_CAPTURING;
+    if (ns.state == NMEA_STATE_CONNECTED || sdr_live) {
         snprintf(buf, sizeof(buf), "%d vessel%s", s_nvessels, s_nvessels == 1 ? "" : "s");
-    } else if (ns.state == NMEA_STATE_NOT_CONFIGURED) {
+    } else if ((ns.state == NMEA_STATE_NOT_CONFIGURED || ns.state == NMEA_STATE_OFF) && ss.state != SDR_TESTING) {
         strcpy(buf, "#f5b13f AIS not set#");
     } else {
         strcpy(buf, "#f2545b AIS offline#");

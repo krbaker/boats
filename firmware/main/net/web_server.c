@@ -83,6 +83,11 @@ static esp_err_t config_get(httpd_req_t *req)
     cJSON_AddNumberToObject(o, "center_lon", cfg.center_lon);
     cJSON_AddNumberToObject(o, "brightness", cfg.brightness);
     cJSON_AddStringToObject(o, "wifi_ssid", ssid);
+    cJSON_AddBoolToObject(o, "net_enabled", cfg.net_enabled);
+    cJSON_AddBoolToObject(o, "sdr_enabled", cfg.sdr_enabled);
+    cJSON_AddNumberToObject(o, "sdr_gain", cfg.sdr_gain);  // tenths of a dB, -1 = auto
+    cJSON_AddNumberToObject(o, "sdr_ppm", cfg.sdr_ppm_tenths / 10.0);
+    cJSON_AddBoolToObject(o, "sdr_bias_tee", cfg.sdr_bias_tee);
     return send_json(req, o);
 }
 
@@ -127,6 +132,26 @@ static esp_err_t config_post(httpd_req_t *req)
     if ((v = cJSON_GetObjectItem(root, "brightness"))) {
         if (!cJSON_IsNumber(v) || v->valueint < 5 || v->valueint > 100) bad = "brightness";
         else cfg.brightness = v->valueint;
+    }
+    if ((v = cJSON_GetObjectItem(root, "net_enabled"))) {
+        if (!cJSON_IsBool(v)) bad = "net_enabled";
+        else cfg.net_enabled = cJSON_IsTrue(v);
+    }
+    if ((v = cJSON_GetObjectItem(root, "sdr_enabled"))) {
+        if (!cJSON_IsBool(v)) bad = "sdr_enabled";
+        else cfg.sdr_enabled = cJSON_IsTrue(v);
+    }
+    if ((v = cJSON_GetObjectItem(root, "sdr_bias_tee"))) {
+        if (!cJSON_IsBool(v)) bad = "sdr_bias_tee";
+        else cfg.sdr_bias_tee = cJSON_IsTrue(v);
+    }
+    if ((v = cJSON_GetObjectItem(root, "sdr_gain"))) {
+        if (!cJSON_IsNumber(v) || v->valueint < SDR_GAIN_AUTO || v->valueint > 500) bad = "sdr_gain";
+        else cfg.sdr_gain = v->valueint;
+    }
+    if ((v = cJSON_GetObjectItem(root, "sdr_ppm"))) {
+        if (!cJSON_IsNumber(v) || fabs(v->valuedouble) > 200) bad = "sdr_ppm";
+        else cfg.sdr_ppm_tenths = (int16_t)lround(v->valuedouble * 10);
     }
     for (const char *c = cfg.tide_station; *c; c++) {
         if (*c < '0' || *c > '9') bad = "tide_station";

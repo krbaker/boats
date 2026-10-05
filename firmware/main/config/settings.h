@@ -35,7 +35,15 @@ typedef struct {
     uint8_t brightness;      // percent
     vessel_filter_t filter;
     uint32_t map_created;    // chart set whose centre was last applied (see map_store)
+    // AIS sources
+    bool net_enabled;        // use the network (TCP) feed
+    bool sdr_enabled;        // decode a plugged-in RTL-SDR dongle
+    int16_t sdr_gain;        // tuner gain in tenths of a dB, or SDR_GAIN_AUTO
+    int16_t sdr_ppm_tenths;  // dongle crystal correction, tenths of a ppm
+    bool sdr_bias_tee;       // power an LNA / active antenna through the coax
 } settings_t;
+
+#define SDR_GAIN_AUTO       (-1)
 
 // Bits set on settings_events() when the matching group of settings changes.
 #define SETTINGS_EV_AIS     BIT0
@@ -44,6 +52,7 @@ typedef struct {
 #define SETTINGS_EV_CENTER  BIT3
 #define SETTINGS_EV_MAP     BIT4  // a new chart set was uploaded
 #define SETTINGS_EV_DISPLAY BIT5
+#define SETTINGS_EV_SDR     BIT6
 
 esp_err_t settings_init(void);
 

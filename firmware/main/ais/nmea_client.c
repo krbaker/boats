@@ -186,6 +186,12 @@ static void nmea_task(void *arg)
         s_status.port = cfg.ais_port;
         xSemaphoreGive(s_lock);
 
+        if (!cfg.net_enabled) {
+            set_state(NMEA_STATE_OFF, "");
+            vessel_db_expire();
+            wait_or_settings_change(1000);
+            continue;
+        }
         if (!cfg.ais_host[0] || !cfg.ais_port) {
             set_state(NMEA_STATE_NOT_CONFIGURED, "");
             vessel_db_expire();
@@ -238,6 +244,7 @@ void nmea_client_get_status(nmea_status_t *out)
 const char *nmea_state_str(nmea_state_t s)
 {
     switch (s) {
+    case NMEA_STATE_OFF: return "off";
     case NMEA_STATE_NOT_CONFIGURED: return "not configured";
     case NMEA_STATE_WAITING_NETWORK: return "waiting for network";
     case NMEA_STATE_CONNECTING: return "connecting";

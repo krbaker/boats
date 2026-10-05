@@ -7,6 +7,7 @@
 #include "ais.h"
 
 typedef enum {
+    NMEA_STATE_OFF,             // turned off in the settings
     NMEA_STATE_NOT_CONFIGURED,
     NMEA_STATE_WAITING_NETWORK,
     NMEA_STATE_CONNECTING,

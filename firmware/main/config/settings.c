@@ -31,6 +31,9 @@ static void defaults(settings_t *s)
     s->filter = (vessel_filter_t){
         .mode = FILTER_HIDE_LABEL, .order = ORDER_SIZE, .include_unknown = true, .label_name = true, .label_speed = true,
     };
+    s->net_enabled = true;
+    s->sdr_enabled = true;
+    s->sdr_gain = 402;
 }
 
 // Old firmware stored fewer filter fields: only accept a blob of exactly the current size.
@@ -81,6 +84,12 @@ esp_err_t settings_init(void)
         nvs_get_u8(h, "bright", &s_settings.brightness);
         get_filter(h, &s_settings.filter);
         nvs_get_u32(h, "map_created", &s_settings.map_created);
+        uint8_t u8;
+        if (nvs_get_u8(h, "net_on", &u8) == ESP_OK) s_settings.net_enabled = u8;
+        if (nvs_get_u8(h, "sdr_on", &u8) == ESP_OK) s_settings.sdr_enabled = u8;
+        if (nvs_get_u8(h, "sdr_bias", &u8) == ESP_OK) s_settings.sdr_bias_tee = u8;
+        nvs_get_i16(h, "sdr_gain", &s_settings.sdr_gain);
+        nvs_get_i16(h, "sdr_ppm", &s_settings.sdr_ppm_tenths);
         nvs_close(h);
     }
     ESP_LOGI(TAG, "AIS %s:%u tide %s tz %s centre %.5f,%.5f", s_settings.ais_host, s_settings.ais_port,
@@ -124,11 +133,22 @@ esp_err_t settings_set(const settings_t *in)
     nvs_set_u8(h, "bright", in->brightness);
     nvs_set_blob(h, "filter", &in->filter, sizeof(in->filter));
     nvs_set_u32(h, "map_created", in->map_created);
+    nvs_set_u8(h, "net_on", in->net_enabled);
+    nvs_set_u8(h, "sdr_on", in->sdr_enabled);
+    nvs_set_u8(h, "sdr_bias", in->sdr_bias_tee);
+    nvs_set_i16(h, "sdr_gain", in->sdr_gain);
+    nvs_set_i16(h, "sdr_ppm", in->sdr_ppm_tenths);
     err = nvs_commit(h);
     nvs_close(h);
 
     EventBits_t bits = 0;
-    if (strcmp(old.ais_host, in->ais_host) || old.ais_port != in->ais_port) bits |= SETTINGS_EV_AIS;
+    if (strcmp(old.ais_host, in->ais_host) || old.ais_port != in->ais_port || old.net_enabled != in->net_enabled) {
+        bits |= SETTINGS_EV_AIS;
+    }
+    if (old.sdr_enabled != in->sdr_enabled || old.sdr_gain != in->sdr_gain || old.sdr_ppm_tenths != in->sdr_ppm_tenths ||
+        old.sdr_bias_tee != in->sdr_bias_tee) {
+        bits |= SETTINGS_EV_SDR;
+    }
     if (strcmp(old.tide_station, in->tide_station)) bits |= SETTINGS_EV_TIDE;
     if (strcmp(old.tz_posix, in->tz_posix)) bits |= SETTINGS_EV_TZ;
     if (old.center_lat != in->center_lat || old.center_lon != in->center_lon) bits |= SETTINGS_EV_CENTER;
