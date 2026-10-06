@@ -27,14 +27,13 @@
 #define PILL_WIDTH      (lv_font_get_line_height(&lv_font_montserrat_28) + 10)  // every pill is this thick
 #define MIN_SHIP_LEN    18      // px; ships are never drawn smaller than this
 #define MIN_SHIP_WIDTH  8
-#define HULL_M_PER_PX   (2 * 0.5f * 1852 / UI_SIZE)  // hulls are never drawn smaller than at the 0.5 nm zoom
+#define HULL_TRUE_LEVEL 2       // hulls are to scale up to this zoom level (0 = closest), and no smaller beyond it
 #define STALE_MOVING_S  180     // dim vessels not heard for this long...
 #define STALE_SLOW_S    420     // ...or this long if slow / at rest: those report only every 3 minutes
 #define SLOW_KN         2.0f    // AIS Class B (and anchored Class A) drop to 3-minute reports below ~2 kn
-#define HEADING_MIN_KN  1.0f    // no heading / course lines below this speed
+#define HEADING_MIN_KN  1.0f    // no course vector below this speed
 #define HIT_RADIUS_MIN  22
 #define VECTOR_MINUTES  6       // course/speed vector length
-#define HEADING_LINE_PX 28      // heading line drawn ahead of the bow
 #define HALO_PX         2       // light rim outside each vessel's dark outline
 #define DASH_PX         8
 #define DASH_GAP_PX     6
@@ -89,6 +88,7 @@ typedef struct {
     double merc_px;         // EPSG:3857 metres per pixel
     double scale;           // EPSG:3857 metres per ground metre around the chart
     float m_per_px;         // ground metres per pixel
+    float hull_m_per_px;    // the scale hulls are drawn at: true to scale up to HULL_TRUE_LEVEL
     float radius_nm;
     int nlevels;
 } view_t;
@@ -491,6 +491,7 @@ static void update_view(void)
         s_view.merc_px = l->merc_px;
         s_view.m_per_px = l->m_per_px;
         s_view.radius_nm = l->radius_nm;
+        s_view.hull_m_per_px = m->levels[HULL_TRUE_LEVEL < m->nlevels ? HULL_TRUE_LEVEL : m->nlevels - 1].m_per_px;
     } else {
         s_view.nlevels = sizeof(k_default_radii) / sizeof(k_default_radii[0]);
         if (s_zoom >= s_view.nlevels) s_zoom = s_view.nlevels - 1;
@@ -498,6 +499,7 @@ static void update_view(void)
         s_view.m_per_px = 2 * r * 1852.0f / UI_SIZE;
         s_view.merc_px = s_view.m_per_px * s_view.scale;
         s_view.radius_nm = r;
+        s_view.hull_m_per_px = 2 * k_default_radii[HULL_TRUE_LEVEL] * 1852.0f / UI_SIZE;
     }
 
     double half = UI_CENTER * s_view.merc_px;
@@ -774,7 +776,7 @@ static void draw_vessel(lv_layer_t *layer, placed_t *pl, int64_t now_us)
     // visible and touchable. Hulls keep the size they have at the 0.5 nm zoom
     // when zoomed further out (so they look oversized there), and are only
     // true to scale at that zoom and closer.
-    float hull_m_per_px = fminf(s_view.m_per_px, HULL_M_PER_PX);
+    float hull_m_per_px = fminf(s_view.m_per_px, s_view.hull_m_per_px);
     float len = MIN_SHIP_LEN, wid = MIN_SHIP_WIDTH;
     float off_x = 0, off_y = 0; // hull centre relative to the GPS antenna, hull frame
     if (v->fields & AIS_F_DIM) {
@@ -791,8 +793,8 @@ static void draw_vessel(lv_layer_t *layer, placed_t *pl, int64_t now_us)
     }
 
     // Course-over-ground vector: where the vessel will be in VECTOR_MINUTES. It
-    // differs from the heading when current or wind sets the vessel sideways,
-    // so it is dashed to keep it distinct from the heading line.
+    // differs from the hull's heading when current or wind sets the vessel
+    // sideways. Dashed, so it doesn't read as part of the hull.
     if ((v->fields & AIS_F_COG) && moving) {
         float vlen = v->sog_kn * 1852.0f * VECTOR_MINUTES / 60.0f / s_view.m_per_px;
         if (vlen > 160) vlen = 160;
@@ -813,19 +815,11 @@ static void draw_vessel(lv_layer_t *layer, placed_t *pl, int64_t now_us)
         lv_point_precise_t pt_st = rot(off_x - hw, off_y + hl, s, c, x, y);
         lv_point_precise_t pt_sh = rot(off_x - hw, off_y + shoulder, s, c, x, y);
         lv_point_precise_t poly[] = {bow, sb_sh, sb_st, pt_st, pt_sh, bow};
-        // Heading line straight ahead of the bow, in line with the hull.
-        bool heading = (v->fields & AIS_F_HEADING) && moving;
-        lv_point_precise_t tip = rot(off_x, off_y - hl - HEADING_LINE_PX, s, c, x, y);
         for (int i = 0; i < 5; i++) draw_line(layer, poly[i], poly[i + 1], halo, 2 + 2 * HALO_PX, halo_opa);
-        if (heading) draw_line(layer, bow, tip, halo, 5 + 2 * HALO_PX, halo_opa);
         draw_triangle(layer, bow, sb_sh, sb_st, color, opa);
         draw_triangle(layer, bow, sb_st, pt_st, color, opa);
         draw_triangle(layer, bow, pt_st, pt_sh, color, opa);
         for (int i = 0; i < 5; i++) draw_line(layer, poly[i], poly[i + 1], outline, 2, opa);
-        if (heading) {
-            draw_line(layer, bow, tip, outline, 5, opa);
-            draw_line(layer, bow, tip, color, 3, opa);
-        }
         extent = hypotf(hl + fabsf(off_y), hw + fabsf(off_x));
     } else {
         // No heading known (stationary): draw a dot.

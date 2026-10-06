@@ -190,7 +190,18 @@ Each source gets a row in the web page's status table, such as "Marine forecast:
     - `map_weather_rain.png`: rain, wind from due north, waves from the east.
     - `map_weather_calm.png`: calm, waves from the south.
   - **Preview build fix:** `build.sh` lacked the vessel cache's include path, needed since `vessel_db.h` started including it.
-- **Steps 5–6:** not started.
+- **Step 5 built and previewed, not yet on the display.**
+  - **Overlay** (`main/ui/ui_weather.c`): tap the time bubble. Same panel, close button and tab bar as the vessel overlay, with the tabs **Forecast**, **Waves** and **Weather**.
+  - **Forecast tab:**
+    - **Alerts first,** as red boxes (grey for statements) with the event and when it ends. Tap one to show the full description and instructions.
+    - **The forecast:** the zone's own headlines in amber, then the zone name and issue time, then each period (name in title case, in blue) and its text.
+    - **Rebuilt only when** the forecast or alerts change, not on every minute's WeatherLink update, so it doesn't jump back to the top while you're reading.
+  - **Waves tab:** the buoy's ID and reading age, then waves, periods, direction, wind, water and air temperature, pressure and its 3-hour change. A value from well before the newest row says how old it is.
+  - **Weather tab:** the station's name and age, then wind (10-minute average and direction, gust, latest), temperature, humidity with dew point, pressure with trend and 3-hour change, and rain rate and today's total. Then the NWS station's sky, today's sunrise and sunset at the chart's centre, the moon's phase and percentage lit, and the next new and full moons.
+  - **Not set up yet:** a tab says how to set it up, "Fetching...", or the error.
+  - **Alert text:** NWS wraps it at a fixed width, so `wx_parse_alerts` now joins those lines, keeping paragraphs and `*` bullets. It's tested.
+  - **Previews:** `weather_forecast.png`, `weather_alert_open.png`, `weather_waves.png` and `weather_weather.png`, on the saved real Potomac forecast, its Small Craft Advisory, and buoy 46088.
+- **Step 6:** not started.
 
 ## Decisions
 
