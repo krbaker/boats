@@ -11,3 +11,7 @@
 
 // size x size pixels, 0xAARRGGBB, not premultiplied. grey: data is stale.
 void wx_icon_render(const wx_icon_t *ic, bool grey, uint32_t *argb, int size);
+
+// A small wave (two wavy lines), for the tide bubble when the buoy gives waves
+// without a direction.
+void wx_wave_render(uint32_t *argb, int size);

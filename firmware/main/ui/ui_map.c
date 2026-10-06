@@ -57,6 +57,8 @@
 #define WAVE_BASE_R     256     // ...and the wave triangle just inside that
 #define WAVE_TIP_R      176
 #define WAVE_BASE_W     112
+#define WAVE_ICON_PX    26      // the wave icon in the tide bubble (buoy without wave direction)
+#define WAVE_ICON_GAP   10
 #define WIND_COLOR      lv_color_hex(0xF5D33F)
 #define WAVE_COLOR      lv_color_hex(0x3FA7F5)
 
@@ -104,6 +106,11 @@ typedef struct {
     int16_t width;          // radial thickness, px
     bool hidden, pressed, disabled;
     float icon_deg;         // room after the text for an icon (the weather in the time bubble)
+    lv_obj_t *lbl2;         // optional second piece of text, after an icon (waves in the tide bubble)
+    char text2[32];
+    float mid_deg;          // room for the icon between the two pieces
+    float mid_angle;        // where that icon goes, screen degrees
+    int dir;                // +1 if the text reads clockwise, -1 if counter-clockwise
     void (*on_tap)(void);
 } pill_t;
 
@@ -137,11 +144,13 @@ static struct {
     wx_icon_t icon;
     bool wind_on;
     float wind_dir, wind_mph, gust_mph;
-    bool wave_on;
+    bool wave_on;           // the triangle: waves with a direction
     float wave_dir, wave_ft, wave_s;
 } s_wx;
 static uint32_t s_wx_argb[WX_ICON_PX * WX_ICON_PX];
 static lv_image_dsc_t s_wx_img;
+static uint32_t s_wave_argb[WAVE_ICON_PX * WAVE_ICON_PX];
+static lv_image_dsc_t s_wave_img;
 
 // ---------------------------------------------------------------------------
 // Edge pills
@@ -150,15 +159,8 @@ static lv_image_dsc_t s_wx_img;
 static inline int pill_outer_r(void) { return UI_CENTER - PILL_EDGE_GAP; }
 static inline float px_to_deg(float px, float r) { return px / r * 180.0f / (float)M_PI; }
 
-static void pill_create(pill_t *p, const lv_font_t *font, float center, float min_span, lv_arclabel_dir_t dir,
-                        void (*on_tap)(void))
+static lv_obj_t *pill_label(pill_t *p, const lv_font_t *font, float center, lv_arclabel_dir_t dir)
 {
-    p->center = center;
-    p->min_span = p->span = min_span;
-    p->width = PILL_WIDTH;
-    p->on_tap = on_tap;
-    p->hidden = true;
-
     lv_obj_t *a = lv_arclabel_create(s_scr);
     lv_obj_set_size(a, UI_SIZE, UI_SIZE);
     lv_obj_center(a);
@@ -173,25 +175,61 @@ static void pill_create(pill_t *p, const lv_font_t *font, float center, float mi
     lv_arclabel_set_text_horizontal_align(a, LV_ARCLABEL_TEXT_ALIGN_CENTER);
     lv_arclabel_set_recolor(a, true);
     lv_arclabel_set_text(a, "");
-    p->lbl = a;
+    return a;
+}
+
+static void pill_create(pill_t *p, const lv_font_t *font, float center, float min_span, lv_arclabel_dir_t dir,
+                        void (*on_tap)(void))
+{
+    p->center = center;
+    p->min_span = p->span = min_span;
+    p->width = PILL_WIDTH;
+    p->on_tap = on_tap;
+    p->hidden = true;
+    p->dir = dir == LV_ARCLABEL_DIR_COUNTER_CLOCKWISE ? -1 : 1;
+    p->lbl = pill_label(p, font, center, dir);
 }
 
 // The pill's length: its text, padding and any icon. The text sits left of
 // centre by half the icon's room, so text and icon together are centred.
+// The arclabel's own measure runs a little short of the drawn text (82 px
+// drawn for 63 px measured, on "0.5 nm"): where an icon sits next to text,
+// use the straight width too, so the icon never touches it.
+static float text_deg(lv_obj_t *lbl, const char *text, const pill_t *p)
+{
+    lv_point_t size;
+    lv_text_get_size(&size, text, lv_obj_get_style_text_font(lbl, 0), 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+    return fmaxf((float)lv_arclabel_get_text_angle(lbl), px_to_deg(size.x, pill_outer_r() - p->width / 2.0f));
+}
+
 static void pill_layout(pill_t *p)
 {
-    float text_deg = (float)lv_arclabel_get_text_angle(p->lbl);
-    if (p->icon_deg) {
-        // The arclabel's own measure runs a little short of the drawn text
-        // (82 px drawn for 63 px measured, on "0.5 nm"): use the straight
-        // width too, so the icon never touches the text.
-        lv_point_t size;
-        lv_text_get_size(&size, p->text, lv_obj_get_style_text_font(p->lbl, 0), 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
-        text_deg = fmaxf(text_deg, px_to_deg(size.x, pill_outer_r() - p->width / 2.0f));
+    if (p->text2[0]) {
+        // Text, icon, second text, in reading order (which runs backwards in
+        // screen angles along the bottom of the screen).
+        float t1 = text_deg(p->lbl, p->text, p), t2 = text_deg(p->lbl2, p->text2, p);
+        p->span = fmaxf(p->min_span, t1 + p->mid_deg + t2 + 2 * PILL_PAD_DEG);
+        float start = p->center - p->dir * (p->span / 2 - PILL_PAD_DEG);
+        lv_arclabel_set_angle_start(p->lbl, start + p->dir * t1 / 2 - 60);
+        p->mid_angle = start + p->dir * (t1 + p->mid_deg / 2);
+        lv_arclabel_set_angle_start(p->lbl2, start + p->dir * (t1 + p->mid_deg + t2 / 2) - 60);
+    } else {
+        float t = p->icon_deg ? text_deg(p->lbl, p->text, p) : (float)lv_arclabel_get_text_angle(p->lbl);
+        p->span = fmaxf(p->min_span, t + 2 * PILL_PAD_DEG + p->icon_deg);
+        lv_arclabel_set_angle_start(p->lbl, p->center - p->icon_deg / 2 - 60);
     }
-    p->span = fmaxf(p->min_span, text_deg + 2 * PILL_PAD_DEG + p->icon_deg);
-    lv_arclabel_set_angle_start(p->lbl, p->center - p->icon_deg / 2 - 60);
     if (s_overlay) lv_obj_invalidate(s_overlay);
+}
+
+// A second piece of text after the first, with room for an icon between
+// ("" removes it). The pill must have been given lbl2.
+static void pill_set_text2(pill_t *p, const char *text, float mid_px)
+{
+    if (strcmp(p->text2, text) == 0) return;
+    strlcpy(p->text2, text, sizeof(p->text2));
+    lv_arclabel_set_text(p->lbl2, text);
+    p->mid_deg = text[0] ? px_to_deg(mid_px, pill_outer_r() - p->width / 2.0f) : 0;
+    pill_layout(p);
 }
 
 static void pill_set_text(pill_t *p, const char *text)
@@ -398,6 +436,20 @@ static void draw_time_icon(lv_layer_t *layer)
     }
 }
 
+// The wave icon between the tide and the waves in the tide bubble.
+static void draw_tide_wave_icon(lv_layer_t *layer)
+{
+    const pill_t *p = &s_pills[PILL_TIDE];
+    if (p->hidden || !p->text2[0]) return;
+    float rm = pill_outer_r() - p->width / 2.0f, a = p->mid_angle * (float)M_PI / 180;
+    int32_t cx = (int32_t)lroundf(UI_CENTER + rm * cosf(a)), cy = (int32_t)lroundf(UI_CENTER + rm * sinf(a));
+    lv_draw_image_dsc_t d;
+    lv_draw_image_dsc_init(&d);
+    d.src = &s_wave_img;
+    lv_area_t area = {cx - WAVE_ICON_PX / 2, cy - WAVE_ICON_PX / 2, cx + WAVE_ICON_PX / 2 - 1, cy + WAVE_ICON_PX / 2 - 1};
+    lv_draw_image(layer, &d, &area);
+}
+
 // Works out what the map shows from the latest weather and the time.
 static void update_weather(void)
 {
@@ -444,13 +496,22 @@ static void update_weather(void)
         s_wx.wind_mph = w->buoy.wind_mph.v;
         s_wx.gust_mph = w->buoy.gust_mph.ok ? w->buoy.gust_mph.v : 0;
     }
+    // Waves: the triangle if the buoy gives their direction; if it only gives
+    // height and period, those go in the tide bubble instead.
     const buoy_t *bu = &w->buoy;
-    s_wx.wave_on = w->have_buoy && bu->wave_ft.ok && bu->wave_dir.ok && now - bu->wave_ft.when < WAVE_STALE_S;
-    if (s_wx.wave_on) {
-        s_wx.wave_dir = bu->wave_dir.v;
-        s_wx.wave_ft = bu->wave_ft.v;
-        s_wx.wave_s = bu->dom_period_s.ok ? bu->dom_period_s.v : 0;
+    bool height = w->have_buoy && bu->wave_ft.ok && now - bu->wave_ft.when < WAVE_STALE_S;
+    bool dir = height && bu->wave_dir.ok && now - bu->wave_dir.when < WAVE_STALE_S;
+    bool period = height && bu->dom_period_s.ok && now - bu->dom_period_s.when < WAVE_STALE_S;
+    s_wx.wave_on = dir;
+    s_wx.wave_dir = bu->wave_dir.v;
+    s_wx.wave_ft = bu->wave_ft.v;
+    s_wx.wave_s = period ? bu->dom_period_s.v : 0;
+    char waves[32] = "";
+    if (height && !dir) {
+        if (period) snprintf(waves, sizeof(waves), "%.1f ft  %.0f s", bu->wave_ft.v, bu->dom_period_s.v);
+        else snprintf(waves, sizeof(waves), "%.1f ft", bu->wave_ft.v);
     }
+    pill_set_text2(&s_pills[PILL_TIDE], waves, WAVE_ICON_GAP * 2 + WAVE_ICON_PX);
     if (s_overlay) lv_obj_invalidate(s_overlay);
 }
 
@@ -905,6 +966,7 @@ static void overlay_draw_cb(lv_event_t *e)
     draw_wind(layer);
     draw_pills(layer);
     draw_time_icon(layer);
+    draw_tide_wave_icon(layer);
 }
 
 static void set_pressed_pill(pill_t *hit)
@@ -1098,6 +1160,14 @@ lv_obj_t *ui_map_create(void)
         .data = (const uint8_t *)s_wx_argb,
     };
 
+    wx_wave_render(s_wave_argb, WAVE_ICON_PX);
+    s_wave_img = (lv_image_dsc_t){
+        .header = {.magic = LV_IMAGE_HEADER_MAGIC, .cf = LV_COLOR_FORMAT_ARGB8888, .w = WAVE_ICON_PX, .h = WAVE_ICON_PX,
+                   .stride = WAVE_ICON_PX * 4},
+        .data_size = sizeof(s_wave_argb),
+        .data = (const uint8_t *)s_wave_argb,
+    };
+
     s_scr = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(s_scr, lv_color_hex(0x16324f), 0);
     lv_obj_set_scrollable(s_scr, false);
@@ -1135,6 +1205,7 @@ lv_obj_t *ui_map_create(void)
     // Pills around the edge. Angles: 0 = 3 o'clock, increasing clockwise.
     pill_create(&s_pills[PILL_TIME], &lv_font_montserrat_28, 270, 0, LV_ARCLABEL_DIR_CLOCKWISE, ui_weather_open);
     pill_create(&s_pills[PILL_TIDE], &lv_font_montserrat_24, 90, 0, LV_ARCLABEL_DIR_COUNTER_CLOCKWISE, ui_tide_open);
+    s_pills[PILL_TIDE].lbl2 = pill_label(&s_pills[PILL_TIDE], &lv_font_montserrat_24, 90, LV_ARCLABEL_DIR_COUNTER_CLOCKWISE);
     pill_create(&s_pills[PILL_STATUS], &lv_font_montserrat_24, 180, 0, LV_ARCLABEL_DIR_CLOCKWISE, ui_vessels_open);
     // Zoom on the right edge: + above the current radius, - below.
     pill_create(&s_pills[PILL_ZOOM_IN], &lv_font_montserrat_28, -21, 9, LV_ARCLABEL_DIR_CLOCKWISE, zoom_in);

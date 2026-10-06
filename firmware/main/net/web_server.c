@@ -411,7 +411,9 @@ static void add_weather(cJSON *root)
         cJSON_AddNumberToObject(b, "latest", (double)bu->latest);
         if (bu->wave_ft.ok) cJSON_AddNumberToObject(b, "wave_ft", bu->wave_ft.v);
         if (bu->dom_period_s.ok) cJSON_AddNumberToObject(b, "period_s", bu->dom_period_s.v);
+        if (bu->dom_period_s.ok) cJSON_AddNumberToObject(b, "period_when", (double)bu->dom_period_s.when);
         if (bu->wave_dir.ok) cJSON_AddNumberToObject(b, "wave_dir", bu->wave_dir.v);
+        if (bu->wave_dir.ok) cJSON_AddNumberToObject(b, "dir_when", (double)bu->wave_dir.when);
         if (bu->wave_ft.ok) cJSON_AddNumberToObject(b, "wave_when", (double)bu->wave_ft.when);
         if (bu->water_f.ok) cJSON_AddNumberToObject(b, "water_f", bu->water_f.v);
     }

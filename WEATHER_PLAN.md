@@ -207,6 +207,10 @@ Each source gets a row in the web page's status table, such as "Marine forecast:
   - **Expiry:** an alert that expires or is cancelled closes its popup.
   - **Dismissals are kept in memory only,** so an alert still active after a restart pops up once more.
   - **Preview:** `alert_popup.png`, then `map.png` after tapping the ✕.
+- **Waves without a direction (2026-10-06):** many buoys measure wave height and period but not direction. 44029, Massachusetts Bay, is one: `MWD` is always `MM`. Before this change, no wave marker was shown at all for such a buoy.
+  - **On the map:** the triangle still needs a direction. Without one, the height and period go at the end of the tide bubble after a small blue wave icon, such as "… 0.3 ft 〰 3.0 ft 9 s". The tide bubble now has an optional second label for this.
+  - **Status page:** the buoy row turns amber and names what's missing (height, period or direction) when the buoy doesn't report it or hasn't in 3 hours.
+  - **Preview:** `map_weather_no_wave_dir.png`.
 - **Step 6:** not started.
 
 ## Decisions

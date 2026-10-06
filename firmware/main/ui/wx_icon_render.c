@@ -181,3 +181,32 @@ void wx_icon_render(const wx_icon_t *ic, bool grey, uint32_t *argb, int size)
         }
     }
 }
+
+// Distance to y = y0 + a sin(k x), roughly: the vertical gap over the slope.
+static float sd_wave(float x, float y, float y0, float a, float k, float h)
+{
+    float d = y - (y0 + a * sinf(k * x));
+    float slope = a * k * cosf(k * x);
+    return fabsf(d) / sqrtf(1 + slope * slope) - h;
+}
+
+void wx_wave_render(uint32_t *argb, int size)
+{
+    const float k = 2 * PI_F * 1.5f; // one and a half waves across
+    for (int py = 0; py < size; py++) {
+        for (int pxl = 0; pxl < size; pxl++) {
+            float a = 0;
+            for (int sy = 0; sy < SS; sy++) {
+                for (int sx = 0; sx < SS; sx++) {
+                    float x = (pxl + (sx + 0.5f) / SS) / size, y = (py + (sy + 0.5f) / SS) / size;
+                    bool in = x > 0.06f && x < 0.94f &&
+                              (sd_wave(x, y, 0.36f, 0.09f, k, 0.06f) < 0 || sd_wave(x, y, 0.66f, 0.09f, k, 0.06f) < 0);
+                    a += in;
+                }
+            }
+            a /= SS * SS;
+            argb[py * size + pxl] = a > 0 ? (uint32_t)(a * 255 + 0.5f) << 24 | RAIN : 0;
+        }
+    }
+}
+

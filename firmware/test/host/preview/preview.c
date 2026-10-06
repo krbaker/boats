@@ -106,7 +106,9 @@ static void set_weather(int scenario)
     s_wx.have_forecast = t && mf_parse(t, &s_wx.forecast);
     t = fixture("nws_alerts_marine.json");
     s_wx.nalerts = t ? wx_parse_alerts(t, s_wx.alerts, WX_MAX_ALERTS) : 0;
-    if (s_wx.nalerts > 0) s_wx.alerts[0].ends = now + 3 * 3600;
+    static time_t alert_ends; // the same in every scene, or each would be a "new" alert and pop up again
+    if (!alert_ends) alert_ends = now + 3 * 3600;
+    if (s_wx.nalerts > 0) s_wx.alerts[0].ends = alert_ends;
     t = fixture("ndbc_46088.txt");
     buoy_t real;
     if (t && buoy_parse(t, &real)) {
@@ -145,6 +147,12 @@ static void set_weather(int scenario)
         b->dom_period_s = (buoy_val_t){true, 5, now - 1200};
         s_wx.obs.cloud = CLOUD_OVERCAST;
         s_wx.obs.precip = PRECIP_RAIN;
+    } else if (scenario == 3) { // a buoy that measures no wave direction (like 44029): waves in the tide bubble
+        c->wind_avg10_mph = 11, c->gust10_mph = 15, c->wind_dir_avg10 = 60;
+        b->wave_ft = (buoy_val_t){true, 2.95f, now - 1200};
+        b->dom_period_s = (buoy_val_t){true, 9, now - 1200};
+        b->wave_dir.ok = false;
+        s_wx.obs.cloud = CLOUD_CLEAR;
     } else { // calm, waves from the south (behind the tide bubble)
         c->wind_avg10_mph = 0.4f, c->gust10_mph = 2, c->wind_dir_avg10 = 200;
         b->wave_ft = (buoy_val_t){true, 0.7f, now - 1200};
@@ -548,5 +556,8 @@ int main(int argc, char **argv)
     set_weather(2);
     run_ms(1100);
     snap("map_weather_calm");
+    set_weather(3);
+    run_ms(1100);
+    snap("map_weather_no_wave_dir");
     return 0;
 }
