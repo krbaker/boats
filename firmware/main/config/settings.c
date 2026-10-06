@@ -136,6 +136,7 @@ esp_err_t settings_init(void)
         get_fwd(h, s_settings.fwd);
         get_str(h, "wx_zone", s_settings.wx_zone, sizeof(s_settings.wx_zone));
         get_str(h, "wx_buoy", s_settings.wx_buoy, sizeof(s_settings.wx_buoy));
+        get_str(h, "wx_obs", s_settings.wx_obs, sizeof(s_settings.wx_obs));
         get_str(h, "wl_key", s_settings.wl_key, sizeof(s_settings.wl_key));
         nvs_get_u32(h, "wl_station", &s_settings.wl_station);
         nvs_get_u8(h, "wl_tx", &s_settings.wl_tx);
@@ -190,6 +191,7 @@ esp_err_t settings_set(const settings_t *in)
     set_fwd(h, in->fwd);
     nvs_set_str(h, "wx_zone", in->wx_zone);
     nvs_set_str(h, "wx_buoy", in->wx_buoy);
+    nvs_set_str(h, "wx_obs", in->wx_obs);
     nvs_set_str(h, "wl_key", in->wl_key);
     nvs_set_u32(h, "wl_station", in->wl_station);
     nvs_set_u8(h, "wl_tx", in->wl_tx);
@@ -211,7 +213,8 @@ esp_err_t settings_set(const settings_t *in)
     for (int i = 0; i < FWD_DEST_MAX; i++) {
         if (!fwd_equal(&old.fwd[i], &in->fwd[i])) bits |= SETTINGS_EV_FWD;
     }
-    if (strcmp(old.wx_zone, in->wx_zone) || strcmp(old.wx_buoy, in->wx_buoy) || strcmp(old.wl_key, in->wl_key) ||
+    if (strcmp(old.wx_zone, in->wx_zone) || strcmp(old.wx_buoy, in->wx_buoy) || strcmp(old.wx_obs, in->wx_obs) ||
+        strcmp(old.wl_key, in->wl_key) ||
         old.wl_station != in->wl_station || old.wl_tx != in->wl_tx) {
         bits |= SETTINGS_EV_WEATHER;
     }

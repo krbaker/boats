@@ -119,6 +119,7 @@ In the "Tides & time" section, renamed **"Tides, weather & time"**:
 | **WeatherLink API key** and **API secret** | (from weatherlink.com → Account → API Key v2) | The secret is stored like the Wi-Fi password, and never sent back to the page |
 | **WeatherLink station and transmitter** | The Live, transmitter 6 | Picked from the list the display fetches with your key |
 | **NDBC buoy** | `46088` | Letters and digits, up to 7 characters |
+| **NWS observation station** (the icon's sky) | `KBOS`, or empty | Letters and digits. Empty means automatic: the station nearest the chart's centre |
 
 Each source gets a row in the web page's status table, such as "Marine forecast: issued 1:33 PM", "Buoy 46088: 10 min ago" or "WeatherLink: API key or secret rejected". Each is optional. A source that isn't set is left out of the icon, the markers and the overlay, and the matching tab says how to set it.
 
@@ -176,6 +177,7 @@ Each source gets a row in the web page's status table, such as "Marine forecast:
     - the `near_shore/` and `offshore/` folders, using zones LEZ142, PZZ835 and ANZ800;
     - `?limit=1` on the NWS station list, which gives KBFI.
   - **Status:** `/api/status` has a `weather` object with each source's state, error, fetch time and a summary. The web page's status table has a row for each source that's set up: marine forecast (with any headlines), alerts (red when one flags), buoy, weather station, and sky (the NWS station).
+- **NWS station, configurable (2026-10-06):** a new `wx_obs` setting. Empty keeps the automatic choice, the nearest station to the chart's centre (KBVY for yours). An ID such as KBOS overrides it. The status row shows the station, with ", nearest" when it was chosen automatically. An unknown ID shows "no such NWS station, or it isn't reporting" (NWS answers 404).
 - **Steps 4–6:** not started.
 
 ## Decisions

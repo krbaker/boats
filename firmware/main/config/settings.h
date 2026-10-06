@@ -56,6 +56,7 @@ typedef struct {
     // Weather (WEATHER_PLAN.md). Empty / 0 = not used.
     char wx_zone[8];         // NOAA marine forecast zone, e.g. "PZZ135"
     char wx_buoy[8];         // NDBC buoy, e.g. "46088"
+    char wx_obs[8];          // NWS observation station for the sky, e.g. "KBVY"; empty = nearest to the chart's centre
     char wl_key[48];         // WeatherLink v2 API key (the secret is kept apart: settings_get_wl_secret)
     uint32_t wl_station;     // WeatherLink station id
     uint8_t wl_tx;           // that station's outdoor sensor suite (transmitter id)

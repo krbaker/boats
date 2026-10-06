@@ -98,6 +98,7 @@ static esp_err_t config_get(httpd_req_t *req)
     cJSON_AddBoolToObject(o, "sdr_bias_tee", cfg.sdr_bias_tee);
     cJSON_AddStringToObject(o, "wx_zone", cfg.wx_zone);
     cJSON_AddStringToObject(o, "wx_buoy", cfg.wx_buoy);
+    cJSON_AddStringToObject(o, "wx_obs", cfg.wx_obs);
     cJSON_AddStringToObject(o, "wl_key", cfg.wl_key);
     cJSON_AddNumberToObject(o, "wl_station", cfg.wl_station);
     cJSON_AddNumberToObject(o, "wl_tx", cfg.wl_tx);
@@ -254,6 +255,8 @@ static esp_err_t config_post(httpd_req_t *req)
     if (!valid_zone(cfg.wx_zone)) bad = "wx_zone";
     get_str_field(root, "wx_buoy", cfg.wx_buoy, sizeof(cfg.wx_buoy), &bad);
     if (!alnum_field(cfg.wx_buoy, sizeof(cfg.wx_buoy))) bad = "wx_buoy";
+    get_str_field(root, "wx_obs", cfg.wx_obs, sizeof(cfg.wx_obs), &bad);
+    if (!alnum_field(cfg.wx_obs, sizeof(cfg.wx_obs))) bad = "wx_obs";
     get_str_field(root, "wl_key", cfg.wl_key, sizeof(cfg.wl_key), &bad);
     if (!alnum_field(cfg.wl_key, sizeof(cfg.wl_key))) bad = "wl_key";
     if ((v = cJSON_GetObjectItem(root, "wl_station"))) {
@@ -433,6 +436,7 @@ static void add_weather(cJSON *root)
     cJSON *o = add_source(wj, "obs", &w->obs_src);
     if (w->have_obs) {
         cJSON_AddStringToObject(o, "station", w->obs_station);
+        cJSON_AddBoolToObject(o, "auto", w->obs_auto);
         cJSON_AddNumberToObject(o, "when", (double)w->obs.when);
         cJSON_AddStringToObject(o, "text", w->obs.text);
     }

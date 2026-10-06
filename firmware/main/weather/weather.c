@@ -46,7 +46,7 @@ static EventGroupHandle_t s_events;
 typedef enum { SRC_FORECAST, SRC_ALERTS, SRC_BUOY, SRC_STATION, SRC_OBS, SRC_COUNT } src_t;
 static time_t s_due[SRC_COUNT];
 static char s_forecast_dir[16] = "coastal";     // where the zone's forecast was found
-static char s_obs_station[16];                  // nearest NWS station, for the chart's centre
+static char s_obs_station[16];                  // nearest NWS station to the chart's centre (automatic)
 static double s_obs_lat = 999, s_obs_lon = 999;
 static char s_station_name[48];
 static uint32_t s_station_named;                // the WeatherLink station s_station_name is for
@@ -274,13 +274,15 @@ static void fetch_station(const settings_t *cfg)
     s_due[SRC_STATION] = time(NULL) + STATION_EVERY_S;
 }
 
-// The nearest NWS observation station to the chart's centre, looked up once
-// per centre; then its latest observation, for the icon's cloud and rain/snow.
+// The latest observation from the NWS station set on the web page, or if none
+// is set, from the nearest one to the chart's centre (looked up once per
+// centre). It gives the icon's cloud and rain/snow.
 static void fetch_obs(const settings_t *cfg)
 {
     char url[160], err[64];
     int status;
-    if (!s_obs_station[0] || cfg->center_lat != s_obs_lat || cfg->center_lon != s_obs_lon) {
+    bool automatic = !cfg->wx_obs[0];
+    if (automatic && (!s_obs_station[0] || cfg->center_lat != s_obs_lat || cfg->center_lon != s_obs_lon)) {
         snprintf(url, sizeof(url), "https://api.weather.gov/points/%.4f,%.4f", cfg->center_lat, cfg->center_lon);
         char *body = http_get(url, &status, err, sizeof(err));
         char list[128] = "";
@@ -297,16 +299,18 @@ static void fetch_obs(const settings_t *cfg)
         s_obs_lon = cfg->center_lon;
         ESP_LOGI(TAG, "nearest NWS station: %s", s_obs_station);
     }
-    snprintf(url, sizeof(url), "https://api.weather.gov/stations/%s/observations/latest", s_obs_station);
+    const char *station = automatic ? s_obs_station : cfg->wx_obs;
+    snprintf(url, sizeof(url), "https://api.weather.gov/stations/%s/observations/latest", station);
     char *body = http_get(url, &status, err, sizeof(err));
-    if (!body) return failed(SRC_OBS, "NWS observation", err);
+    if (!body) return failed(SRC_OBS, "NWS observation", status == 404 ? "no such NWS station, or it isn't reporting" : err);
     wx_obs_t o;
     bool ok = wx_parse_observation(body, &o);
     free(body);
     if (!ok) return failed(SRC_OBS, "NWS observation", "couldn't read the observation");
     lock();
     s_data->obs = o;
-    snprintf(s_data->obs_station, sizeof(s_data->obs_station), "%s", s_obs_station);
+    snprintf(s_data->obs_station, sizeof(s_data->obs_station), "%s", station);
+    s_data->obs_auto = automatic;
     s_data->have_obs = true;
     unlock();
     set_state(SRC_OBS, WX_OK, NULL);
@@ -342,6 +346,7 @@ static void reset(const settings_t *cfg)
     }
     if (strcmp(d->buoy_id, cfg->wx_buoy) != 0) d->have_buoy = false;
     if (!configured(cfg, SRC_STATION)) d->have_station = false;
+    if (cfg->wx_obs[0] ? strcmp(d->obs_station, cfg->wx_obs) != 0 : !d->obs_auto) d->have_obs = false;
     for (int s = 0; s < SRC_COUNT; s++) {
         wx_source_t *src = source(d, s);
         src->state = configured(cfg, s) ? WX_WAITING : WX_OFF;

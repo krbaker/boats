@@ -88,6 +88,11 @@
     <div class="hint">Find your zone on the <a href="https://www.weather.gov/marine" target="_blank" rel="noopener">NWS marine
       forecast map</a> (it looks like PZZ135), and a buoy that reports waves on
       <a href="https://www.ndbc.noaa.gov/" target="_blank" rel="noopener">ndbc.noaa.gov</a>. Leave either empty to go without.</div>
+    <label for="wx_obs">NWS observation station (sky: cloud, rain, snow)</label>
+    <input id="wx_obs" placeholder="automatic: the nearest to the chart's centre" maxlength="7" autocapitalize="characters" spellcheck="false">
+    <div class="hint">Leave empty to use the station nearest the chart's centre, or enter one, such as KBOS. Station IDs are
+      on <a href="https://www.weather.gov/" target="_blank" rel="noopener">weather.gov</a> under a place's current
+      conditions.</div>
     <label>WeatherLink (current weather from a Davis station)</label>
     <div class="row">
       <div><label for="wl_key">API key (v2)</label>
@@ -283,7 +288,7 @@ function showConfig(c) {
   if (c.retransmit) showFwd(c.retransmit);
   if ("wl_key" in c) showWlChoice(c);
   for (const k of ["ais_host", "ais_port", "tide_station", "center_lat", "center_lon", "brightness", "tz_posix",
-                   "wx_zone", "wx_buoy", "wl_key"]) {
+                   "wx_zone", "wx_buoy", "wx_obs", "wl_key"]) {
     if (document.activeElement !== $(k)) $(k).value = c[k] ?? "";
   }
   if (c.ais_port === 0) $("ais_port").value = "";
@@ -445,6 +450,8 @@ function saveTideTz() {
   const body = { tide_station: fieldValue("tide_station"), brightness: fieldValue("brightness") };
   body.wx_zone = $("wx_zone").value.trim().toUpperCase();
   body.wx_buoy = $("wx_buoy").value.trim().toUpperCase();
+  body.wx_obs = $("wx_obs").value.trim().toUpperCase();
+  if (body.wx_obs && !/^[A-Z0-9]{3,7}$/.test(body.wx_obs)) return setMsg("tide_msg", "An NWS station ID is letters and digits, such as KBOS.", "bad");
   if (body.wx_zone && !/^[A-Z]{2}Z\d{3}$/.test(body.wx_zone)) return setMsg("tide_msg", "A marine zone looks like PZZ135: two letters, Z, three digits.", "bad");
   if (body.wx_buoy && !/^[A-Z0-9]{1,7}$/.test(body.wx_buoy)) return setMsg("tide_msg", "A buoy ID is letters and digits, such as 46088.", "bad");
   body.wl_key = $("wl_key").value.trim();
@@ -713,7 +720,7 @@ function weatherRows(w, now) {
   const o = w.obs;
   if (o.state !== "off") {
     const t = o.station ? `${esc(o.text || "no description")}, ${age(o.when)}` : "";
-    html += row("Sky" + (o.station ? ` (NWS ${esc(o.station)})` : ""), fail(o, t), cls(o));
+    html += row("Sky" + (o.station ? ` (NWS ${esc(o.station)}${o.auto ? ", nearest" : ""})` : ""), fail(o, t), cls(o));
   }
   return html;
 }
