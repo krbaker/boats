@@ -44,6 +44,7 @@ typedef struct {
 
     bool have_obs;
     char obs_station[16];       // "KBFI"
+    bool obs_auto;              // found as the nearest to the chart's centre, not set by hand
     wx_obs_t obs;
 } weather_data_t;
 
