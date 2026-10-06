@@ -18,7 +18,9 @@
 #include "tide.h"
 #include "ui.h"
 #include "vessel_db.h"
+#include "weather.h"
 #include "wifi_mgr.h"
+#include "wx_icon_render.h"
 
 #define PILL_EDGE_GAP   4       // px between the pills and the edge of the screen
 #define PILL_PAD_DEG    4       // extra arc either side of a pill's text
@@ -39,6 +41,25 @@
 #define DRAG_SLOP_PX    10      // finger movement before a touch becomes a drag
 #define DEFAULT_PAN_NM  10.0f   // pan limit when there is no chart
 #define TILE_POLL_MS    40
+
+// Weather on the map (WEATHER_PLAN.md).
+#define WX_ICON_PX      36      // the icon in the time bubble
+#define WX_ICON_GAP_PX  8       // between the time and the icon
+#define WX_ALERT_PX     14      // room for the red "!"
+#define WX_STALE_S      (3 * 3600)  // weather older than this greys the icon
+#define WIND_STALE_S    3600    // the wind arrow goes after an hour without a reading
+#define WAVE_STALE_S    (3 * 3600)
+#define GUST_SHOW_MPH   10      // show the gust when it's this far above the average
+#define WIND_TAIL_R     356     // px from the centre: the wind arrow, just inside the bubbles...
+#define WIND_HEAD_R     302
+#define WIND_TIP_R      264
+#define WIND_SHAFT_W    48
+#define WIND_HEAD_W     78
+#define WAVE_BASE_R     256     // ...and the wave triangle just inside that
+#define WAVE_TIP_R      176
+#define WAVE_BASE_W     112
+#define WIND_COLOR      lv_color_hex(0xF5D33F)
+#define WAVE_COLOR      lv_color_hex(0x3FA7F5)
 
 // Zoom levels when there is no chart.
 static const float k_default_radii[] = {0.5f, 1.0f, 2.0f, 4.0f, 10.0f};
@@ -82,6 +103,7 @@ typedef struct {
     float span;             // degrees covered by the text (plus padding); caps extend beyond
     int16_t width;          // radial thickness, px
     bool hidden, pressed, disabled;
+    float icon_deg;         // room after the text for an icon (the weather in the time bubble)
     void (*on_tap)(void);
 } pill_t;
 
@@ -107,6 +129,19 @@ static vessel_filter_t s_filter;
 static int s_zoom;
 static view_t s_view;
 static EventGroupHandle_t s_ev;
+
+// What the weather shows on the map, worked out from weather_get() once a
+// second when it changes (and each minute, for sunset and the moon).
+static struct {
+    bool icon_on, grey, alert;
+    wx_icon_t icon;
+    bool wind_on;
+    float wind_dir, wind_mph, gust_mph;
+    bool wave_on;
+    float wave_dir, wave_ft, wave_s;
+} s_wx;
+static uint32_t s_wx_argb[WX_ICON_PX * WX_ICON_PX];
+static lv_image_dsc_t s_wx_img;
 
 // ---------------------------------------------------------------------------
 // Edge pills
@@ -141,14 +176,39 @@ static void pill_create(pill_t *p, const lv_font_t *font, float center, float mi
     p->lbl = a;
 }
 
+// The pill's length: its text, padding and any icon. The text sits left of
+// centre by half the icon's room, so text and icon together are centred.
+static void pill_layout(pill_t *p)
+{
+    float text_deg = (float)lv_arclabel_get_text_angle(p->lbl);
+    if (p->icon_deg) {
+        // The arclabel's own measure runs a little short of the drawn text
+        // (82 px drawn for 63 px measured, on "0.5 nm"): use the straight
+        // width too, so the icon never touches the text.
+        lv_point_t size;
+        lv_text_get_size(&size, p->text, lv_obj_get_style_text_font(p->lbl, 0), 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+        text_deg = fmaxf(text_deg, px_to_deg(size.x, pill_outer_r() - p->width / 2.0f));
+    }
+    p->span = fmaxf(p->min_span, text_deg + 2 * PILL_PAD_DEG + p->icon_deg);
+    lv_arclabel_set_angle_start(p->lbl, p->center - p->icon_deg / 2 - 60);
+    if (s_overlay) lv_obj_invalidate(s_overlay);
+}
+
 static void pill_set_text(pill_t *p, const char *text)
 {
     if (strcmp(p->text, text) == 0 && p->hidden == !text[0]) return;
     strlcpy(p->text, text, sizeof(p->text));
     lv_arclabel_set_text(p->lbl, text);
     p->hidden = !text[0];
-    p->span = fmaxf(p->min_span, (float)lv_arclabel_get_text_angle(p->lbl) + 2 * PILL_PAD_DEG);
-    if (s_overlay) lv_obj_invalidate(s_overlay);
+    pill_layout(p);
+}
+
+static void pill_set_icon_room(pill_t *p, float px)
+{
+    float deg = px ? px_to_deg(px, pill_outer_r() - p->width / 2.0f) : 0;
+    if (fabsf(deg - p->icon_deg) < 0.01f) return;
+    p->icon_deg = deg;
+    pill_layout(p);
 }
 
 static void pill_set_disabled(pill_t *p, bool disabled)
@@ -180,6 +240,218 @@ static void draw_pills(lv_layer_t *layer)
         d.opa = p->pressed && !p->disabled ? LV_OPA_80 : LV_OPA_60;
         lv_draw_arc(layer, &d);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Weather: the icon in the time bubble, the wind arrow and the wave triangle
+// ---------------------------------------------------------------------------
+
+// A point at a compass bearing (0 = north = up) and radius from the centre.
+static lv_point_precise_t at_bearing(float bearing, float r)
+{
+    float a = (bearing - 90) * (float)M_PI / 180;
+    return (lv_point_precise_t){UI_CENTER + r * cosf(a), UI_CENTER + r * sinf(a)};
+}
+
+static lv_point_precise_t offset(lv_point_precise_t p, float bearing, float side)
+{
+    // side > 0: to the right, looking in from the rim along the bearing.
+    float a = (bearing - 90) * (float)M_PI / 180;
+    return (lv_point_precise_t){p.x - side * sinf(a), p.y + side * cosf(a)};
+}
+
+static void fill_tri(lv_layer_t *layer, lv_point_precise_t a, lv_point_precise_t b, lv_point_precise_t c,
+                     lv_color_t color, lv_opa_t opa)
+{
+    lv_draw_triangle_dsc_t d;
+    lv_draw_triangle_dsc_init(&d);
+    d.p[0] = a, d.p[1] = b, d.p[2] = c;
+    d.color = color;
+    d.opa = opa;
+    lv_draw_triangle(layer, &d);
+}
+
+static void outline(lv_layer_t *layer, const lv_point_precise_t *pts, int n, lv_color_t color)
+{
+    lv_draw_line_dsc_t d;
+    lv_draw_line_dsc_init(&d);
+    d.color = color;
+    d.width = 2;
+    d.opa = LV_OPA_80;
+    d.round_start = d.round_end = 1;
+    for (int i = 0; i < n; i++) {
+        d.p1 = pts[i];
+        d.p2 = pts[(i + 1) % n];
+        lv_draw_line(layer, &d);
+    }
+}
+
+// Text centred on a point, upright, with a dark shadow so it reads on the colour.
+static void text_at(lv_layer_t *layer, const char *text, const lv_font_t *font, lv_point_precise_t c)
+{
+    lv_point_t size;
+    lv_text_get_size(&size, text, font, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+    lv_draw_label_dsc_t d;
+    lv_draw_label_dsc_init(&d);
+    d.text = text;
+    d.font = font;
+    d.align = LV_TEXT_ALIGN_CENTER;
+    int32_t x = (int32_t)lroundf(c.x) - size.x / 2, y = (int32_t)lroundf(c.y) - size.y / 2;
+    for (int i = 0; i < 2; i++) {
+        lv_area_t a = {x + (i ? 0 : 1), y + (i ? 0 : 1), x + size.x + (i ? 0 : 1), y + size.y + (i ? 0 : 1)};
+        d.color = i ? lv_color_white() : lv_color_black();
+        d.opa = i ? LV_OPA_COVER : LV_OPA_70;
+        lv_draw_label(layer, &d, &a);
+    }
+}
+
+static void draw_wind(lv_layer_t *layer)
+{
+    if (!s_wx.wind_on) return;
+    float b = s_wx.wind_dir;
+    char speed[8], gust[8] = "";
+    snprintf(speed, sizeof(speed), "%.0f", s_wx.wind_mph);
+    if (s_wx.gust_mph - s_wx.wind_mph >= GUST_SHOW_MPH) snprintf(gust, sizeof(gust), "G%.0f", s_wx.gust_mph);
+    if (s_wx.wind_mph < 1) { // calm: a small circle where the arrow would be
+        lv_draw_arc_dsc_t d;
+        lv_draw_arc_dsc_init(&d);
+        lv_point_precise_t c = at_bearing(b, (WIND_TAIL_R + WIND_HEAD_R) / 2.0f);
+        d.center = (lv_point_t){(int32_t)c.x, (int32_t)c.y};
+        d.radius = 20;
+        d.width = 20;
+        d.start_angle = 0;
+        d.end_angle = 360;
+        d.color = WIND_COLOR;
+        d.opa = LV_OPA_50;
+        lv_draw_arc(layer, &d);
+        text_at(layer, "0", &lv_font_montserrat_20, c);
+        return;
+    }
+    lv_point_precise_t tail = at_bearing(b, WIND_TAIL_R), head = at_bearing(b, WIND_HEAD_R), tip = at_bearing(b, WIND_TIP_R);
+    lv_point_precise_t pts[7] = {
+        offset(tail, b, -WIND_SHAFT_W / 2), offset(head, b, -WIND_SHAFT_W / 2), offset(head, b, -WIND_HEAD_W / 2), tip,
+        offset(head, b, WIND_HEAD_W / 2),   offset(head, b, WIND_SHAFT_W / 2),  offset(tail, b, WIND_SHAFT_W / 2),
+    };
+    // The shaft as one thick line, not two triangles: translucent triangles
+    // sharing an edge blend it twice and show a seam.
+    lv_draw_line_dsc_t shaft;
+    lv_draw_line_dsc_init(&shaft);
+    shaft.p1 = tail;
+    shaft.p2 = at_bearing(b, WIND_HEAD_R);
+    shaft.width = WIND_SHAFT_W;
+    shaft.color = WIND_COLOR;
+    shaft.opa = LV_OPA_50;
+    lv_draw_line(layer, &shaft);
+    fill_tri(layer, pts[2], pts[3], pts[4], WIND_COLOR, LV_OPA_50); // the head
+    outline(layer, pts, 7, WIND_COLOR);
+    lv_point_precise_t mid = at_bearing(b, (WIND_TAIL_R + WIND_HEAD_R) / 2.0f + 2);
+    if (gust[0]) {
+        text_at(layer, speed, &lv_font_montserrat_20, (lv_point_precise_t){mid.x, mid.y - 9});
+        text_at(layer, gust, &lv_font_montserrat_14, (lv_point_precise_t){mid.x, mid.y + 11});
+    } else {
+        text_at(layer, speed, &lv_font_montserrat_24, mid);
+    }
+}
+
+static void draw_wave(lv_layer_t *layer)
+{
+    if (!s_wx.wave_on) return;
+    float b = s_wx.wave_dir;
+    lv_point_precise_t base = at_bearing(b, WAVE_BASE_R), tip = at_bearing(b, WAVE_TIP_R);
+    lv_point_precise_t pts[3] = {offset(base, b, -WAVE_BASE_W / 2), tip, offset(base, b, WAVE_BASE_W / 2)};
+    fill_tri(layer, pts[0], pts[1], pts[2], WAVE_COLOR, LV_OPA_40);
+    outline(layer, pts, 3, WAVE_COLOR);
+    char h[12], t[8] = "";
+    snprintf(h, sizeof(h), "%.1f ft", s_wx.wave_ft);
+    if (s_wx.wave_s > 0) snprintf(t, sizeof(t), "%.0f s", s_wx.wave_s);
+    lv_point_precise_t c = at_bearing(b, WAVE_BASE_R - 26);
+    text_at(layer, h, &lv_font_montserrat_16, (lv_point_precise_t){c.x, c.y - (t[0] ? 8 : 0)});
+    if (t[0]) text_at(layer, t, &lv_font_montserrat_14, (lv_point_precise_t){c.x, c.y + 10});
+}
+
+// The icon (and "!") in the room pill_set_icon_room() left after the time.
+static void draw_time_icon(lv_layer_t *layer)
+{
+    const pill_t *p = &s_pills[PILL_TIME];
+    if (!s_wx.icon_on || p->hidden) return;
+    float rm = pill_outer_r() - p->width / 2.0f;
+    float end = p->center + p->span / 2 - PILL_PAD_DEG; // where the room ends, in screen degrees
+    float icon_mid = end - px_to_deg((s_wx.alert ? WX_ALERT_PX : 0) + WX_ICON_PX / 2.0f, rm);
+    float a = icon_mid * (float)M_PI / 180;
+    int32_t cx = (int32_t)lroundf(UI_CENTER + rm * cosf(a)), cy = (int32_t)lroundf(UI_CENTER + rm * sinf(a));
+    lv_draw_image_dsc_t d;
+    lv_draw_image_dsc_init(&d);
+    d.src = &s_wx_img;
+    lv_area_t area = {cx - WX_ICON_PX / 2, cy - WX_ICON_PX / 2, cx + WX_ICON_PX / 2 - 1, cy + WX_ICON_PX / 2 - 1};
+    lv_draw_image(layer, &d, &area);
+    if (s_wx.alert) {
+        float ea = (end - px_to_deg(WX_ALERT_PX / 2.0f, rm)) * (float)M_PI / 180;
+        lv_point_precise_t c = {UI_CENTER + rm * cosf(ea), UI_CENTER + rm * sinf(ea)};
+        lv_draw_label_dsc_t ld;
+        lv_draw_label_dsc_init(&ld);
+        ld.text = "!";
+        ld.font = &lv_font_montserrat_28;
+        ld.color = UI_COLOR_BAD;
+        ld.align = LV_TEXT_ALIGN_CENTER;
+        lv_area_t la = {(int32_t)c.x - 10, (int32_t)c.y - 15, (int32_t)c.x + 10, (int32_t)c.y + 15};
+        lv_draw_label(layer, &ld, &la);
+    }
+}
+
+// Works out what the map shows from the latest weather and the time.
+static void update_weather(void)
+{
+    static uint32_t last_gen;
+    static time_t last_min;
+    static weather_data_t *w;
+    time_t now = time(NULL);
+    if (weather_generation() == last_gen && now / 60 == last_min) return;
+    last_gen = weather_generation();
+    last_min = now / 60;
+    if (!w) w = heap_caps_malloc(sizeof(*w), MALLOC_CAP_SPIRAM);
+    if (!w || !clock_is_set()) return;
+    weather_get(w);
+    settings_t cfg;
+    settings_get(&cfg);
+
+    bool station_fresh = w->have_station && now - w->station.when < WX_STALE_S;
+    bool obs_fresh = w->have_obs && now - w->obs.when < WX_STALE_S;
+    float rain = station_fresh && w->station.has_rain ? w->station.rain_rate_in_hr : -1;
+    wx_icon_t ic;
+    wx_icon_decide(cfg.center_lat, cfg.center_lon, now, w->have_obs ? &w->obs : NULL, rain,
+                   w->alert_flag && w->alerts_src.state == WX_OK, &ic);
+    ic.moon_illum = roundf(ic.moon_illum * 50) / 50; // redraw for 2% steps, not every minute
+    bool grey = (w->have_station || w->have_obs) && !station_fresh && !obs_fresh;
+    if (!s_wx.icon_on || memcmp(&ic, &s_wx.icon, sizeof(ic)) != 0 || grey != s_wx.grey) {
+        wx_icon_render(&ic, grey, s_wx_argb, WX_ICON_PX); // drawn straight from the buffer: the image cache is off
+    }
+    s_wx.icon = ic;
+    s_wx.grey = grey;
+    s_wx.alert = ic.alert;
+    s_wx.icon_on = true;
+    pill_set_icon_room(&s_pills[PILL_TIME], WX_ICON_GAP_PX + WX_ICON_PX + (ic.alert ? WX_ALERT_PX : 0));
+
+    // Wind: the station's 10-minute average, or else the buoy's.
+    s_wx.wind_on = false;
+    if (w->have_station && w->station.has_wind && now - w->station.when < WIND_STALE_S) {
+        s_wx.wind_on = true;
+        s_wx.wind_dir = w->station.wind_dir_avg10;
+        s_wx.wind_mph = w->station.wind_avg10_mph;
+        s_wx.gust_mph = w->station.gust10_mph;
+    } else if (w->have_buoy && w->buoy.wind_mph.ok && w->buoy.wind_dir.ok && now - w->buoy.wind_mph.when < WIND_STALE_S) {
+        s_wx.wind_on = true;
+        s_wx.wind_dir = w->buoy.wind_dir.v;
+        s_wx.wind_mph = w->buoy.wind_mph.v;
+        s_wx.gust_mph = w->buoy.gust_mph.ok ? w->buoy.gust_mph.v : 0;
+    }
+    const buoy_t *bu = &w->buoy;
+    s_wx.wave_on = w->have_buoy && bu->wave_ft.ok && bu->wave_dir.ok && now - bu->wave_ft.when < WAVE_STALE_S;
+    if (s_wx.wave_on) {
+        s_wx.wave_dir = bu->wave_dir.v;
+        s_wx.wave_ft = bu->wave_ft.v;
+        s_wx.wave_s = bu->dom_period_s.ok ? bu->dom_period_s.v : 0;
+    }
+    if (s_overlay) lv_obj_invalidate(s_overlay);
 }
 
 // Tappable pill under the point, or NULL.
@@ -635,7 +907,10 @@ static void overlay_draw_cb(lv_event_t *e)
     qsort(s_placed, n, sizeof(s_placed[0]), placed_cmp);
     for (int i = 0; i < n; i++) draw_vessel(layer, &s_placed[i], now);
     draw_labels(layer, n);
+    draw_wave(layer);
+    draw_wind(layer);
     draw_pills(layer);
+    draw_time_icon(layer);
 }
 
 static void set_pressed_pill(pill_t *hit)
@@ -800,6 +1075,7 @@ static void refresh_timer_cb(lv_timer_t *t)
     s_nvessels = vessel_db_snapshot(s_vessels, VESSEL_MAX);
     if (lv_screen_active() == s_scr) lv_obj_invalidate(s_overlay);
     update_border_text();
+    update_weather();
 }
 
 static void zoom_in(void) { set_zoom(s_zoom - 1); }
@@ -820,6 +1096,13 @@ lv_obj_t *ui_map_create(void)
     s_zoom = cfg.zoom_index;
     s_filter = cfg.filter;
     bsp_display_brightness_set(cfg.brightness);
+
+    s_wx_img = (lv_image_dsc_t){
+        .header = {.magic = LV_IMAGE_HEADER_MAGIC, .cf = LV_COLOR_FORMAT_ARGB8888, .w = WX_ICON_PX, .h = WX_ICON_PX,
+                   .stride = WX_ICON_PX * 4},
+        .data_size = sizeof(s_wx_argb),
+        .data = (const uint8_t *)s_wx_argb,
+    };
 
     s_scr = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(s_scr, lv_color_hex(0x16324f), 0);

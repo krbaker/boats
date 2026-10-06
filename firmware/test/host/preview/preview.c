@@ -21,6 +21,7 @@
 #include "rx_stats.h"
 #include "sdr_probe.h"
 #include "vessel_db.h"
+#include "weather.h"
 #include "wifi_mgr.h"
 
 #ifndef M_PI
@@ -74,6 +75,49 @@ static float tide_height(time_t t)
 }
 
 bool clock_is_set(void) { return true; }
+
+// Simulated weather: set_weather() picks a scenario.
+static weather_data_t s_wx;
+static uint32_t s_wx_gen = 1;
+void weather_get(weather_data_t *out) { *out = s_wx; }
+uint32_t weather_generation(void) { return s_wx_gen; }
+const char *wx_state_str(wx_state_t s) { return s == WX_OK ? "ok" : "?"; }
+
+static void set_weather(int scenario)
+{
+    time_t now = time(NULL);
+    memset(&s_wx, 0, sizeof(s_wx));
+    s_wx.have_station = s_wx.have_buoy = s_wx.have_obs = true;
+    s_wx.alerts_src.state = WX_OK;
+    wl_current_t *c = &s_wx.station;
+    buoy_t *b = &s_wx.buoy;
+    *c = (wl_current_t){.when = now - 60, .has_wind = true, .has_temp = true, .temp_f = 57.3f, .has_rain = true};
+    b->latest = now - 1200;
+    s_wx.obs = (wx_obs_t){.when = now - 1800};
+    if (scenario == 0) { // a breezy afternoon: wind from the NW with gusts, a swell from the SW, an advisory
+        c->wind_avg10_mph = 14, c->gust10_mph = 26, c->wind_dir_avg10 = 315;
+        b->wave_ft = (buoy_val_t){true, 2.3f, now - 1200};
+        b->wave_dir = (buoy_val_t){true, 225, now - 1200};
+        b->dom_period_s = (buoy_val_t){true, 8, now - 1200};
+        s_wx.obs.cloud = CLOUD_SCATTERED;
+        s_wx.alert_flag = true;
+    } else if (scenario == 1) { // rain, wind from due north (behind the time bubble), waves from the east
+        c->wind_avg10_mph = 8, c->gust10_mph = 11, c->wind_dir_avg10 = 2;
+        c->rain_rate_in_hr = 0.08f;
+        b->wave_ft = (buoy_val_t){true, 1.2f, now - 1200};
+        b->wave_dir = (buoy_val_t){true, 95, now - 1200};
+        b->dom_period_s = (buoy_val_t){true, 5, now - 1200};
+        s_wx.obs.cloud = CLOUD_OVERCAST;
+        s_wx.obs.precip = PRECIP_RAIN;
+    } else { // calm, waves from the south (behind the tide bubble)
+        c->wind_avg10_mph = 0.4f, c->gust10_mph = 2, c->wind_dir_avg10 = 200;
+        b->wave_ft = (buoy_val_t){true, 0.7f, now - 1200};
+        b->wave_dir = (buoy_val_t){true, 180, now - 1200};
+        b->dom_period_s = (buoy_val_t){true, 3, now - 1200};
+        s_wx.obs.cloud = CLOUD_BROKEN;
+    }
+    s_wx_gen++;
+}
 
 void tide_get_status(tide_status_t *out)
 {
@@ -401,6 +445,7 @@ int main(int argc, char **argv)
     lv_indev_set_read_cb(s_indev, touch_read_cb);
 
     s_cfg.zoom_index = 2;
+    set_weather(0);
     lv_obj_t *scr = ui_map_create();
     lv_screen_load(scr);
     ui_map_on_show();
@@ -438,5 +483,17 @@ int main(int argc, char **argv)
     // Zoomed all the way out.
     for (int i = 0; i < 6; i++) tap_edge(21);
     snap("map_widest");
+
+    // Weather on the map in other conditions (the 1 s refresh picks them up).
+    s_cfg.filter = (vessel_filter_t){.mode = FILTER_HIDE_LABEL, .order = ORDER_SIZE, .include_unknown = true,
+                                     .label_name = true, .label_speed = true};
+    ui_map_set_filter(&s_cfg.filter);
+    for (int i = 0; i < 4; i++) tap_edge(-21);
+    set_weather(1);
+    run_ms(1100);
+    snap("map_weather_rain");
+    set_weather(2);
+    run_ms(1100);
+    snap("map_weather_calm");
     return 0;
 }
