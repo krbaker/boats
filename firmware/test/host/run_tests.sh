@@ -1,8 +1,8 @@
 #!/bin/sh
 # Build and run the host-side unit tests (AIS parser, AIS demodulator, geo
-# helpers, vessel cache, simulator round trip). Set AIS_CAPTURE to a .cu8 I/Q
-# capture (288 kS/s, centred on 162.000 MHz) to also run the demodulator over
-# real signals.
+# helpers, vessel cache, retransmit, simulator round trip). Set AIS_CAPTURE to
+# a .cu8 I/Q capture (288 kS/s, centred on 162.000 MHz) to also run the
+# demodulator over real signals.
 set -e
 cd "$(dirname "$0")"
 CC=${CC:-cc}
@@ -23,6 +23,11 @@ $CC $CFLAGS -I../../components/vessel_cache/include -o build/test_vessel_cache t
     ../../components/vessel_cache/vessel_cache.c -pthread
 rm -rf build/vessel_cache && mkdir -p build/vessel_cache
 build/test_vessel_cache build/vessel_cache
+# Retransmit: the real main/net/ais_fwd.c on FreeRTOS stand-ins, against local
+# UDP and TCP listeners (about 15 s: it waits out the TCP reconnect back-off).
+$CC $CFLAGS -D_DEFAULT_SOURCE -Wno-unused-parameter -Ifwd_stubs -I../../main/config -I../../main/net \
+    -o build/test_ais_fwd test_ais_fwd.c ../../main/net/ais_fwd.c -pthread
+build/test_ais_fwd 2>/dev/null
 python3 roundtrip.py
 
 # Map upload (streaming zip reader + manifest validation) against a scratch directory.

@@ -1,5 +1,6 @@
 #include "settings.h"
 
+#include <stdio.h>
 #include <string.h>
 
 #include "esp_log.h"
@@ -34,6 +35,48 @@ static void defaults(settings_t *s)
     s->net_enabled = true;
     s->sdr_enabled = true;
     s->sdr_gain = SDR_GAIN_BEST;
+}
+
+static void fwd_key(char *key, size_t cap, int i, const char *name)
+{
+    snprintf(key, cap, "fwd%d_%s", i + 1, name);
+}
+
+static void get_fwd(nvs_handle_t h, fwd_dest_t fwd[FWD_DEST_MAX])
+{
+    char key[16];
+    uint8_t u8;
+    for (int i = 0; i < FWD_DEST_MAX; i++) {
+        fwd_key(key, sizeof(key), i, "on");
+        if (nvs_get_u8(h, key, &u8) == ESP_OK) fwd[i].enabled = u8;
+        fwd_key(key, sizeof(key), i, "proto");
+        if (nvs_get_u8(h, key, &u8) == ESP_OK && u8 <= FWD_TCP) fwd[i].proto = u8;
+        fwd_key(key, sizeof(key), i, "port");
+        nvs_get_u16(h, key, &fwd[i].port);
+        fwd_key(key, sizeof(key), i, "host");
+        size_t len = sizeof(fwd[i].host);
+        if (nvs_get_str(h, key, fwd[i].host, &len) != ESP_OK) fwd[i].host[0] = '\0';
+    }
+}
+
+static void set_fwd(nvs_handle_t h, const fwd_dest_t fwd[FWD_DEST_MAX])
+{
+    char key[16];
+    for (int i = 0; i < FWD_DEST_MAX; i++) {
+        fwd_key(key, sizeof(key), i, "on");
+        nvs_set_u8(h, key, fwd[i].enabled);
+        fwd_key(key, sizeof(key), i, "proto");
+        nvs_set_u8(h, key, fwd[i].proto);
+        fwd_key(key, sizeof(key), i, "port");
+        nvs_set_u16(h, key, fwd[i].port);
+        fwd_key(key, sizeof(key), i, "host");
+        nvs_set_str(h, key, fwd[i].host);
+    }
+}
+
+static bool fwd_equal(const fwd_dest_t *a, const fwd_dest_t *b)
+{
+    return a->enabled == b->enabled && a->proto == b->proto && a->port == b->port && strcmp(a->host, b->host) == 0;
 }
 
 // Old firmware stored fewer filter fields: only accept a blob of exactly the current size.
@@ -90,6 +133,7 @@ esp_err_t settings_init(void)
         if (nvs_get_u8(h, "sdr_bias", &u8) == ESP_OK) s_settings.sdr_bias_tee = u8;
         nvs_get_i16(h, "sdr_gain", &s_settings.sdr_gain);
         nvs_get_i16(h, "sdr_ppm", &s_settings.sdr_ppm_tenths);
+        get_fwd(h, s_settings.fwd);
         nvs_close(h);
     }
     ESP_LOGI(TAG, "AIS %s:%u tide %s tz %s centre %.5f,%.5f", s_settings.ais_host, s_settings.ais_port,
@@ -138,6 +182,7 @@ esp_err_t settings_set(const settings_t *in)
     nvs_set_u8(h, "sdr_bias", in->sdr_bias_tee);
     nvs_set_i16(h, "sdr_gain", in->sdr_gain);
     nvs_set_i16(h, "sdr_ppm", in->sdr_ppm_tenths);
+    set_fwd(h, in->fwd);
     err = nvs_commit(h);
     nvs_close(h);
 
@@ -153,6 +198,9 @@ esp_err_t settings_set(const settings_t *in)
     if (strcmp(old.tz_posix, in->tz_posix)) bits |= SETTINGS_EV_TZ;
     if (old.center_lat != in->center_lat || old.center_lon != in->center_lon) bits |= SETTINGS_EV_CENTER;
     if (old.brightness != in->brightness) bits |= SETTINGS_EV_DISPLAY;
+    for (int i = 0; i < FWD_DEST_MAX; i++) {
+        if (!fwd_equal(&old.fwd[i], &in->fwd[i])) bits |= SETTINGS_EV_FWD;
+    }
     notify(bits);
     return err;
 }

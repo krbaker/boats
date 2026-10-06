@@ -3,6 +3,7 @@
 #include "bsp/esp-bsp.h"
 #include "esp_log.h"
 
+#include "ais_fwd.h"
 #include "fw_update.h"
 
 #include "map_tiles.h"
@@ -53,6 +54,7 @@ void app_main(void)
     wifi_mgr_start();
     tide_start();
     nmea_client_start();
+    ais_fwd_start();
     map_tiles_init();
     web_server_start();
 #if CONFIG_AIS_SDR_PROBE

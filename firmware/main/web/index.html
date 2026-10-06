@@ -164,6 +164,17 @@
       · <a href="/api/sdr/capture.nmea" download>Download the NMEA log</a>
       <span class="hint">(network feed and SDR decoder sentences heard while recording)</span></div>
   </section>
+
+  <section>
+    <h2>Retransmit</h2>
+    <div class="hint">Sends what the dongle decodes on to up to three places, as standard <code>!AIVDM</code>
+      sentences: AIS sharing services (MarineTraffic, AIS Friends, aiscatcher.org each give your station an address
+      and port when you register it), or chart software such as OpenCPN. The network feed isn't sent on. TCP connects
+      to the address; UDP sends each sentence as a datagram.</div>
+    <div id="fwd_rows"></div>
+    <button onclick="saveFwd()">Save</button>
+    <div class="msg" id="fwd_msg"></div>
+  </section>
 </main>
 
 <script>
@@ -245,6 +256,7 @@ function showConfig(c) {
   }
   if ("sdr_gain" in c && document.activeElement !== $("sdr_gain")) $("sdr_gain").value = String(c.sdr_gain);
   if ("sdr_ppm" in c && document.activeElement !== $("sdr_ppm")) $("sdr_ppm").value = c.sdr_ppm;
+  if (c.retransmit) showFwd(c.retransmit);
   for (const k of ["ais_host", "ais_port", "tide_station", "center_lat", "center_lon", "brightness", "tz_posix"]) {
     if (document.activeElement !== $(k)) $(k).value = c[k] ?? "";
   }
@@ -292,6 +304,44 @@ function saveSdr() {
     return;
   }
   saveConfig(["sdr_enabled", "sdr_gain", "sdr_ppm", "sdr_bias_tee"], "sdr_cfg_msg");
+}
+
+const FWD_N = 3;
+function buildFwdRows() {
+  let html = "";
+  for (let i = 0; i < FWD_N; i++) {
+    html += `<label class="check"><input id="fwd${i}_enabled" type="checkbox"> Destination ${i + 1}</label>
+    <div class="row">
+      <div style="flex:0 1 90px"><label for="fwd${i}_proto">Protocol</label>
+        <select id="fwd${i}_proto"><option value="udp">UDP</option><option value="tcp">TCP</option></select></div>
+      <div style="flex:3 1 200px"><label for="fwd${i}_host">IP address or host name</label>
+        <input id="fwd${i}_host" type="text" maxlength="63" autocapitalize="off" spellcheck="false"></div>
+      <div style="flex:1 1 90px"><label for="fwd${i}_port">Port</label>
+        <input id="fwd${i}_port" type="number" min="1" max="65535"></div>
+    </div>`;
+  }
+  $("fwd_rows").innerHTML = html;
+}
+
+function showFwd(list) {
+  list.forEach((d, i) => {
+    const set = (k, f) => { if (document.activeElement !== $(`fwd${i}_${k}`)) f($(`fwd${i}_${k}`)); };
+    set("enabled", e => e.checked = d.enabled);
+    set("proto", e => e.value = d.proto);
+    set("host", e => e.value = d.host);
+    set("port", e => e.value = d.port || "");
+  });
+}
+
+function saveFwd() {
+  const list = [];
+  for (let i = 0; i < FWD_N; i++) {
+    const d = { enabled: $(`fwd${i}_enabled`).checked, proto: $(`fwd${i}_proto`).value,
+                host: $(`fwd${i}_host`).value.trim(), port: parseInt($(`fwd${i}_port`).value, 10) || 0 };
+    if (d.enabled && (!d.host || !d.port)) return setMsg("fwd_msg", `Destination ${i + 1}: enter an address and port before turning it on.`, "bad");
+    list.push(d);
+  }
+  postConfig({ retransmit: list }, "fwd_msg");
 }
 
 function saveTideTz() {
@@ -554,6 +604,7 @@ async function pollStatus() {
 
 fillTz();
 fillGains();
+buildFwdRows();
 loadConfig().catch(e => setMsg("ais_msg", "Could not load settings: " + e.message, "bad"));
 pollStatus();
 setInterval(pollStatus, 3000);

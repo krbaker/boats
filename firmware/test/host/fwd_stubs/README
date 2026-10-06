@@ -1,0 +1,4 @@
+Minimal host stand-ins for the ESP-IDF and FreeRTOS calls main/net/ais_fwd.c
+makes, so test_ais_fwd.c can run it on a PC against real local sockets.
+Tasks are pthreads, mutexes are pthread mutexes, and the ring buffer is a
+small locked queue.

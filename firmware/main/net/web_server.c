@@ -1,5 +1,6 @@
 #include "web_server.h"
 
+#include <ctype.h>
 #include <math.h>
 #include <string.h>
 #include <sys/param.h>
@@ -92,6 +93,15 @@ static esp_err_t config_get(httpd_req_t *req)
     cJSON_AddNumberToObject(o, "sdr_gain", cfg.sdr_gain);  // tenths of a dB, -1 tuner AGC, -2 best fixed
     cJSON_AddNumberToObject(o, "sdr_ppm", cfg.sdr_ppm_tenths / 10.0);
     cJSON_AddBoolToObject(o, "sdr_bias_tee", cfg.sdr_bias_tee);
+    cJSON *fa = cJSON_AddArrayToObject(o, "retransmit");
+    for (int i = 0; i < FWD_DEST_MAX; i++) {
+        cJSON *d = cJSON_CreateObject();
+        cJSON_AddBoolToObject(d, "enabled", cfg.fwd[i].enabled);
+        cJSON_AddStringToObject(d, "proto", cfg.fwd[i].proto == FWD_TCP ? "tcp" : "udp");
+        cJSON_AddStringToObject(d, "host", cfg.fwd[i].host);
+        cJSON_AddNumberToObject(d, "port", cfg.fwd[i].port);
+        cJSON_AddItemToArray(fa, d);
+    }
     return send_json(req, o);
 }
 
@@ -105,6 +115,57 @@ static bool get_str_field(cJSON *root, const char *key, char *dst, size_t cap, c
     }
     strcpy(dst, v->valuestring);
     return true;
+}
+
+// A host name or IPv4 address: letters, digits, dots and hyphens.
+static bool valid_host(const char *h)
+{
+    for (; *h; h++) {
+        if (!isalnum((unsigned char)*h) && *h != '.' && *h != '-') return false;
+    }
+    return true;
+}
+
+// One retransmit destination from the config page. On a bad value, writes
+// why into msg and returns false.
+static bool parse_fwd(cJSON *o, fwd_dest_t *d, int n, char *msg, size_t cap)
+{
+    if (!cJSON_IsObject(o)) {
+        snprintf(msg, cap, "invalid retransmit destination %d", n);
+        return false;
+    }
+    cJSON *v;
+    if ((v = cJSON_GetObjectItem(o, "enabled"))) {
+        if (!cJSON_IsBool(v)) goto bad;
+        d->enabled = cJSON_IsTrue(v);
+    }
+    if ((v = cJSON_GetObjectItem(o, "proto"))) {
+        if (cJSON_IsString(v) && strcmp(v->valuestring, "udp") == 0) d->proto = FWD_UDP;
+        else if (cJSON_IsString(v) && strcmp(v->valuestring, "tcp") == 0) d->proto = FWD_TCP;
+        else goto bad;
+    }
+    if ((v = cJSON_GetObjectItem(o, "host"))) {
+        if (!cJSON_IsString(v) || strlen(v->valuestring) >= sizeof(d->host) || !valid_host(v->valuestring)) {
+            snprintf(msg, cap, "destination %d: enter an IP address or host name", n);
+            return false;
+        }
+        strcpy(d->host, v->valuestring);
+    }
+    if ((v = cJSON_GetObjectItem(o, "port"))) {
+        if (!cJSON_IsNumber(v) || v->valueint < 0 || v->valueint > 65535) {
+            snprintf(msg, cap, "destination %d: the port must be 1-65535", n);
+            return false;
+        }
+        d->port = v->valueint;
+    }
+    if (d->enabled && (!d->host[0] || !d->port)) {
+        snprintf(msg, cap, "destination %d: enter an address and port before turning it on", n);
+        return false;
+    }
+    return true;
+bad:
+    snprintf(msg, cap, "invalid retransmit destination %d", n);
+    return false;
 }
 
 static esp_err_t config_post(httpd_req_t *req)
@@ -160,13 +221,20 @@ static esp_err_t config_post(httpd_req_t *req)
     for (const char *c = cfg.tide_station; *c; c++) {
         if (*c < '0' || *c > '9') bad = "tide_station";
     }
+    char msg[80] = "";
+    if ((v = cJSON_GetObjectItem(root, "retransmit"))) {
+        if (!cJSON_IsArray(v) || cJSON_GetArraySize(v) > FWD_DEST_MAX) {
+            bad = "retransmit";
+        } else {
+            for (int i = 0; i < cJSON_GetArraySize(v) && !msg[0]; i++) {
+                parse_fwd(cJSON_GetArrayItem(v, i), &cfg.fwd[i], i + 1, msg, sizeof(msg));
+            }
+        }
+    }
     cJSON_Delete(root);
 
-    if (bad) {
-        char msg[48];
-        snprintf(msg, sizeof(msg), "invalid value for %s", bad);
-        return send_error(req, "400 Bad Request", msg);
-    }
+    if (bad) snprintf(msg, sizeof(msg), "invalid value for %s", bad);
+    if (msg[0]) return send_error(req, "400 Bad Request", msg);
     settings_set(&cfg);
     return config_get(req);
 }

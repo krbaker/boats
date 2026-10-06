@@ -23,6 +23,17 @@ typedef struct {
     bool label_speed;
 } vessel_filter_t;
 
+// Where the dongle's sentences are retransmitted to (RETRANSMIT_PLAN.md).
+#define FWD_DEST_MAX 3
+typedef enum { FWD_UDP, FWD_TCP } fwd_proto_t;
+
+typedef struct {
+    bool enabled;
+    uint8_t proto;           // fwd_proto_t
+    uint16_t port;           // 0 = not set
+    char host[64];           // IP address or host name
+} fwd_dest_t;
+
 typedef struct {
     char ais_host[64];
     uint16_t ais_port;
@@ -41,6 +52,7 @@ typedef struct {
     int16_t sdr_gain;        // tuner gain in tenths of a dB, or SDR_GAIN_AUTO / SDR_GAIN_BEST
     int16_t sdr_ppm_tenths;  // dongle crystal correction, tenths of a ppm
     bool sdr_bias_tee;       // power an LNA / active antenna through the coax
+    fwd_dest_t fwd[FWD_DEST_MAX];
 } settings_t;
 
 #define SDR_GAIN_AUTO       (-1)  // the tuner's own AGC
@@ -54,6 +66,7 @@ typedef struct {
 #define SETTINGS_EV_MAP     BIT4  // a new chart set was uploaded
 #define SETTINGS_EV_DISPLAY BIT5
 #define SETTINGS_EV_SDR     BIT6
+#define SETTINGS_EV_FWD     BIT7  // a retransmit destination changed
 
 esp_err_t settings_init(void);
 

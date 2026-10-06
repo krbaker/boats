@@ -88,7 +88,7 @@ TCP feed (nmea_client) ───────────────────
     - Confirm the fixed decoder live: the firmware with the detector fix hasn't been scored on the device yet.
     - Confirm on hardware that unplugging and replugging the dongle recovers by itself.
 - **Step 5:** CPU is measured at about 60% of one core. The map hasn't been checked for stutter while decoding, and there's been no 24 h soak test yet.
-- **Step 6:** not started.
+- **Step 6:** planned in `RETRANSMIT_PLAN.md`: the dongle's sentences only, to up to three UDP or TCP destinations (no TCP server). Not started.
 
 **Best fixed gain:**
 - A sweep at plug-in picks the highest gain whose noise floor stays under −22 dBFS (about 20 dB of headroom) without clipping.
@@ -106,4 +106,4 @@ TCP feed (nmea_client) ───────────────────
 
 ## Still to decide
 
-1. Which online services do you plan to feed? Some, for example MarineTraffic, give each station its own UDP host and port; others want a station ID in each message.
+1. ~~Which online services to feed~~: MarineTraffic, AIS Friends and aiscatcher.org, each taking plain NMEA on an assigned IP and port (see `RETRANSMIT_PLAN.md`).

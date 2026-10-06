@@ -32,6 +32,7 @@
 #include "usb/usb_host.h"
 
 #include "ais_demod.h"
+#include "ais_fwd.h"
 #include "map_store.h"
 #include "r82xx.h"
 #include "rx_stats.h"
@@ -837,6 +838,7 @@ out:
 static void on_sentence(void *ctx, const char *sentence)
 {
     sdr_capture_log('S', sentence);
+    ais_fwd_sentence(sentence);
     ais_report_t r;
     ais_result_t res = ais_parse_line(&s_parser, sentence, (uint32_t)(esp_timer_get_time() / 1000), &r);
     if (res == AIS_RESULT_REPORT || res == AIS_RESULT_UNSUPPORTED) rx_stats_count(RX_SDR, rx_sentence_channel(sentence));
