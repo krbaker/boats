@@ -156,6 +156,18 @@ bool mf_parse(const char *text, marine_forecast_t *out)
 // Alerts
 // ---------------------------------------------------------------------------
 
+// NWS wraps alert text at a fixed width. Joins those lines, keeping blank
+// lines (paragraphs) and "* WHAT..." style bullets, so the screen can wrap it.
+static void unwrap(char *s)
+{
+    for (char *p = s; *p; p++) {
+        if (*p != '\n') continue;
+        bool para = p > s && p[-1] == '\n';
+        bool next_para = p[1] == '\n' || p[1] == '*' || p[1] == '\0';
+        if (!para && !next_para) *p = ' ';
+    }
+}
+
 int wx_parse_alerts(const char *json, wx_alert_t *out, int max)
 {
     cJSON *root = cJSON_Parse(json);
@@ -181,6 +193,7 @@ int wx_parse_alerts(const char *json, wx_alert_t *out, int max)
             size_t len = strlen(a->description);
             snprintf(a->description + len, sizeof(a->description) - len, "%s%s", len ? "\n\n" : "", instr->valuestring);
         }
+        unwrap(a->description);
         cJSON *ends = cJSON_GetObjectItem(p, "ends");
         a->ends = wx_parse_iso8601(cJSON_IsString(ends) ? ends->valuestring : NULL);
         if (!a->ends) {

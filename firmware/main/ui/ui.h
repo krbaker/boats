@@ -51,6 +51,8 @@ lv_obj_t *ui_vessels_create(lv_obj_t *parent);
 void ui_vessels_open(void);
 lv_obj_t *ui_tide_create(lv_obj_t *parent);
 void ui_tide_open(void);
+lv_obj_t *ui_weather_create(lv_obj_t *parent);
+void ui_weather_open(void);
 
 // Shared widgets
 lv_obj_t *ui_round_button(lv_obj_t *parent, const char *text, int32_t w, int32_t h);

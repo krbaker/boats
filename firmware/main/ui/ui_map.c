@@ -1139,7 +1139,7 @@ lv_obj_t *ui_map_create(void)
     lv_obj_set_clickable(s_msg, false);
 
     // Pills around the edge. Angles: 0 = 3 o'clock, increasing clockwise.
-    pill_create(&s_pills[PILL_TIME], &lv_font_montserrat_28, 270, 0, LV_ARCLABEL_DIR_CLOCKWISE, NULL);
+    pill_create(&s_pills[PILL_TIME], &lv_font_montserrat_28, 270, 0, LV_ARCLABEL_DIR_CLOCKWISE, ui_weather_open);
     pill_create(&s_pills[PILL_TIDE], &lv_font_montserrat_24, 90, 0, LV_ARCLABEL_DIR_COUNTER_CLOCKWISE, ui_tide_open);
     pill_create(&s_pills[PILL_STATUS], &lv_font_montserrat_24, 180, 0, LV_ARCLABEL_DIR_CLOCKWISE, ui_vessels_open);
     // Zoom on the right edge: + above the current radius, - below.
@@ -1151,6 +1151,7 @@ lv_obj_t *ui_map_create(void)
 
     ui_vessels_create(s_scr);
     ui_tide_create(s_scr);
+    ui_weather_create(s_scr);
 
     view_go_home();
     lv_timer_create(refresh_timer_cb, 1000, NULL);

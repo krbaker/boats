@@ -83,17 +83,53 @@ void weather_get(weather_data_t *out) { *out = s_wx; }
 uint32_t weather_generation(void) { return s_wx_gen; }
 const char *wx_state_str(wx_state_t s) { return s == WX_OK ? "ok" : "?"; }
 
+// A file from test/host/fixtures/weather/ (the preview runs in preview/out/).
+static char *fixture(const char *name)
+{
+    char path[160];
+    snprintf(path, sizeof(path), "../../fixtures/weather/%s", name);
+    FILE *f = fopen(path, "rb");
+    if (!f) return NULL;
+    static char buf[64 * 1024];
+    buf[fread(buf, 1, sizeof(buf) - 1, f)] = '\0';
+    fclose(f);
+    return buf;
+}
+
 static void set_weather(int scenario)
 {
     time_t now = time(NULL);
     memset(&s_wx, 0, sizeof(s_wx));
+    // The overlay's text comes from the real saved responses: the Potomac
+    // forecast and its Small Craft Advisory, and buoy 46088 (times moved to now).
+    char *t = fixture("nws_marine_ANZ535.txt");
+    s_wx.have_forecast = t && mf_parse(t, &s_wx.forecast);
+    t = fixture("nws_alerts_marine.json");
+    s_wx.nalerts = t ? wx_parse_alerts(t, s_wx.alerts, WX_MAX_ALERTS) : 0;
+    if (s_wx.nalerts > 0) s_wx.alerts[0].ends = now + 3 * 3600;
+    t = fixture("ndbc_46088.txt");
+    buoy_t real;
+    if (t && buoy_parse(t, &real)) {
+        time_t shift = now - 1200 - real.latest;
+        buoy_val_t *v = &real.wave_ft;
+        for (buoy_val_t *end = &real.dew_f; v <= end; v++) v->when += shift;
+        real.latest += shift;
+        s_wx.buoy = real;
+    }
+    snprintf(s_wx.buoy_id, sizeof(s_wx.buoy_id), "46088");
+    snprintf(s_wx.station_name, sizeof(s_wx.station_name), "Home (Live)");
+    snprintf(s_wx.obs_station, sizeof(s_wx.obs_station), "KBVY");
+    s_wx.forecast_src.state = s_wx.buoy_src.state = s_wx.station_src.state = s_wx.obs_src.state = WX_OK;
     s_wx.have_station = s_wx.have_buoy = s_wx.have_obs = true;
     s_wx.alerts_src.state = WX_OK;
     wl_current_t *c = &s_wx.station;
     buoy_t *b = &s_wx.buoy;
-    *c = (wl_current_t){.when = now - 60, .has_wind = true, .has_temp = true, .temp_f = 57.3f, .has_rain = true};
+    *c = (wl_current_t){.when = now - 60, .has_wind = true, .wind_mph = 9, .has_temp = true, .temp_f = 57.3f,
+                        .has_hum = true, .hum_pct = 51, .has_dew = true, .dew_f = 39.4f, .has_rain = true,
+                        .rain_today_in = 0.04f, .has_bar = true, .bar_inhg = 29.90f, .bar_trend_inhg = 0.08f};
     b->latest = now - 1200;
     s_wx.obs = (wx_obs_t){.when = now - 1800};
+    snprintf(s_wx.obs.text, sizeof(s_wx.obs.text), "Partly Cloudy");
     if (scenario == 0) { // a breezy afternoon: wind from the NW with gusts, a swell from the SW, an advisory
         c->wind_avg10_mph = 14, c->gust10_mph = 26, c->wind_dir_avg10 = 315;
         b->wave_ft = (buoy_val_t){true, 2.3f, now - 1200};
@@ -472,6 +508,21 @@ int main(int argc, char **argv)
 
     tap_edge(90);  // tide
     snap("tide");
+    hide_overlays(scr);
+
+    tap_edge(270); // the time -> weather overlay
+    snap("weather_forecast");
+    lv_obj_t *wtabs = NULL;
+    for (uint32_t i = 0; i < lv_obj_get_child_count(scr) && !wtabs; i++) {
+        lv_obj_t *c = lv_obj_get_child(scr, i);
+        if (!lv_obj_is_hidden(c) && lv_obj_get_width(c) == UI_SIZE) wtabs = find_class(c, &lv_tabview_class);
+    }
+    tap(400, 250); // the advisory box: expand it
+    snap("weather_alert_open");
+    lv_tabview_set_active(wtabs, 1, LV_ANIM_OFF);
+    snap("weather_waves");
+    lv_tabview_set_active(wtabs, 2, LV_ANIM_OFF);
+    snap("weather_weather");
     hide_overlays(scr);
 
     // Filters: hide small / slow vessels completely, speed priority, names only.

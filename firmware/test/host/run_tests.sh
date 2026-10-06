@@ -1,9 +1,8 @@
 #!/bin/sh
 # Build and run the host-side unit tests (AIS parser, AIS demodulator, geo
 # helpers, vessel cache, retransmit, weather parsers and icon, simulator round
-# trip). Set AIS_CAPTURE to
-# a .cu8 I/Q capture (288 kS/s, centred on 162.000 MHz) to also run the
-# demodulator over real signals.
+# trip). Set AIS_CAPTURE to a .cu8 I/Q capture (288 kS/s, centred on 162.000
+# MHz) to also run the demodulator over real signals.
 set -e
 cd "$(dirname "$0")"
 CC=${CC:-cc}

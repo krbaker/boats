@@ -157,6 +157,9 @@ static void test_alerts(void)
     CHECK(a[0].ends == utc(2026, 10, 6, 2, 0)); // 10 PM EDT
     CHECK(strncmp(a[0].description, "* WHAT...North winds 10 to 15 kt", 32) == 0);
     CHECK(strstr(a[0].description, "Inexperienced mariners") != NULL); // the instruction is appended
+    // NWS's fixed-width line breaks are joined; paragraphs stay.
+    CHECK(strstr(a[0].description, "operating smaller vessels, should avoid") != NULL);
+    CHECK(strstr(a[0].description, "20 kt.\n\n* WHERE") != NULL);
     free(j);
     // A statement is listed but doesn't flag; a cancellation is dropped.
     const char *mixed = "{\"features\":[{\"properties\":{\"status\":\"Actual\",\"messageType\":\"Alert\","

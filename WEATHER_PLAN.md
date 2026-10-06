@@ -178,7 +178,19 @@ Each source gets a row in the web page's status table, such as "Marine forecast:
     - `?limit=1` on the NWS station list, which gives KBFI.
   - **Status:** `/api/status` has a `weather` object with each source's state, error, fetch time and a summary. The web page's status table has a row for each source that's set up: marine forecast (with any headlines), alerts (red when one flags), buoy, weather station, and sky (the NWS station).
 - **NWS station, configurable (2026-10-06):** a new `wx_obs` setting. Empty keeps the automatic choice, the nearest station to the chart's centre (KBVY for yours). An ID such as KBOS overrides it. The status row shows the station, with ", nearest" when it was chosen automatically. An unknown ID shows "no such NWS station, or it isn't reporting" (NWS answers 404).
-- **Steps 4–6:** not started.
+- **Step 4 built and previewed, not yet on the display.**
+  - **Icon** (`main/ui/wx_icon_render.c`): drawn in software, 4×4 supersampled, into a 36 px ARGB image the time bubble draws. The moon's lit part is computed per pixel from the terminator, with a faint rim so a new moon still shows. Host tests (`test/host/test_wx_icon.c`) check that the lit area matches the illumination within 4% from 5% to 95%, waxing and waning, that no state touches the image's edge, and that stale means grey and see-through.
+  - **Time bubble:** it grows to make room. The time moves left by half the room, so time and icon together stay centred, and the red "!" follows the icon. The arclabel's own text measure runs short of the drawn text (63 against 82 px on "0.5 nm"), so a bubble with an icon also uses the straight text width.
+  - **Wind arrow:** translucent yellow, from 356 to 264 px from the centre. It shows the 10-minute average in mph, with the gust underneath ("G26") when it's 10 mph or more above. It falls back to the buoy's wind, is hidden after an hour without a reading, and is a small circle with "0" when calm. The shaft is one thick line, since two translucent triangles showed a seam. A very faint line remains where the shaft meets the head.
+  - **Wave triangle:** translucent blue, from 256 to 176 px, with height and period. It's hidden after 3 hours without a wave reading.
+  - **Under the bubbles:** both are drawn before the bubbles, so wind from due north tucks the arrow's tail under the time bubble.
+  - **Previews** (`test/host/preview/build.sh`):
+    - `icons.png`: every icon state, large and at display size.
+    - `map.png`: NW wind 14 G26, a SW swell 2.3 ft 8 s, an advisory.
+    - `map_weather_rain.png`: rain, wind from due north, waves from the east.
+    - `map_weather_calm.png`: calm, waves from the south.
+  - **Preview build fix:** `build.sh` lacked the vessel cache's include path, needed since `vessel_db.h` started including it.
+- **Steps 5–6:** not started.
 
 ## Decisions
 
