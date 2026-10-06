@@ -1,0 +1,34 @@
+Expires:202610060800;;599166
+FZUS51 KLWX 052357
+CWFLWX
+
+Coastal Waters Forecast
+National Weather Service Baltimore MD/Washington DC
+757 PM EDT Mon Oct 5 2026
+
+Tidal Potomac River and Maryland portion of Chesapeake Bay.
+
+Forecasts of wave heights do not include effects of wind direction
+relative to tidal currents. Expect higher waves when winds are
+blowing against the tidal flow.  Waves flat where waters are iced over.
+
+
+ANZ535-060800-
+Tidal Potomac from Key Bridge to Indian Head-
+757 PM EDT Mon Oct 5 2026
+
+...SMALL CRAFT ADVISORY IN EFFECT UNTIL 10 PM EDT THIS EVENING...
+
+.TONIGHT...N winds 5 to 10 kt. Waves 1 ft. 
+.TUE...N winds around 5 kt. Waves 1 ft. 
+.TUE NIGHT...S winds around 5 kt. Waves 1 ft or less. 
+.WED...S winds 5 to 10 kt. Waves 1 ft. 
+.WED NIGHT...S winds around 5 kt. Waves 1 ft. 
+.THU...W winds around 5 kt. Waves 1 ft. 
+.THU NIGHT...NW winds around 5 kt. Waves 1 ft. 
+.FRI...W winds around 5 kt. Waves 1 ft. 
+.SAT...E winds around 5 kt. Waves 1 ft.  
+
+$$
+
+

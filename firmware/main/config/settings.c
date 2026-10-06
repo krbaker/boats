@@ -11,7 +11,7 @@
 static const char *TAG = "settings";
 static const char *NS = "aisdisp";
 
-#define MAX_SUBSCRIBERS 6
+#define MAX_SUBSCRIBERS 8
 
 static settings_t s_settings;
 static SemaphoreHandle_t s_lock;
@@ -134,6 +134,11 @@ esp_err_t settings_init(void)
         nvs_get_i16(h, "sdr_gain", &s_settings.sdr_gain);
         nvs_get_i16(h, "sdr_ppm", &s_settings.sdr_ppm_tenths);
         get_fwd(h, s_settings.fwd);
+        get_str(h, "wx_zone", s_settings.wx_zone, sizeof(s_settings.wx_zone));
+        get_str(h, "wx_buoy", s_settings.wx_buoy, sizeof(s_settings.wx_buoy));
+        get_str(h, "wl_key", s_settings.wl_key, sizeof(s_settings.wl_key));
+        nvs_get_u32(h, "wl_station", &s_settings.wl_station);
+        nvs_get_u8(h, "wl_tx", &s_settings.wl_tx);
         nvs_close(h);
     }
     ESP_LOGI(TAG, "AIS %s:%u tide %s tz %s centre %.5f,%.5f", s_settings.ais_host, s_settings.ais_port,
@@ -183,6 +188,11 @@ esp_err_t settings_set(const settings_t *in)
     nvs_set_i16(h, "sdr_gain", in->sdr_gain);
     nvs_set_i16(h, "sdr_ppm", in->sdr_ppm_tenths);
     set_fwd(h, in->fwd);
+    nvs_set_str(h, "wx_zone", in->wx_zone);
+    nvs_set_str(h, "wx_buoy", in->wx_buoy);
+    nvs_set_str(h, "wl_key", in->wl_key);
+    nvs_set_u32(h, "wl_station", in->wl_station);
+    nvs_set_u8(h, "wl_tx", in->wl_tx);
     err = nvs_commit(h);
     nvs_close(h);
 
@@ -200,6 +210,10 @@ esp_err_t settings_set(const settings_t *in)
     if (old.brightness != in->brightness) bits |= SETTINGS_EV_DISPLAY;
     for (int i = 0; i < FWD_DEST_MAX; i++) {
         if (!fwd_equal(&old.fwd[i], &in->fwd[i])) bits |= SETTINGS_EV_FWD;
+    }
+    if (strcmp(old.wx_zone, in->wx_zone) || strcmp(old.wx_buoy, in->wx_buoy) || strcmp(old.wl_key, in->wl_key) ||
+        old.wl_station != in->wl_station || old.wl_tx != in->wl_tx) {
+        bits |= SETTINGS_EV_WEATHER;
     }
     notify(bits);
     return err;
@@ -239,5 +253,27 @@ esp_err_t settings_set_wifi(const char *ssid, const char *pass)
     nvs_set_str(h, "wifi_pass", pass);
     err = nvs_commit(h);
     nvs_close(h);
+    return err;
+}
+
+void settings_get_wl_secret(char secret[48])
+{
+    secret[0] = '\0';
+    nvs_handle_t h;
+    if (nvs_open(NS, NVS_READONLY, &h) != ESP_OK) return;
+    size_t len = 48;
+    if (nvs_get_str(h, "wl_secret", secret, &len) != ESP_OK) secret[0] = '\0';
+    nvs_close(h);
+}
+
+esp_err_t settings_set_wl_secret(const char *secret)
+{
+    nvs_handle_t h;
+    esp_err_t err = nvs_open(NS, NVS_READWRITE, &h);
+    if (err != ESP_OK) return err;
+    nvs_set_str(h, "wl_secret", secret);
+    err = nvs_commit(h);
+    nvs_close(h);
+    notify(SETTINGS_EV_WEATHER);
     return err;
 }

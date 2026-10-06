@@ -14,6 +14,7 @@
 #include "tide.h"
 #include "ui.h"
 #include "vessel_db.h"
+#include "weather.h"
 #include "web_server.h"
 #include "wifi_mgr.h"
 
@@ -53,6 +54,7 @@ void app_main(void)
 
     wifi_mgr_start();
     tide_start();
+    weather_start();
     nmea_client_start();
     ais_fwd_start();
     map_tiles_init();

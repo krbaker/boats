@@ -75,10 +75,34 @@
   </section>
 
   <section>
-    <h2>Tides &amp; time</h2>
+    <h2>Tides, weather &amp; time</h2>
     <label for="tide_station">NOAA tide station ID</label>
     <input id="tide_station" inputmode="numeric" placeholder="9447130">
     <div class="hint">Find a station ID on <a href="https://tidesandcurrents.noaa.gov/map/" target="_blank" rel="noopener">tidesandcurrents.noaa.gov</a>.</div>
+    <div class="row">
+      <div><label for="wx_zone">NOAA marine forecast zone</label>
+        <input id="wx_zone" placeholder="PZZ135" maxlength="6" autocapitalize="characters" spellcheck="false"></div>
+      <div><label for="wx_buoy">NDBC buoy (waves)</label>
+        <input id="wx_buoy" placeholder="46088" maxlength="7" autocapitalize="characters" spellcheck="false"></div>
+    </div>
+    <div class="hint">Find your zone on the <a href="https://www.weather.gov/marine" target="_blank" rel="noopener">NWS marine
+      forecast map</a> (it looks like PZZ135), and a buoy that reports waves on
+      <a href="https://www.ndbc.noaa.gov/" target="_blank" rel="noopener">ndbc.noaa.gov</a>. Leave either empty to go without.</div>
+    <label>WeatherLink (current weather from a Davis station)</label>
+    <div class="row">
+      <div><label for="wl_key">API key (v2)</label>
+        <input id="wl_key" maxlength="47" autocapitalize="off" spellcheck="false"></div>
+      <div><label for="wl_secret">API secret</label>
+        <input id="wl_secret" type="password" maxlength="47" autocomplete="off"></div>
+    </div>
+    <div class="hint">From weatherlink.com → Account → API Key v2. The secret is kept on the display and never shown
+      again; leave it empty to keep the saved one.</div>
+    <button onclick="findStations()" id="wl_find_btn">Find my stations</button>
+    <div id="wl_pick_row" hidden>
+      <label for="wl_pick">Station and outdoor sensor suite</label>
+      <select id="wl_pick"></select>
+    </div>
+    <div class="msg" id="wl_msg"></div>
     <label for="tz_select">Time zone</label>
     <select id="tz_select" onchange="tzChanged()"></select>
     <div id="tz_custom_row" hidden>
@@ -257,7 +281,9 @@ function showConfig(c) {
   if ("sdr_gain" in c && document.activeElement !== $("sdr_gain")) $("sdr_gain").value = String(c.sdr_gain);
   if ("sdr_ppm" in c && document.activeElement !== $("sdr_ppm")) $("sdr_ppm").value = c.sdr_ppm;
   if (c.retransmit) showFwd(c.retransmit);
-  for (const k of ["ais_host", "ais_port", "tide_station", "center_lat", "center_lon", "brightness", "tz_posix"]) {
+  if ("wl_key" in c) showWlChoice(c);
+  for (const k of ["ais_host", "ais_port", "tide_station", "center_lat", "center_lon", "brightness", "tz_posix",
+                   "wx_zone", "wx_buoy", "wl_key"]) {
     if (document.activeElement !== $(k)) $(k).value = c[k] ?? "";
   }
   if (c.ais_port === 0) $("ais_port").value = "";
@@ -283,7 +309,8 @@ async function postConfig(body, msgId) {
   try {
     showConfig(await api("/api/config", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }));
     setMsg(msgId, "Saved.", "ok");
-  } catch (e) { setMsg(msgId, e.message, "bad"); }
+    return true;
+  } catch (e) { setMsg(msgId, e.message, "bad"); return false; }
 }
 
 function saveConfig(keys, msgId) {
@@ -371,12 +398,68 @@ function saveFwd() {
   postConfig({ retransmit: list }, "fwd_msg");
 }
 
+// WeatherLink station choice: "<station id>:<transmitter>" in the picker.
+function showWlChoice(c) {
+  if (!$("wl_pick").options.length && c.wl_station) {
+    $("wl_pick").innerHTML = `<option value="${c.wl_station}:${c.wl_tx}">Station ${c.wl_station}, transmitter ${c.wl_tx}</option>`;
+    $("wl_pick_row").hidden = false;
+  }
+  if (document.activeElement !== $("wl_secret")) $("wl_secret").placeholder = c.wl_secret_set ? "saved" : "";
+}
+
+const COMPASS = ["N","NNE","NE","ENE","E","ESE","SE","SSE","S","SSW","SW","WSW","W","WNW","NW","NNW"];
+function compass(deg) { return COMPASS[Math.round(deg / 22.5) % 16]; }
+
+async function findStations() {
+  const key = $("wl_key").value.trim(), secret = $("wl_secret").value.trim();
+  if (!key) return setMsg("wl_msg", "Enter the API key first.", "bad");
+  $("wl_find_btn").disabled = true;
+  setMsg("wl_msg", "Asking WeatherLink…", "warn");
+  try {
+    const r = await api("/api/weatherlink/stations", { method: "POST", headers: { "Content-Type": "application/json" },
+                                                      body: JSON.stringify({ api_key: key, api_secret: secret }) });
+    let html = "", count = 0;
+    for (const st of r.stations) {
+      for (const t of st.transmitters) {
+        let what = [];
+        if ("temp_f" in t) what.push(`${t.temp_f.toFixed(1)} °F`);
+        if ("wind_mph" in t) what.push(`wind ${Math.round(t.wind_mph)} mph from ${compass(t.wind_dir)}`);
+        html += `<option value="${st.id}:${t.tx}">${esc(st.name)} — transmitter ${t.tx} (${what.join(", ")})</option>`;
+        count++;
+      }
+    }
+    if (!count) return setMsg("wl_msg", "WeatherLink lists no stations with an outdoor sensor suite for this key.", "bad");
+    $("wl_pick").innerHTML = html;
+    const want = `${cfg.wl_station}:${cfg.wl_tx}`;
+    if ([...$("wl_pick").options].some(o => o.value === want)) $("wl_pick").value = want;
+    $("wl_pick_row").hidden = false;
+    setMsg("wl_msg", `Found ${count} outdoor sensor suite${count === 1 ? "" : "s"}: choose yours, then Save.`, "ok");
+  } catch (e) {
+    setMsg("wl_msg", e.message, "bad");
+  } finally {
+    $("wl_find_btn").disabled = false;
+  }
+}
+
 function saveTideTz() {
   const body = { tide_station: fieldValue("tide_station"), brightness: fieldValue("brightness") };
+  body.wx_zone = $("wx_zone").value.trim().toUpperCase();
+  body.wx_buoy = $("wx_buoy").value.trim().toUpperCase();
+  if (body.wx_zone && !/^[A-Z]{2}Z\d{3}$/.test(body.wx_zone)) return setMsg("tide_msg", "A marine zone looks like PZZ135: two letters, Z, three digits.", "bad");
+  if (body.wx_buoy && !/^[A-Z0-9]{1,7}$/.test(body.wx_buoy)) return setMsg("tide_msg", "A buoy ID is letters and digits, such as 46088.", "bad");
+  body.wl_key = $("wl_key").value.trim();
+  const secret = $("wl_secret").value.trim();
+  if (secret) body.wl_secret = secret;
+  if (!$("wl_pick_row").hidden && $("wl_pick").value) {
+    const [id, tx] = $("wl_pick").value.split(":").map(Number);
+    body.wl_station = id;
+    body.wl_tx = tx;
+  }
+  if (!body.wl_key) { body.wl_station = 0; body.wl_tx = 0; }
   const sel = $("tz_select").value;
   if (sel === "custom") { body.tz_name = "Custom"; body.tz_posix = fieldValue("tz_posix"); }
   else { body.tz_name = sel; body.tz_posix = ZONES.find(z => z[0] === sel)[1]; }
-  postConfig(body, "tide_msg");
+  postConfig(body, "tide_msg").then(ok => { if (ok) $("wl_secret").value = ""; });
 }
 
 // XHR rather than fetch, for upload progress on large chart sets.
@@ -584,6 +667,57 @@ async function forgetVessels() {
   } catch (e) { setMsg("forget_msg", "Failed: " + e.message, "bad"); }
 }
 
+// One status row per weather source that's set up; off ones are left out.
+function weatherRows(w, now) {
+  if (!w) return "";
+  const age = t => (now && t ? ago(Math.max(0, now - t)) : "");
+  const clock = t => new Date(t * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  const cls = src => src.state === "error" ? "bad" : src.state === "ok" ? "" : "warn";
+  const fail = (src, text) => src.state === "error" ? `${text ? text + " — " : ""}${esc(src.error)} (retrying)` :
+                              src.state === "waiting" && !text ? "waiting…" : text;
+  let html = "";
+  const f = w.forecast;
+  if (f.state !== "off") {
+    let t = f.zone ? `${esc(f.zone)} ${esc(f.zone_name)}, issued ${esc(f.issued)}` : "";
+    if (f.headlines && f.headlines.length) t += ` — <b>${f.headlines.map(esc).join("; ")}</b>`;
+    html += row("Marine forecast", fail(f, t), cls(f));
+  }
+  const a = w.alerts;
+  if (a.state !== "off") {
+    let t = a.state === "ok" && !a.list.length ? "none" :
+            a.list.map(x => esc(x.event) + (x.ends ? " until " + clock(x.ends) : "")).join(", ");
+    html += row("Alerts", fail(a, t), a.flag ? "bad" : cls(a));
+  }
+  const b = w.buoy;
+  if (b.state !== "off") {
+    let t = "";
+    if (b.id) {
+      t = "wave_ft" in b ? `waves ${b.wave_ft.toFixed(1)} ft` + ("period_s" in b ? `, ${b.period_s} s` : "") +
+          ("wave_dir" in b ? ` from ${compass(b.wave_dir)}` : "") + `, ${age(b.wave_when)}` : "no wave data";
+      if ("water_f" in b) t += `; water ${b.water_f.toFixed(0)} °F`;
+    }
+    html += row("Buoy" + (b.id ? " " + esc(b.id) : ""), fail(b, t), cls(b));
+  }
+  const s = w.station;
+  if (s.state !== "off") {
+    let t = "";
+    if (s.name !== undefined) {
+      const parts = [];
+      if ("temp_f" in s) parts.push(`${s.temp_f.toFixed(1)} °F`);
+      if ("wind_mph" in s) parts.push(`wind ${Math.round(s.wind_mph)} mph from ${compass(s.wind_dir)}, gusts ${Math.round(s.gust_mph)}`);
+      if ("bar_inhg" in s) parts.push(`${s.bar_inhg.toFixed(2)} inHg ${s.bar_trend}`);
+      t = parts.join(", ") + `; ${age(s.when)}`;
+    }
+    html += row("Weather station" + (s.name ? " — " + esc(s.name) : ""), fail(s, t), cls(s));
+  }
+  const o = w.obs;
+  if (o.state !== "off") {
+    const t = o.station ? `${esc(o.text || "no description")}, ${age(o.when)}` : "";
+    html += row("Sky" + (o.station ? ` (NWS ${esc(o.station)})` : ""), fail(o, t), cls(o));
+  }
+  return html;
+}
+
 let lastUptime = Infinity;
 async function pollStatus() {
   try {
@@ -609,6 +743,7 @@ async function pollStatus() {
     if (t.next) tide = `next ${t.next.high ? "high" : "low"} ${fmtTime(t.next.time)}, ${t.next.height_ft.toFixed(1)} ft`;
     if (t.error) tide += ` (${esc(t.error)})`;
     html += row("Tide" + (t.name ? ` — ${esc(t.name)}` : ""), tide, t.state === "ok" ? "" : "warn");
+    html += weatherRows(s.weather, s.system.time);
     html += row("Map", m.radii_nm ? `${m.radii_nm.length} zoom levels (${m.radii_nm.join(", ")} nm), centre ${m.center_lat.toFixed(4)}, ${m.center_lon.toFixed(4)}` : "none on the card", m.radii_nm ? "" : "warn");
     html += row("microSD card", m.card ? `${(m.storage_free / 1048576).toFixed(0)} MB free of ${(m.storage_total / 1048576).toFixed(0)} MB` : "not found (insert a FAT32 card and restart)", m.card ? "" : "bad");
     html += row("Uptime", ago(s.system.uptime_s).replace(" ago", "") + `, free RAM ${Math.round(s.system.heap_internal / 1024)} KiB + ${Math.round(s.system.heap_psram / 1048576)} MiB PSRAM`);

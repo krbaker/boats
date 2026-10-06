@@ -1,6 +1,6 @@
 #!/bin/sh
 # Build and run the host-side unit tests (AIS parser, AIS demodulator, geo
-# helpers, vessel cache, retransmit, simulator round trip). Set AIS_CAPTURE to
+# helpers, vessel cache, retransmit, weather parsers, simulator round trip). Set AIS_CAPTURE to
 # a .cu8 I/Q capture (288 kS/s, centred on 162.000 MHz) to also run the
 # demodulator over real signals.
 set -e
@@ -29,6 +29,13 @@ $CC $CFLAGS -D_DEFAULT_SOURCE -Wno-unused-parameter -Ifwd_stubs -I../../main/con
     -o build/test_ais_fwd test_ais_fwd.c ../../main/net/ais_fwd.c -pthread
 build/test_ais_fwd 2>/dev/null
 python3 roundtrip.py
+
+# Weather parsers and sun/moon, on real responses and USNO tables in fixtures/weather/.
+CJSON=${IDF_PATH:-$HOME/esp/esp-idf}/components/json/cJSON
+W=../../components/weather_parse
+$CC $CFLAGS -I$W/include -I"$CJSON" -o build/test_weather_parse test_weather_parse.c $W/weatherlink.c $W/nws.c \
+    $W/ndbc.c $W/wx.c $W/astro.c "$CJSON/cJSON.c" -lm
+build/test_weather_parse
 
 # Map upload (streaming zip reader + manifest validation) against a scratch directory.
 CJSON=${IDF_PATH:-$HOME/esp/esp-idf}/components/json/cJSON

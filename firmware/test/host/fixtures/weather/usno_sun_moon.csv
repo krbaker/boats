@@ -1,0 +1,26 @@
+# date,place,lat,lon,sunrise_utc,sunset_utc,fracillum_pct,curphase  (USNO aa.usno.navy.mil/api/rstt/oneday, tz=0)
+2026-01-15,seattle,47.6005,-122.355,15:53,00:44,10,Waning Crescent
+2026-01-15,annapolis,38.9784,-76.4922,12:23,22:08,10,Waning Crescent
+2026-01-15,juneau,58.3019,-134.4197,17:33,00:40,10,Waning Crescent
+2026-01-15,honolulu,21.3069,-157.8583,17:12,04:10,10,Waning Crescent
+2026-01-15,sydney,-33.8688,151.2093,19:00,09:09,10,Waning Crescent
+2026-03-20,seattle,47.6005,-122.355,14:12,02:21,3,Waxing Crescent
+2026-03-20,annapolis,38.9784,-76.4922,11:09,23:18,3,Waxing Crescent
+2026-03-20,juneau,58.3019,-134.4197,14:59,03:10,3,Waxing Crescent
+2026-03-20,honolulu,21.3069,-157.8583,16:35,04:42,3,Waxing Crescent
+2026-03-20,sydney,-33.8688,151.2093,19:59,08:07,3,Waxing Crescent
+2026-06-21,seattle,47.6005,-122.355,12:12,04:11,46,Waxing Crescent
+2026-06-21,annapolis,38.9784,-76.4922,09:41,00:35,46,Waxing Crescent
+2026-06-21,juneau,58.3019,-134.4197,11:51,06:08,46,Waxing Crescent
+2026-06-21,honolulu,21.3069,-157.8583,15:50,05:16,46,Waxing Crescent
+2026-06-21,sydney,-33.8688,151.2093,21:00,06:54,46,Waxing Crescent
+2026-10-06,seattle,47.6005,-122.355,14:16,01:40,19,Waning Crescent
+2026-10-06,annapolis,38.9784,-76.4922,11:07,22:41,19,Waning Crescent
+2026-10-06,juneau,58.3019,-134.4197,15:14,02:19,19,Waning Crescent
+2026-10-06,honolulu,21.3069,-157.8583,16:24,04:15,19,Waning Crescent
+2026-10-06,sydney,-33.8688,151.2093,19:25,08:01,19,Waning Crescent
+2026-12-21,seattle,47.6005,-122.355,15:55,00:20,90,Waxing Gibbous
+2026-12-21,annapolis,38.9784,-76.4922,12:21,21:47,90,Waxing Gibbous
+2026-12-21,juneau,58.3019,-134.4197,17:45,00:07,90,Waxing Gibbous
+2026-12-21,honolulu,21.3069,-157.8583,17:05,03:54,90,Waxing Gibbous
+2026-12-21,sydney,-33.8688,151.2093,18:41,09:05,90,Waxing Gibbous

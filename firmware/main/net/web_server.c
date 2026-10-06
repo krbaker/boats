@@ -24,6 +24,8 @@
 #include "settings.h"
 #include "tide.h"
 #include "vessel_db.h"
+#include "weather.h"
+#include "weatherlink.h"
 #include "wifi_mgr.h"
 
 static const char *TAG = "web";
@@ -94,6 +96,14 @@ static esp_err_t config_get(httpd_req_t *req)
     cJSON_AddNumberToObject(o, "sdr_gain", cfg.sdr_gain);  // tenths of a dB, -1 tuner AGC, -2 best fixed
     cJSON_AddNumberToObject(o, "sdr_ppm", cfg.sdr_ppm_tenths / 10.0);
     cJSON_AddBoolToObject(o, "sdr_bias_tee", cfg.sdr_bias_tee);
+    cJSON_AddStringToObject(o, "wx_zone", cfg.wx_zone);
+    cJSON_AddStringToObject(o, "wx_buoy", cfg.wx_buoy);
+    cJSON_AddStringToObject(o, "wl_key", cfg.wl_key);
+    cJSON_AddNumberToObject(o, "wl_station", cfg.wl_station);
+    cJSON_AddNumberToObject(o, "wl_tx", cfg.wl_tx);
+    char secret[48];
+    settings_get_wl_secret(secret);
+    cJSON_AddBoolToObject(o, "wl_secret_set", secret[0] != '\0'); // the secret itself is never sent
     cJSON *fa = cJSON_AddArrayToObject(o, "retransmit");
     for (int i = 0; i < FWD_DEST_MAX; i++) {
         cJSON *d = cJSON_CreateObject();
@@ -125,6 +135,24 @@ static bool valid_host(const char *h)
         if (!isalnum((unsigned char)*h) && *h != '.' && *h != '-') return false;
     }
     return true;
+}
+
+// Letters and digits only, shorter than cap (empty is fine).
+static bool alnum_field(const char *s, size_t cap)
+{
+    if (strlen(s) >= cap) return false;
+    for (; *s; s++) {
+        if (!isalnum((unsigned char)*s)) return false;
+    }
+    return true;
+}
+
+// A NOAA marine zone: two letters, Z, three digits ("PZZ135", "ANZ535"), or empty.
+static bool valid_zone(const char *z)
+{
+    if (!z[0]) return true;
+    return strlen(z) == 6 && isupper((unsigned char)z[0]) && isupper((unsigned char)z[1]) && z[2] == 'Z' &&
+           isdigit((unsigned char)z[3]) && isdigit((unsigned char)z[4]) && isdigit((unsigned char)z[5]);
 }
 
 // One retransmit destination from the config page. On a bad value, writes
@@ -222,6 +250,25 @@ static esp_err_t config_post(httpd_req_t *req)
     for (const char *c = cfg.tide_station; *c; c++) {
         if (*c < '0' || *c > '9') bad = "tide_station";
     }
+    get_str_field(root, "wx_zone", cfg.wx_zone, sizeof(cfg.wx_zone), &bad);
+    if (!valid_zone(cfg.wx_zone)) bad = "wx_zone";
+    get_str_field(root, "wx_buoy", cfg.wx_buoy, sizeof(cfg.wx_buoy), &bad);
+    if (!alnum_field(cfg.wx_buoy, sizeof(cfg.wx_buoy))) bad = "wx_buoy";
+    get_str_field(root, "wl_key", cfg.wl_key, sizeof(cfg.wl_key), &bad);
+    if (!alnum_field(cfg.wl_key, sizeof(cfg.wl_key))) bad = "wl_key";
+    if ((v = cJSON_GetObjectItem(root, "wl_station"))) {
+        if (!cJSON_IsNumber(v) || v->valuedouble < 0 || v->valuedouble > 4294967295.0) bad = "wl_station";
+        else cfg.wl_station = (uint32_t)v->valuedouble;
+    }
+    if ((v = cJSON_GetObjectItem(root, "wl_tx"))) {
+        if (!cJSON_IsNumber(v) || v->valueint < 0 || v->valueint > 255) bad = "wl_tx";
+        else cfg.wl_tx = v->valueint;
+    }
+    // A new secret, if one was typed; empty keeps the saved one.
+    char secret[48] = "";
+    get_str_field(root, "wl_secret", secret, sizeof(secret), &bad);
+    if (!alnum_field(secret, sizeof(secret))) bad = "wl_secret";
+
     char msg[80] = "";
     if ((v = cJSON_GetObjectItem(root, "retransmit"))) {
         if (!cJSON_IsArray(v) || cJSON_GetArraySize(v) > FWD_DEST_MAX) {
@@ -236,8 +283,59 @@ static esp_err_t config_post(httpd_req_t *req)
 
     if (bad) snprintf(msg, sizeof(msg), "invalid value for %s", bad);
     if (msg[0]) return send_error(req, "400 Bad Request", msg);
+    if (secret[0]) settings_set_wl_secret(secret);
     settings_set(&cfg);
     return config_get(req);
+}
+
+// Lists the WeatherLink stations a key can see, and the outdoor sensor suites
+// each hears, for the config page to choose from. The secret is the one typed
+// on the page, or the saved one if that's empty. Takes a few seconds.
+static esp_err_t weatherlink_stations_post(httpd_req_t *req)
+{
+    cJSON *root = read_json(req);
+    if (!root) return send_error(req, "400 Bad Request", "invalid JSON");
+    char key[48] = "", secret[48] = "";
+    const char *bad = NULL;
+    get_str_field(root, "api_key", key, sizeof(key), &bad);
+    get_str_field(root, "api_secret", secret, sizeof(secret), &bad);
+    cJSON_Delete(root);
+    if (!secret[0]) settings_get_wl_secret(secret);
+    if (bad || !key[0] || !secret[0] || !alnum_field(key, sizeof(key)) || !alnum_field(secret, sizeof(secret))) {
+        return send_error(req, "400 Bad Request", "enter the WeatherLink API key and secret");
+    }
+
+    wl_station_info_t *st = malloc(WL_MAX_STATIONS * sizeof(*st));
+    if (!st) return send_error(req, "500 Internal Server Error", "out of memory");
+    char err[64];
+    int n = weatherlink_list(key, secret, st, WL_MAX_STATIONS, err, sizeof(err));
+    if (n < 0) {
+        free(st);
+        return send_error(req, "502 Bad Gateway", err);
+    }
+    cJSON *o = cJSON_CreateObject();
+    cJSON *list = cJSON_AddArrayToObject(o, "stations");
+    for (int i = 0; i < n; i++) {
+        cJSON *s = cJSON_CreateObject();
+        cJSON_AddNumberToObject(s, "id", st[i].station.id);
+        cJSON_AddStringToObject(s, "name", st[i].station.name);
+        cJSON_AddStringToObject(s, "product", st[i].station.product);
+        cJSON *txs = cJSON_AddArrayToObject(s, "transmitters");
+        for (int k = 0; k < st[i].ntx; k++) {
+            const wl_tx_t *t = &st[i].tx[k];
+            cJSON *tj = cJSON_CreateObject();
+            cJSON_AddNumberToObject(tj, "tx", t->tx_id);
+            if (t->has_temp) cJSON_AddNumberToObject(tj, "temp_f", t->temp_f);
+            if (t->has_wind) {
+                cJSON_AddNumberToObject(tj, "wind_mph", t->wind_mph);
+                cJSON_AddNumberToObject(tj, "wind_dir", t->wind_dir);
+            }
+            cJSON_AddItemToArray(txs, tj);
+        }
+        cJSON_AddItemToArray(list, s);
+    }
+    free(st);
+    return send_json(req, o);
 }
 
 static esp_err_t wifi_post(httpd_req_t *req)
@@ -265,6 +363,80 @@ static const char *test_str(wifi_test_result_t t)
     case WIFI_TEST_FAILED_AP: return "failed_ap";
     default: return "none";
     }
+}
+
+static cJSON *add_source(cJSON *parent, const char *name, const wx_source_t *s)
+{
+    cJSON *o = cJSON_AddObjectToObject(parent, name);
+    cJSON_AddStringToObject(o, "state", wx_state_str(s->state));
+    cJSON_AddStringToObject(o, "error", s->error);
+    cJSON_AddNumberToObject(o, "fetched", (double)s->fetched);
+    return o;
+}
+
+// The weather sources' state and a summary of each, for the status table.
+static void add_weather(cJSON *root)
+{
+    weather_data_t *w = heap_caps_malloc(sizeof(*w), MALLOC_CAP_SPIRAM);
+    if (!w) return;
+    weather_get(w);
+    cJSON *wj = cJSON_AddObjectToObject(root, "weather");
+
+    cJSON *f = add_source(wj, "forecast", &w->forecast_src);
+    if (w->have_forecast) {
+        cJSON_AddStringToObject(f, "zone", w->forecast.zone);
+        cJSON_AddStringToObject(f, "zone_name", w->forecast.zone_name);
+        cJSON_AddStringToObject(f, "issued", w->forecast.issued);
+        cJSON *h = cJSON_AddArrayToObject(f, "headlines");
+        for (int i = 0; i < w->forecast.nheadlines; i++) cJSON_AddItemToArray(h, cJSON_CreateString(w->forecast.headline[i]));
+    }
+
+    cJSON *a = add_source(wj, "alerts", &w->alerts_src);
+    cJSON_AddBoolToObject(a, "flag", w->alert_flag);
+    cJSON *list = cJSON_AddArrayToObject(a, "list");
+    for (int i = 0; i < w->nalerts; i++) {
+        cJSON *e = cJSON_CreateObject();
+        cJSON_AddStringToObject(e, "event", w->alerts[i].event);
+        cJSON_AddNumberToObject(e, "ends", (double)w->alerts[i].ends);
+        cJSON_AddItemToArray(list, e);
+    }
+
+    cJSON *b = add_source(wj, "buoy", &w->buoy_src);
+    if (w->have_buoy) {
+        const buoy_t *bu = &w->buoy;
+        cJSON_AddStringToObject(b, "id", w->buoy_id);
+        cJSON_AddNumberToObject(b, "latest", (double)bu->latest);
+        if (bu->wave_ft.ok) cJSON_AddNumberToObject(b, "wave_ft", bu->wave_ft.v);
+        if (bu->dom_period_s.ok) cJSON_AddNumberToObject(b, "period_s", bu->dom_period_s.v);
+        if (bu->wave_dir.ok) cJSON_AddNumberToObject(b, "wave_dir", bu->wave_dir.v);
+        if (bu->wave_ft.ok) cJSON_AddNumberToObject(b, "wave_when", (double)bu->wave_ft.when);
+        if (bu->water_f.ok) cJSON_AddNumberToObject(b, "water_f", bu->water_f.v);
+    }
+
+    cJSON *s = add_source(wj, "station", &w->station_src);
+    if (w->have_station) {
+        const wl_current_t *c = &w->station;
+        cJSON_AddStringToObject(s, "name", w->station_name);
+        cJSON_AddNumberToObject(s, "when", (double)c->when);
+        if (c->has_temp) cJSON_AddNumberToObject(s, "temp_f", c->temp_f);
+        if (c->has_wind) {
+            cJSON_AddNumberToObject(s, "wind_mph", c->wind_avg10_mph);
+            cJSON_AddNumberToObject(s, "wind_dir", c->wind_dir_avg10);
+            cJSON_AddNumberToObject(s, "gust_mph", c->gust10_mph);
+        }
+        if (c->has_bar) {
+            cJSON_AddNumberToObject(s, "bar_inhg", c->bar_inhg);
+            cJSON_AddStringToObject(s, "bar_trend", wx_trend_name(wx_pressure_trend(c->bar_trend_inhg)));
+        }
+    }
+
+    cJSON *o = add_source(wj, "obs", &w->obs_src);
+    if (w->have_obs) {
+        cJSON_AddStringToObject(o, "station", w->obs_station);
+        cJSON_AddNumberToObject(o, "when", (double)w->obs.when);
+        cJSON_AddStringToObject(o, "text", w->obs.text);
+    }
+    free(w);
 }
 
 static esp_err_t status_get(httpd_req_t *req)
@@ -389,6 +561,8 @@ static esp_err_t status_get(httpd_req_t *req)
     cJSON_AddNumberToObject(vj, "network_only", net_only);
     cJSON_AddNumberToObject(vj, "sdr_only", sdr_only);
     cJSON_AddNumberToObject(vj, "both", both);
+
+    add_weather(o);
 
     cJSON *rtj = cJSON_AddArrayToObject(o, "retransmit");
     for (int i = 0; i < FWD_DEST_MAX; i++) {
@@ -678,7 +852,7 @@ void web_server_start(void)
 {
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.stack_size = 8192;
-    cfg.max_uri_handlers = 16;
+    cfg.max_uri_handlers = 24;
     cfg.lru_purge_enable = true;
     cfg.recv_wait_timeout = 30;
     cfg.send_wait_timeout = 30;
@@ -693,6 +867,7 @@ void web_server_start(void)
         {.uri = "/api/config", .method = HTTP_GET, .handler = config_get},
         {.uri = "/api/config", .method = HTTP_POST, .handler = config_post},
         {.uri = "/api/wifi", .method = HTTP_POST, .handler = wifi_post},
+        {.uri = "/api/weatherlink/stations", .method = HTTP_POST, .handler = weatherlink_stations_post},
         {.uri = "/api/status", .method = HTTP_GET, .handler = status_get},
         {.uri = "/api/vessels", .method = HTTP_GET, .handler = vessels_get},
         {.uri = "/api/vessels/forget", .method = HTTP_POST, .handler = vessels_forget_post},

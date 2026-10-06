@@ -53,6 +53,12 @@ typedef struct {
     int16_t sdr_ppm_tenths;  // dongle crystal correction, tenths of a ppm
     bool sdr_bias_tee;       // power an LNA / active antenna through the coax
     fwd_dest_t fwd[FWD_DEST_MAX];
+    // Weather (WEATHER_PLAN.md). Empty / 0 = not used.
+    char wx_zone[8];         // NOAA marine forecast zone, e.g. "PZZ135"
+    char wx_buoy[8];         // NDBC buoy, e.g. "46088"
+    char wl_key[48];         // WeatherLink v2 API key (the secret is kept apart: settings_get_wl_secret)
+    uint32_t wl_station;     // WeatherLink station id
+    uint8_t wl_tx;           // that station's outdoor sensor suite (transmitter id)
 } settings_t;
 
 #define SDR_GAIN_AUTO       (-1)  // the tuner's own AGC
@@ -67,6 +73,7 @@ typedef struct {
 #define SETTINGS_EV_DISPLAY BIT5
 #define SETTINGS_EV_SDR     BIT6
 #define SETTINGS_EV_FWD     BIT7  // a retransmit destination changed
+#define SETTINGS_EV_WEATHER BIT8  // a weather source changed (including the WeatherLink secret)
 
 esp_err_t settings_init(void);
 
@@ -86,3 +93,8 @@ EventGroupHandle_t settings_subscribe(void);
 // Wi-Fi station credentials live separately (managed by wifi_mgr).
 bool settings_get_wifi(char ssid[33], char pass[65]);
 esp_err_t settings_set_wifi(const char *ssid, const char *pass);
+
+// The WeatherLink API secret lives apart from settings_t, like the Wi-Fi
+// password, so it's never copied around or sent back to the web page.
+void settings_get_wl_secret(char secret[48]);
+esp_err_t settings_set_wl_secret(const char *secret);
