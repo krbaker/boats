@@ -697,13 +697,24 @@ function weatherRows(w, now) {
   }
   const b = w.buoy;
   if (b.state !== "off") {
-    let t = "";
+    let t = "", missing = [];
     if (b.id) {
+      // Wave data counts as missing if the buoy doesn't report it, or not in the last 3 hours (as on the map).
+      const recent = when => when && now && now - when < 3 * 3600;
+      const hasH = "wave_ft" in b && recent(b.wave_when), hasP = "period_s" in b && recent(b.period_when),
+            hasD = "wave_dir" in b && recent(b.dir_when);
+      if (!hasH) missing.push("height");
+      if (!hasP) missing.push("period");
+      if (!hasD) missing.push("direction");
       t = "wave_ft" in b ? `waves ${b.wave_ft.toFixed(1)} ft` + ("period_s" in b ? `, ${b.period_s} s` : "") +
           ("wave_dir" in b ? ` from ${compass(b.wave_dir)}` : "") + `, ${age(b.wave_when)}` : "no wave data";
       if ("water_f" in b) t += `; water ${b.water_f.toFixed(0)} °F`;
+      if (missing.length) {
+        t += ` — <b>no recent wave ${missing.join(", ")}</b>`;
+        if (hasH && !hasD) t += " (height and period are shown in the tide bubble instead of the wave marker)";
+      }
     }
-    html += row("Buoy" + (b.id ? " " + esc(b.id) : ""), fail(b, t), cls(b));
+    html += row("Buoy" + (b.id ? " " + esc(b.id) : ""), fail(b, t), b.state === "ok" && missing.length ? "warn" : cls(b));
   }
   const s = w.station;
   if (s.state !== "off") {
