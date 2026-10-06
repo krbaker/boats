@@ -14,6 +14,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+#include "ais_fwd.h"
 #include "cp_update.h"
 #include "fw_update.h"
 #include "map_store.h"
@@ -388,6 +389,20 @@ static esp_err_t status_get(httpd_req_t *req)
     cJSON_AddNumberToObject(vj, "network_only", net_only);
     cJSON_AddNumberToObject(vj, "sdr_only", sdr_only);
     cJSON_AddNumberToObject(vj, "both", both);
+
+    cJSON *rtj = cJSON_AddArrayToObject(o, "retransmit");
+    for (int i = 0; i < FWD_DEST_MAX; i++) {
+        fwd_status_t fs;
+        ais_fwd_get_status(i, &fs);
+        cJSON *d = cJSON_CreateObject();
+        cJSON_AddStringToObject(d, "state", ais_fwd_state_str(fs.state));
+        cJSON_AddNumberToObject(d, "sent", fs.sent);
+        cJSON_AddNumberToObject(d, "sent_per_min", fs.sent_last_min);
+        cJSON_AddNumberToObject(d, "dropped", fs.dropped);
+        cJSON_AddNumberToObject(d, "connected_s", fs.connected_us ? (now_us - fs.connected_us) / 1000000 : -1);
+        cJSON_AddStringToObject(d, "error", fs.error);
+        cJSON_AddItemToArray(rtj, d);
+    }
 
     fw_info_t fw;
     fw_update_info(&fw);

@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "ais_fwd.h"
 #include "nmea_client.h"
 #include "sdr_probe.h"
 #include "tide.h"
@@ -48,7 +49,7 @@ static void refresh(void)
 
     if (s_confirm_since && lv_tick_elaps(s_confirm_since) > CONFIRM_TIMEOUT_MS) set_confirm(false);
 
-    char buf[512];
+    char buf[768];
     int len = 0;
     if (w.state == WIFI_MGR_AP) {
         lv_obj_set_hidden(s_ap_box, false);
@@ -85,6 +86,21 @@ static void refresh(void)
             len += snprintf(buf + len, sizeof(buf) - len, ", %lu packets, CPU %.0f%%",
                             (unsigned long)(r.demod.packets[0] + r.demod.packets[1]), r.cpu_pct);
         }
+    }
+    // Retransmit: one line, plus the first problem if a destination isn't sending.
+    int on = 0, sending = 0;
+    char problem[64] = "";
+    for (int i = 0; i < FWD_DEST_MAX; i++) {
+        fwd_status_t fs;
+        ais_fwd_get_status(i, &fs);
+        if (fs.state == FWD_STATE_OFF) continue;
+        on++;
+        if (fs.state == FWD_STATE_SENDING) sending++;
+        else if (!problem[0]) snprintf(problem, sizeof(problem), "%d: %s", i + 1, fs.error[0] ? fs.error : ais_fwd_state_str(fs.state));
+    }
+    if (on) {
+        len += snprintf(buf + len, sizeof(buf) - len, "\nRetransmit: sending to %d of %d", sending, on);
+        if (problem[0]) len += snprintf(buf + len, sizeof(buf) - len, "\n(%s)", problem);
     }
     if (t.station[0]) {
         len += snprintf(buf + len, sizeof(buf) - len, "\nTide station: %s %s", t.station, t.station_name);

@@ -318,7 +318,8 @@ function buildFwdRows() {
         <input id="fwd${i}_host" type="text" maxlength="63" autocapitalize="off" spellcheck="false"></div>
       <div style="flex:1 1 90px"><label for="fwd${i}_port">Port</label>
         <input id="fwd${i}_port" type="number" min="1" max="65535"></div>
-    </div>`;
+    </div>
+    <div class="hint" id="fwd${i}_status"></div>`;
   }
   $("fwd_rows").innerHTML = html;
 }
@@ -330,6 +331,32 @@ function showFwd(list) {
     set("proto", e => e.value = d.proto);
     set("host", e => e.value = d.host);
     set("port", e => e.value = d.port || "");
+  });
+}
+
+function since(s) {
+  if (s < 60) return s + " s";
+  if (s < 3600) return Math.floor(s / 60) + " min";
+  if (s < 172800) return Math.floor(s / 3600) + " h";
+  return Math.floor(s / 86400) + " days";
+}
+
+function showFwdStatus(list) {
+  (list || []).forEach((d, i) => {
+    const el = $(`fwd${i}_status`);
+    if (!el) return;
+    if (d.state === "off") { el.textContent = ""; return; }
+    let t = d.state;
+    if (d.state === "sending") {
+      t += ` — ${d.sent.toLocaleString()} sent, ${d.sent_per_min} in the last minute`;
+      if (d.connected_s >= 0) t += `, connected ${since(d.connected_s)}`;
+    } else if (d.state === "error") {
+      t = `${d.error || "error"}; retrying`;
+    }
+    if (d.dropped) t += ` · ${d.dropped.toLocaleString()} not sent`;
+    if (d.state === "sending" && d.error) t += ` (${d.error})`;
+    el.textContent = t;
+    el.className = "hint " + (d.state === "sending" ? "ok" : d.state === "error" ? "bad" : "warn");
   });
 }
 
@@ -587,6 +614,7 @@ async function pollStatus() {
     html += row("Uptime", ago(s.system.uptime_s).replace(" ago", "") + `, free RAM ${Math.round(s.system.heap_internal / 1024)} KiB + ${Math.round(s.system.heap_psram / 1048576)} MiB PSRAM`);
     $("status").innerHTML = html;
     showSdr(s.sdr, s.receivers);
+    showFwdStatus(s.retransmit);
     showFirmware(s.firmware);
 
     if (wifiPending && w.test !== "testing") {

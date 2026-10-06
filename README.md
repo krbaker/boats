@@ -56,6 +56,7 @@ On the config page:
 - **Frequency correction (ppm)**: the V3 needs none, and the decoder also corrects itself once it hears packets.
 - **Bias-tee**: puts 4.5 V on the antenna socket to power an LNA or active antenna. Leave it off otherwise.
 - **Record**: saves up to 10 minutes of the raw signal (8-bit I/Q, 288 kS/s, centred on 162.000 MHz, the same as `rtl_sdr` writes; about 35 MB a minute) to the microSD card. It also saves every AIS sentence heard meanwhile from the network feed and from the SDR, timed to the I/Q. Both download from the page. They're for testing the decoder on a PC; see below.
+- **Retransmit**: sends what the dongle decodes on to up to three destinations, each UDP or TCP to an IP address (or host name) and port. Use it to feed AIS sharing services, which assign your station an address and port when you register it (MarineTraffic, AIS Friends, aiscatcher.org), or chart software such as OpenCPN (set it to listen for UDP). TCP connects out to the destination and reconnects by itself. Only the dongle's sentences are sent, never the network feed's. Each destination shows its state, sentences sent and not sent, and any error; the display's Network screen shows how many are sending.
 
 The decoder uses about 60% of one CPU core. The Receiver tab and the config page show how the SDR compares with the network feed.
 

@@ -58,7 +58,7 @@ The web page gets a "Retransmit" section, after the RTL-SDR one, with three rows
 
 - **Data:** in `/api/status`, a `retransmit` array of three entries, each with `state`, `sent`, `sent_per_min`, `dropped`, the last error and, for TCP, how long it's been connected.
 - **States:** `off`, `not configured`, `waiting for network`, `connecting` (TCP), `sending`, `error`.
-- **Where it shows:** on the web page, and as one line per active destination on the display's Network screen.
+- **Where it shows:** on the web page, and on the display's Network screen as one line, "sending to N of M", plus the first problem if a destination isn't sending. The screen is round and already full, so one line per destination was too much.
 
 ## Steps
 
@@ -84,7 +84,11 @@ Testing needs the dongle on an antenna and decoding, since the network feed isn'
   - **Task:** one low-priority task owns all the sockets, polling every 200 ms. TCP sockets are non-blocking. If TCP can only take part of a message, the rest goes first on the next pass. A connection that takes nothing for 30 s is reconnected. The far end closing is noticed even with nothing to send.
   - **Status:** state, sent, dropped, sent in the last minute, TCP connected time, and the last error, ready for step 3 (`ais_fwd_get_status()`).
   - **Host test** (`test/host/test_ais_fwd.c`, in `run_tests.sh`): runs the real `ais_fwd.c` on small FreeRTOS stand-ins (`test/host/fwd_stubs/`) against local UDP and TCP listeners. It covers one datagram per sentence over UDP, ordered lines over TCP, a two-part message, a lone second part dropped, the TCP receiver going away and the reconnect after the 5 s back-off, a Wi-Fi drop and its return, a live settings change, a destination turned on without an address, connection refused without holding up the others, and turning a destination off.
-- **Steps 3–4:** not started.
+- **Step 3 built, not yet tested on the display.**
+  - **`/api/status`:** a `retransmit` array, each entry with `state`, `sent`, `sent_per_min` (the last full minute), `dropped`, `connected_s` (TCP; -1 when not connected) and `error`.
+  - **Web page:** a status line under each destination row: what it's doing, how much it has sent, how long it's been connected, and how many sentences weren't sent. Green when sending, red with the error and "retrying" when failing, amber otherwise.
+  - **Network screen:** "Retransmit: sending to N of M", plus the first problem.
+- **Step 4:** not started.
 
 ## Decisions
 
