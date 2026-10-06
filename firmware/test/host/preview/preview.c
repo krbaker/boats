@@ -486,6 +486,8 @@ int main(int argc, char **argv)
     lv_screen_load(scr);
     ui_map_on_show();
     run_ms(1300); // let the 1 s refresh timer fill in the border text
+    snap("alert_popup"); // the advisory is new: it pops up over the map
+    tap(800 / 2 + 520 / 2 - 8 - 26, 150 + 8 + 26); // its X
     snap("map");
 
     // Zoom in twice with the "+" pill, then drag the chart up and to the left.

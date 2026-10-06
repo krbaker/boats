@@ -201,6 +201,12 @@ Each source gets a row in the web page's status table, such as "Marine forecast:
   - **Not set up yet:** a tab says how to set it up, "Fetching...", or the error.
   - **Alert text:** NWS wraps it at a fixed width, so `wx_parse_alerts` now joins those lines, keeping paragraphs and `*` bullets. It's tested.
   - **Previews:** `weather_forecast.png`, `weather_alert_open.png`, `weather_waves.png` and `weather_weather.png`, on the saved real Potomac forecast, its Small Craft Advisory, and buoy 46088.
+- **Alert popup (added 2026-10-06):** a new or updated watch, warning or advisory pops up over whatever screen is showing. It uses the same red box as the menu, with no dimmed background, and the full text, scrolling past about 330 px. A ✕ dismisses it.
+  - **New or updated:** an alert is identified by its event, headline and end time. NWS re-issues an alert with a new headline when it changes, so an update pops up again.
+  - **Several new at once:** the next appears after the first is dismissed.
+  - **Expiry:** an alert that expires or is cancelled closes its popup.
+  - **Dismissals are kept in memory only,** so an alert still active after a restart pops up once more.
+  - **Preview:** `alert_popup.png`, then `map.png` after tapping the ✕.
 - **Step 6:** not started.
 
 ## Decisions

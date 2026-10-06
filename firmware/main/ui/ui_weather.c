@@ -176,6 +176,43 @@ static uint32_t forecast_signature(const weather_data_t *w)
     return h ^ (uint32_t)w->nalerts ^ (w->have_forecast ? 0x80000000u : 0);
 }
 
+// An alert as a box: red for a watch, warning or advisory, grey otherwise.
+// Collapsed (in the menu), the text shows when the box is tapped; otherwise
+// (the popup) it's always shown. Returns the text's label.
+static lv_obj_t *alert_box(lv_obj_t *parent, const wx_alert_t *a, bool collapsed)
+{
+    char buf[64];
+    lv_obj_t *box = lv_obj_create(parent);
+    lv_obj_set_width(box, lv_pct(100));
+    lv_obj_set_height(box, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(box, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_all(box, 12, 0);
+    lv_obj_set_style_pad_row(box, 6, 0);
+    lv_obj_set_style_radius(box, 12, 0);
+    lv_obj_set_style_bg_color(box, a->flag ? lv_color_hex(0x4a1c22) : UI_COLOR_PANEL, 0);
+    lv_obj_set_style_bg_opa(box, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(box, a->flag ? UI_COLOR_BAD : UI_COLOR_MUTED, 0);
+    lv_obj_set_style_border_width(box, 2, 0);
+    lv_obj_set_scrollable(box, false);
+    label(box, a->event, &lv_font_montserrat_24, a->flag ? UI_COLOR_BAD : UI_COLOR_TEXT);
+    const char *more = collapsed ? "  " LV_SYMBOL_DOWN : "";
+    if (a->ends) {
+        char t[32];
+        when(a->ends, t, sizeof(t));
+        snprintf(buf, sizeof(buf), "Until %s%s", t, more);
+    } else {
+        snprintf(buf, sizeof(buf), "%s", collapsed ? "Tap for details  " LV_SYMBOL_DOWN : "");
+    }
+    if (buf[0]) label(box, buf, &lv_font_montserrat_16, UI_COLOR_MUTED);
+    lv_obj_t *desc = label(box, a->description[0] ? a->description : a->headline, &lv_font_montserrat_16, UI_COLOR_TEXT);
+    if (collapsed) {
+        lv_obj_set_hidden(desc, true);
+        lv_obj_set_clickable(box, true);
+        lv_obj_add_event_cb(box, alert_click_cb, LV_EVENT_CLICKED, desc);
+    }
+    return box;
+}
+
 static void build_forecast(const weather_data_t *w)
 {
     lv_obj_t *tab = s_forecast;
@@ -183,33 +220,7 @@ static void build_forecast(const weather_data_t *w)
     char buf[128];
 
     // Alerts first: tap one for the full text.
-    for (int i = 0; i < w->nalerts; i++) {
-        const wx_alert_t *a = &w->alerts[i];
-        lv_obj_t *box = lv_obj_create(tab);
-        lv_obj_set_width(box, lv_pct(100));
-        lv_obj_set_height(box, LV_SIZE_CONTENT);
-        lv_obj_set_flex_flow(box, LV_FLEX_FLOW_COLUMN);
-        lv_obj_set_style_pad_all(box, 12, 0);
-        lv_obj_set_style_pad_row(box, 6, 0);
-        lv_obj_set_style_radius(box, 12, 0);
-        lv_obj_set_style_bg_color(box, a->flag ? lv_color_hex(0x4a1c22) : UI_COLOR_PANEL, 0);
-        lv_obj_set_style_border_color(box, a->flag ? UI_COLOR_BAD : UI_COLOR_MUTED, 0);
-        lv_obj_set_style_border_width(box, 2, 0);
-        lv_obj_set_scrollable(box, false);
-        label(box, a->event, &lv_font_montserrat_24, a->flag ? UI_COLOR_BAD : UI_COLOR_TEXT);
-        if (a->ends) {
-            char t[32];
-            when(a->ends, t, sizeof(t));
-            snprintf(buf, sizeof(buf), "Until %s  " LV_SYMBOL_DOWN, t);
-        } else {
-            snprintf(buf, sizeof(buf), "Tap for details  " LV_SYMBOL_DOWN);
-        }
-        label(box, buf, &lv_font_montserrat_16, UI_COLOR_MUTED);
-        lv_obj_t *desc = label(box, a->description[0] ? a->description : a->headline, &lv_font_montserrat_16, UI_COLOR_TEXT);
-        lv_obj_set_hidden(desc, true);
-        lv_obj_set_clickable(box, true);
-        lv_obj_add_event_cb(box, alert_click_cb, LV_EVENT_CLICKED, desc);
-    }
+    for (int i = 0; i < w->nalerts; i++) alert_box(tab, &w->alerts[i], true);
 
     if (!w->have_forecast) {
         label(tab, missing(&w->forecast_src, "Set a NOAA marine forecast zone on the web page, under \"Tides, weather & time\"."),
@@ -367,8 +378,119 @@ static void refresh(bool force)
     show_weather(s_wx);
 }
 
+// ---------------------------------------------------------------------------
+// Alert popup: a new or updated watch, warning or advisory shows over
+// whatever screen is up, until its X is tapped.
+// ---------------------------------------------------------------------------
+
+#define POPUP_W         520
+#define POPUP_Y         150     // the box's top: the X sits at a fixed place
+#define POPUP_TEXT_H    330     // the text scrolls beyond this
+#define MAX_DISMISSED   16
+
+static lv_obj_t *s_popup;
+static uint32_t s_popup_id;
+static uint32_t s_dismissed[MAX_DISMISSED];
+static int s_ndismissed;
+static uint32_t s_alert_gen;
+
+// An alert's identity. NWS re-issues an alert when it changes, with a new
+// headline ("...issued October 5 at 8:54PM..."), so an update counts as new.
+static uint32_t alert_id(const wx_alert_t *a)
+{
+    uint32_t h = 2166136261u;
+    for (const char *p = a->event; *p; p++) h = (h ^ (unsigned char)*p) * 16777619u;
+    for (const char *p = a->headline; *p; p++) h = (h ^ (unsigned char)*p) * 16777619u;
+    return (h ^ (uint32_t)a->ends) | 1; // never 0: that means "no popup"
+}
+
+static bool dismissed(uint32_t id)
+{
+    for (int i = 0; i < s_ndismissed; i++) {
+        if (s_dismissed[i] == id) return true;
+    }
+    return false;
+}
+
+static void popup_close(void)
+{
+    if (s_popup) lv_obj_delete(s_popup);
+    s_popup = NULL;
+    s_popup_id = 0;
+}
+
+static void check_alerts(void);
+
+static void popup_x_cb(lv_event_t *e)
+{
+    if (s_ndismissed == MAX_DISMISSED) { // forget the oldest
+        memmove(s_dismissed, s_dismissed + 1, sizeof(s_dismissed) - sizeof(s_dismissed[0]));
+        s_ndismissed--;
+    }
+    s_dismissed[s_ndismissed++] = s_popup_id;
+    popup_close();
+    s_alert_gen = 0; // look again now: there may be another new one
+    check_alerts();
+}
+
+static void popup_open(const wx_alert_t *a, uint32_t id)
+{
+    popup_close();
+    s_popup_id = id;
+    s_popup = lv_obj_create(lv_layer_top());
+    lv_obj_remove_style_all(s_popup);
+    lv_obj_set_size(s_popup, POPUP_W, LV_SIZE_CONTENT);
+    lv_obj_align(s_popup, LV_ALIGN_TOP_MID, 0, POPUP_Y);
+    lv_obj_set_scrollable(s_popup, false);
+    lv_obj_set_clickable(s_popup, true); // touches on it don't reach the map underneath
+
+    lv_obj_t *box = alert_box(s_popup, a, false);
+    lv_obj_set_style_pad_right(box, 64, 0); // room for the X
+    lv_obj_set_style_shadow_width(box, 24, 0);
+    lv_obj_set_style_shadow_color(box, lv_color_black(), 0);
+    lv_obj_set_style_shadow_opa(box, LV_OPA_60, 0);
+    lv_obj_t *text = lv_obj_get_child(box, lv_obj_get_child_count(box) - 1);
+    lv_obj_set_style_max_height(text, POPUP_TEXT_H, 0);
+    lv_obj_set_scrollable(text, true);
+    lv_obj_set_scroll_dir(text, LV_DIR_VER);
+
+    lv_obj_t *x = ui_round_button(s_popup, LV_SYMBOL_CLOSE, 52, 52);
+    lv_obj_align(x, LV_ALIGN_TOP_RIGHT, -8, 8);
+    lv_obj_add_event_cb(x, popup_x_cb, LV_EVENT_CLICKED, NULL);
+}
+
+// Shows the first flagged alert not yet dismissed; closes the popup if its
+// alert has gone (expired or cancelled).
+static void check_alerts(void)
+{
+    if (weather_generation() == s_alert_gen) return;
+    s_alert_gen = weather_generation();
+    weather_get(s_wx);
+    if (s_wx->alerts_src.state != WX_OK && s_wx->alerts_src.state != WX_ERROR) {
+        popup_close(); // alerts turned off
+        return;
+    }
+    bool still_there = false;
+    const wx_alert_t *next = NULL;
+    uint32_t next_id = 0;
+    for (int i = 0; i < s_wx->nalerts; i++) {
+        const wx_alert_t *a = &s_wx->alerts[i];
+        if (!a->flag) continue;
+        uint32_t id = alert_id(a);
+        if (id == s_popup_id) still_there = true;
+        if (!next && !dismissed(id)) {
+            next = a;
+            next_id = id;
+        }
+    }
+    if (s_popup && still_there) return;
+    if (next) popup_open(next, next_id);
+    else popup_close();
+}
+
 static void poll_timer_cb(lv_timer_t *t)
 {
+    check_alerts();
     refresh(false);
 }
 
