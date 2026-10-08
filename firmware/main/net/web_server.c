@@ -457,6 +457,12 @@ static esp_err_t status_get(httpd_req_t *req)
     cJSON_AddStringToObject(wj, "ssid", w.sta_ssid);
     cJSON_AddStringToObject(wj, "ip", w.sta_ip);
     cJSON_AddNumberToObject(wj, "rssi", w.rssi);
+    cJSON_AddStringToObject(wj, "netmask", w.sta_netmask);
+    cJSON_AddStringToObject(wj, "gateway", w.sta_gw);
+    cJSON_AddStringToObject(wj, "mac", w.sta_mac);
+    cJSON_AddStringToObject(wj, "internet", wifi_mgr_net_str(w.net));
+    cJSON_AddBoolToObject(wj, "portal_assist", w.portal_assist);
+    cJSON_AddNumberToObject(wj, "portal_assist_left_s", w.portal_assist_left_s);
     cJSON_AddBoolToObject(wj, "ap_active", w.ap_active);
     cJSON_AddStringToObject(wj, "ap_ssid", w.ap_ssid);
     cJSON_AddStringToObject(wj, "test", test_str(w.test));
@@ -839,11 +845,12 @@ static esp_err_t sdr_capture_nmea_get(httpd_req_t *req)
 }
 
 // In AP mode, send every unknown URL to the config page (captive portal).
+// Not for the login hotspot: its clients are signing in to someone else's.
 static esp_err_t not_found(httpd_req_t *req, httpd_err_code_t code)
 {
     wifi_mgr_status_t w;
     wifi_mgr_get_status(&w);
-    if (w.ap_active && strncmp(req->uri, "/api/", 5) != 0) {
+    if (w.ap_active && !w.portal_assist && strncmp(req->uri, "/api/", 5) != 0) {
         char loc[40];
         snprintf(loc, sizeof(loc), "http://%s/", w.ap_ip);
         httpd_resp_set_status(req, "302 Found");

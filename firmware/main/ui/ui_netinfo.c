@@ -14,6 +14,7 @@
 #define CONFIRM_TIMEOUT_MS 4000
 
 static lv_obj_t *s_scr, *s_info, *s_ap_box, *s_ap_ssid, *s_ap_pass, *s_ap_url, *s_reset_btn, *s_reset_lbl;
+static lv_obj_t *s_portal_btn, *s_portal_lbl;
 static uint32_t s_confirm_since; // 0 = not awaiting confirmation
 
 static void back_cb(lv_event_t *e)
@@ -38,6 +39,25 @@ static void reset_cb(lv_event_t *e)
     wifi_mgr_start_ap();
 }
 
+// Login hotspot for captive portals: start it (and show the popup), or stop it.
+static void portal_cb(lv_event_t *e)
+{
+    wifi_mgr_status_t w;
+    wifi_mgr_get_status(&w);
+    if (w.portal_assist) wifi_mgr_portal_assist(false);
+    else ui_portal_start();
+}
+
+static const char *net_text(const wifi_mgr_status_t *w)
+{
+    switch (w->net) {
+    case WIFI_NET_ONLINE: return "#3ccf7a online#";
+    case WIFI_NET_PORTAL: return "#f5b13f captive portal (sign-in needed)#";
+    case WIFI_NET_OFFLINE: return "#f2545b offline#";
+    default: return "checking...";
+    }
+}
+
 static void refresh(void)
 {
     wifi_mgr_status_t w;
@@ -54,6 +74,7 @@ static void refresh(void)
     if (w.state == WIFI_MGR_AP) {
         lv_obj_set_hidden(s_ap_box, false);
         lv_obj_set_hidden(s_reset_btn, true);
+        lv_obj_set_hidden(s_portal_btn, true);
         lv_label_set_text(s_ap_ssid, w.ap_ssid);
         lv_label_set_text(s_ap_pass, w.ap_pass);
         lv_label_set_text_fmt(s_ap_url, "then open  http://%s/", w.ap_ip);
@@ -61,13 +82,25 @@ static void refresh(void)
     } else {
         lv_obj_set_hidden(s_ap_box, true);
         lv_obj_set_hidden(s_reset_btn, false);
+        lv_obj_set_hidden(s_portal_btn, false);
         if (w.state == WIFI_MGR_STA_CONNECTED) {
             len += snprintf(buf + len, sizeof(buf) - len,
-                            "Wi-Fi: #3ccf7a %s#\nIP address: #3fa7f5 %s#\nSignal: %d dBm\nSettings: http://%s/\n", w.sta_ssid,
-                            w.sta_ip, w.rssi, w.sta_ip);
+                            "Wi-Fi: #3ccf7a %s#  (%d dBm)\nIP address: #3fa7f5 %s#  /  %s\nGateway: %s\nMAC: %s\n"
+                            "Internet: %s\n",
+                            w.sta_ssid, w.rssi, w.sta_ip, w.sta_netmask, w.sta_gw, w.sta_mac, net_text(&w));
+            if (w.portal_assist) {
+                len += snprintf(buf + len, sizeof(buf) - len, "Login hotspot: #f5b13f %s#, %u min left\n", w.ap_ssid,
+                                (w.portal_assist_left_s + 59) / 60);
+            }
+            len += snprintf(buf + len, sizeof(buf) - len, "Settings: http://%s/\n", w.sta_ip);
         } else {
-            len += snprintf(buf + len, sizeof(buf) - len, "Wi-Fi: #f5b13f connecting to %s...#\n", w.sta_ssid);
+            len += snprintf(buf + len, sizeof(buf) - len, "Wi-Fi: #f5b13f connecting to %s...#\nMAC: %s\n", w.sta_ssid,
+                            w.sta_mac);
         }
+        const char *pl = w.portal_assist ? "Stop login hotspot" : "Login hotspot";
+        if (strcmp(lv_label_get_text(s_portal_lbl), pl) != 0) lv_label_set_text(s_portal_lbl, pl);
+        if (w.state == WIFI_MGR_STA_CONNECTED || w.portal_assist) lv_obj_remove_state(s_portal_btn, LV_STATE_DISABLED);
+        else lv_obj_add_state(s_portal_btn, LV_STATE_DISABLED);
     }
 
     len += snprintf(buf + len, sizeof(buf) - len, "\nAIS: %s%s%s", nmea_state_str(n.state),
@@ -159,10 +192,18 @@ lv_obj_t *ui_netinfo_create(void)
     s_ap_url = centered_label(s_ap_box, &lv_font_montserrat_24, UI_COLOR_ACCENT);
     lv_obj_set_hidden(s_ap_box, true);
 
-    s_reset_btn = ui_round_button(s_scr, "", 300, 64);
+    // Side by side: the login hotspot (captive portals) and reset to AP mode.
+    s_portal_btn = ui_round_button(s_scr, "", 280, 64);
+    s_portal_lbl = lv_obj_get_child(s_portal_btn, 0);
+    lv_obj_set_style_text_font(s_portal_lbl, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_opa(s_portal_btn, LV_OPA_50, LV_STATE_DISABLED);
+    lv_obj_align(s_portal_btn, LV_ALIGN_BOTTOM_MID, -150, -140);
+    lv_obj_add_event_cb(s_portal_btn, portal_cb, LV_EVENT_CLICKED, NULL);
+
+    s_reset_btn = ui_round_button(s_scr, "", 280, 64);
     s_reset_lbl = lv_obj_get_child(s_reset_btn, 0);
     lv_obj_set_style_text_font(s_reset_lbl, &lv_font_montserrat_20, 0);
-    lv_obj_align(s_reset_btn, LV_ALIGN_BOTTOM_MID, 0, -140);
+    lv_obj_align(s_reset_btn, LV_ALIGN_BOTTOM_MID, 150, -140);
     lv_obj_add_event_cb(s_reset_btn, reset_cb, LV_EVENT_CLICKED, NULL);
     set_confirm(false);
 

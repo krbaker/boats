@@ -58,6 +58,11 @@
 #define WAVE_TIP_R      176
 #define WAVE_BASE_W     112
 #define WAVE_ICON_PX    26      // the wave icon in the tide bubble (buoy without wave direction)
+
+// Wi-Fi icon before the time: signal bars online, struck through offline,
+// "?" in place of the inner bars at a captive portal (tap for the sign-in).
+#define NET_ICON_PX     36
+#define NET_ICON_GAP_PX 6
 #define WAVE_ICON_GAP   10
 #define WIND_COLOR      lv_color_hex(0xF5D33F)
 #define WAVE_COLOR      lv_color_hex(0x3FA7F5)
@@ -106,6 +111,7 @@ typedef struct {
     int16_t width;          // radial thickness, px
     bool hidden, pressed, disabled;
     float icon_deg;         // room after the text for an icon (the weather in the time bubble)
+    float lead_deg;         // room before the text for an icon (Wi-Fi in the time bubble)
     lv_obj_t *lbl2;         // optional second piece of text, after an icon (waves in the tide bubble)
     char text2[32];
     float mid_deg;          // room for the icon between the two pieces
@@ -151,6 +157,13 @@ static uint32_t s_wx_argb[WX_ICON_PX * WX_ICON_PX];
 static lv_image_dsc_t s_wx_img;
 static uint32_t s_wave_argb[WAVE_ICON_PX * WAVE_ICON_PX];
 static lv_image_dsc_t s_wave_img;
+
+typedef enum { NET_ICON_NONE, NET_ICON_BARS, NET_ICON_OFFLINE, NET_ICON_PORTAL } net_icon_t;
+static struct {
+    net_icon_t kind;
+    int bars;               // 0-3, for NET_ICON_BARS
+    bool tappable;          // opens the portal popup
+} s_net;
 
 // ---------------------------------------------------------------------------
 // Edge pills
@@ -214,9 +227,9 @@ static void pill_layout(pill_t *p)
         p->mid_angle = start + p->dir * (t1 + p->mid_deg / 2);
         lv_arclabel_set_angle_start(p->lbl2, start + p->dir * (t1 + p->mid_deg + t2 / 2) - 60);
     } else {
-        float t = p->icon_deg ? text_deg(p->lbl, p->text, p) : (float)lv_arclabel_get_text_angle(p->lbl);
-        p->span = fmaxf(p->min_span, t + 2 * PILL_PAD_DEG + p->icon_deg);
-        lv_arclabel_set_angle_start(p->lbl, p->center - p->icon_deg / 2 - 60);
+        float t = p->icon_deg || p->lead_deg ? text_deg(p->lbl, p->text, p) : (float)lv_arclabel_get_text_angle(p->lbl);
+        p->span = fmaxf(p->min_span, t + 2 * PILL_PAD_DEG + p->lead_deg + p->icon_deg);
+        lv_arclabel_set_angle_start(p->lbl, p->center + (p->lead_deg - p->icon_deg) / 2 - 60);
     }
     if (s_overlay) lv_obj_invalidate(s_overlay);
 }
@@ -246,6 +259,14 @@ static void pill_set_icon_room(pill_t *p, float px)
     float deg = px ? px_to_deg(px, pill_outer_r() - p->width / 2.0f) : 0;
     if (fabsf(deg - p->icon_deg) < 0.01f) return;
     p->icon_deg = deg;
+    pill_layout(p);
+}
+
+static void pill_set_lead_room(pill_t *p, float px)
+{
+    float deg = px ? px_to_deg(px, pill_outer_r() - p->width / 2.0f) : 0;
+    if (fabsf(deg - p->lead_deg) < 0.01f) return;
+    p->lead_deg = deg;
     pill_layout(p);
 }
 
@@ -434,6 +455,97 @@ static void draw_time_icon(lv_layer_t *layer)
         lv_area_t la = {(int32_t)c.x - 10, (int32_t)c.y - 15, (int32_t)c.x + 10, (int32_t)c.y + 15};
         lv_draw_label(layer, &ld, &la);
     }
+}
+
+// Where the Wi-Fi icon's room starts and ends, in screen degrees.
+static void net_icon_room(float *start, float *end)
+{
+    const pill_t *p = &s_pills[PILL_TIME];
+    *start = p->center - p->span / 2 + PILL_PAD_DEG;
+    *end = *start + p->lead_deg;
+}
+
+static void draw_net_icon(lv_layer_t *layer)
+{
+    const pill_t *p = &s_pills[PILL_TIME];
+    if (s_net.kind == NET_ICON_NONE || p->hidden || !p->lead_deg) return;
+    float rm = pill_outer_r() - p->width / 2.0f, start, end;
+    net_icon_room(&start, &end);
+    float a = (end - px_to_deg(NET_ICON_GAP_PX + NET_ICON_PX / 2.0f, rm)) * (float)M_PI / 180;
+    int32_t cx = (int32_t)lroundf(UI_CENTER + rm * cosf(a)), cy = (int32_t)lroundf(UI_CENTER + rm * sinf(a));
+
+    // A quarter-circle fan opening upwards from a point near the bottom.
+    lv_point_t o = {cx, cy + 12};
+    static const int16_t radii[] = {4, 11, 18, 25}; // the dot, then three bars
+    bool portal = s_net.kind == NET_ICON_PORTAL;
+    lv_color_t on = portal ? UI_COLOR_WARN : s_net.kind == NET_ICON_OFFLINE ? UI_COLOR_MUTED : lv_color_white();
+    for (int i = portal ? 2 : 0; i < 4; i++) {
+        lv_draw_arc_dsc_t d;
+        lv_draw_arc_dsc_init(&d);
+        d.center = o;
+        d.radius = radii[i];
+        d.width = 4;
+        d.start_angle = i == 0 ? 0 : 225;
+        d.end_angle = i == 0 ? 360 : 315;
+        d.rounded = 1;
+        d.color = on;
+        d.opa = s_net.kind == NET_ICON_BARS && i > s_net.bars ? LV_OPA_30 : LV_OPA_COVER;
+        lv_draw_arc(layer, &d);
+    }
+    if (portal) {
+        lv_draw_label_dsc_t ld;
+        lv_draw_label_dsc_init(&ld);
+        ld.text = "?";
+        ld.font = &lv_font_montserrat_16;
+        ld.color = UI_COLOR_WARN;
+        ld.align = LV_TEXT_ALIGN_CENTER;
+        lv_area_t la = {o.x - 8, o.y - 15, o.x + 8, o.y + 3};
+        lv_draw_label(layer, &ld, &la);
+    } else if (s_net.kind == NET_ICON_OFFLINE) {
+        lv_draw_line_dsc_t ld;
+        lv_draw_line_dsc_init(&ld);
+        ld.p1 = (lv_point_precise_t){o.x - 15, o.y + 2};
+        ld.p2 = (lv_point_precise_t){o.x + 15, o.y - 26};
+        ld.width = 3;
+        ld.round_start = ld.round_end = 1;
+        ld.color = UI_COLOR_BAD;
+        lv_draw_line(layer, &ld);
+    }
+}
+
+// True if a point on the time pill is on the Wi-Fi icon (or the cap before it).
+static bool on_net_icon(lv_point_t pt)
+{
+    float ang = atan2f(pt.y - UI_CENTER, pt.x - UI_CENTER) * 180.0f / (float)M_PI, start, end;
+    net_icon_room(&start, &end);
+    float d = fmodf(ang - start + 540, 360) - 180; // degrees past the room's start
+    return d >= -(PILL_PAD_DEG + 8) && d <= end - start + 2;
+}
+
+// The Wi-Fi icon from the manager's status.
+static void update_net_icon(void)
+{
+    wifi_mgr_status_t ws;
+    wifi_mgr_get_status(&ws);
+    net_icon_t kind;
+    int bars = 0;
+    if (ws.state == WIFI_MGR_AP) {
+        kind = NET_ICON_NONE; // setup mode says so in the middle of the screen
+    } else if (ws.net == WIFI_NET_PORTAL) {
+        kind = NET_ICON_PORTAL;
+    } else if (ws.state != WIFI_MGR_STA_CONNECTED || ws.net == WIFI_NET_OFFLINE) {
+        kind = NET_ICON_OFFLINE;
+    } else {
+        kind = NET_ICON_BARS;
+        bars = ws.rssi >= -60 ? 3 : ws.rssi >= -70 ? 2 : ws.rssi >= -80 ? 1 : 0;
+    }
+    s_net.tappable = kind == NET_ICON_PORTAL || ws.portal_assist;
+    if (kind != s_net.kind || bars != s_net.bars) {
+        s_net.kind = kind;
+        s_net.bars = bars;
+        if (s_overlay) lv_obj_invalidate(s_overlay);
+    }
+    pill_set_lead_room(&s_pills[PILL_TIME], kind == NET_ICON_NONE ? 0 : NET_ICON_PX + NET_ICON_GAP_PX);
 }
 
 // The wave icon between the tide and the waves in the tide bubble.
@@ -966,6 +1078,7 @@ static void overlay_draw_cb(lv_event_t *e)
     draw_wind(layer);
     draw_pills(layer);
     draw_time_icon(layer);
+    draw_net_icon(layer);
     draw_tide_wave_icon(layer);
 }
 
@@ -1019,7 +1132,8 @@ static void overlay_click_cb(lv_event_t *e)
     if (s_drag.active) return; // the end of a drag, not a tap
     pill_t *pill = pill_at(p);
     if (pill) {
-        if (!pill->disabled) pill->on_tap();
+        if (pill == &s_pills[PILL_TIME] && s_net.tappable && on_net_icon(p)) ui_portal_open();
+        else if (!pill->disabled) pill->on_tap();
         return;
     }
     int best = -1;
@@ -1131,6 +1245,7 @@ static void refresh_timer_cb(lv_timer_t *t)
     s_nvessels = vessel_db_snapshot(s_vessels, VESSEL_MAX);
     if (lv_screen_active() == s_scr) lv_obj_invalidate(s_overlay);
     update_border_text();
+    update_net_icon();
     update_weather();
 }
 

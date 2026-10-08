@@ -122,6 +122,7 @@
 
   <section>
     <h2>Wi-Fi</h2>
+    <table id="wifi_info"><tr><td>Loading…</td><td></td></tr></table>
     <label for="wifi_ssid">Network name (SSID)</label>
     <input id="wifi_ssid" autocomplete="off">
     <label for="wifi_pass">Password</label>
@@ -653,6 +654,18 @@ function ago(s) {
 
 function fmtTime(t) { return new Date(t * 1000).toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" }); }
 
+function showWifiInfo(w) {
+  const dash = v => v ? esc(v) : "—";
+  const net = { "online": "ok", "captive portal": "warn", "offline": "bad" }[w.internet] || "";
+  let html = row("Network", w.state === "access point" ? "none (setup access point)" : `${esc(w.ssid)} (${esc(w.state)})`);
+  html += row("IP address", dash(w.ip));
+  html += row("Netmask", dash(w.netmask));
+  html += row("Gateway", dash(w.gateway));
+  html += row("MAC address", dash(w.mac));
+  if (w.state !== "access point") html += row("Internet", esc(w.internet) + (w.internet === "captive portal" ? " — sign in using the login hotspot on the display's Network screen" : ""), net);
+  if (w.portal_assist) html += row("Login hotspot", `on (<b>${esc(w.ap_ssid)}</b>), ${Math.ceil(w.portal_assist_left_s / 60)} min left`, "warn");
+  $("wifi_info").innerHTML = html;
+}
 function row(k, v, cls) { return `<tr><td>${k}</td><td class="${cls || ""}">${v}</td></tr>`; }
 function esc(s) { return String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]); }
 
@@ -750,6 +763,7 @@ async function pollStatus() {
     const w = s.wifi, a = s.ais, t = s.tide, m = s.map;
     let html = "";
     $("cp_version").textContent = w.coprocessor || "unknown";
+    showWifiInfo(w);
     if (w.state === "access point") html += row("Wi-Fi", `Setup access point <b>${esc(w.ap_ssid)}</b>`, "warn");
     else html += row("Wi-Fi", `${esc(w.state)} to <b>${esc(w.ssid)}</b>` + (w.ip ? ` — ${w.ip} (${w.rssi} dBm)` : ""), w.ip ? "ok" : "warn");
     html += row("AIS feed", esc(a.state) + (a.error && a.state !== "connected" ? ` (${esc(a.error)})` : "") +

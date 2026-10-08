@@ -84,3 +84,7 @@ CONFIG_LV_BUILD_DEMOS=n
 # microSD card (chart tiles): long file names (manifest.json), FAT32 only.
 CONFIG_FATFS_LFN_HEAP=y
 CONFIG_FATFS_MAX_LFN=255
+
+# Captive-portal login hotspot: route (NAT) the AP out through the station.
+CONFIG_LWIP_IP_FORWARD=y
+CONFIG_LWIP_IPV4_NAPT=y

@@ -2,7 +2,9 @@
 
 #include <string.h>
 
+#include "dhcpserver/dhcpserver.h"
 #include "esp_event.h"
+#include "esp_http_client.h"
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "esp_netif.h"
@@ -23,15 +25,26 @@ static const char *TAG = "wifi";
 #define AP_LINGER_MS        60000   // keep the AP up after a successful change so the page can show the result
 #define RECONNECT_DELAY_MS  3000
 
+// Internet probe: the same check Android makes. 204 = online; a redirect or
+// any other answer = a captive portal's sign-in page; no answer = offline.
+#define PROBE_URL           "http://connectivitycheck.gstatic.com/generate_204"
+#define PROBE_TIMEOUT_MS    5000
+#define PROBE_ONLINE_MS     60000   // between probes while online or offline
+#define PROBE_PORTAL_MS     15000   // ...at a portal (signing in some other way)
+#define PROBE_ASSIST_MS     5000    // ...while the login hotspot is on
+
 #define EV_GOT_IP       BIT0
 #define EV_DISCONNECTED BIT1
+#define EV_AP_UP        BIT2
+#define EV_PROBE_NOW    BIT3
 
-typedef enum { CMD_SET_CREDS, CMD_START_AP } cmd_type_t;
+typedef enum { CMD_SET_CREDS, CMD_START_AP, CMD_PORTAL_ASSIST } cmd_type_t;
 
 typedef struct {
     cmd_type_t type;
     char ssid[33];
     char pass[65];
+    bool on;
 } cmd_t;
 
 static wifi_mgr_status_t s_status;
@@ -40,6 +53,7 @@ static EventGroupHandle_t s_ev;
 static QueueHandle_t s_cmds;
 static esp_netif_t *s_sta_netif, *s_ap_netif;
 static volatile bool s_auto_reconnect;
+static TickType_t s_assist_deadline;
 
 #define LOCKED(stmt) do { xSemaphoreTake(s_lock, portMAX_DELAY); stmt; xSemaphoreGive(s_lock); } while (0)
 
@@ -62,7 +76,8 @@ static void dns_task(void *arg)
         struct sockaddr_in from;
         socklen_t fromlen = sizeof(from);
         int n = recvfrom(sock, buf, sizeof(buf) - 16, 0, (struct sockaddr *)&from, &fromlen);
-        if (n < 12 || !s_status.ap_active) continue;
+        // Not while the login hotspot is on: then its clients use the real DNS.
+        if (n < 12 || !s_status.ap_active || s_status.portal_assist) continue;
         uint16_t qdcount = (buf[4] << 8) | buf[5];
         if ((buf[2] & 0x80) || qdcount != 1) continue; // only plain single queries
 
@@ -100,18 +115,26 @@ static void on_wifi_event(void *arg, esp_event_base_t base, int32_t id, void *da
         xEventGroupClearBits(s_ev, EV_GOT_IP);
         xEventGroupSetBits(s_ev, EV_DISCONNECTED);
         LOCKED({
-            s_status.sta_ip[0] = '\0';
+            s_status.sta_ip[0] = s_status.sta_netmask[0] = s_status.sta_gw[0] = '\0';
+            s_status.net = WIFI_NET_OFFLINE;
             if (s_status.state == WIFI_MGR_STA_CONNECTED) s_status.state = WIFI_MGR_STA_CONNECTING;
         });
+    } else if (base == WIFI_EVENT && id == WIFI_EVENT_AP_START) {
+        xEventGroupSetBits(s_ev, EV_AP_UP);
+    } else if (base == WIFI_EVENT && id == WIFI_EVENT_AP_STOP) {
+        xEventGroupClearBits(s_ev, EV_AP_UP);
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *e = data;
         LOCKED({
             snprintf(s_status.sta_ip, sizeof(s_status.sta_ip), IPSTR, IP2STR(&e->ip_info.ip));
+            snprintf(s_status.sta_netmask, sizeof(s_status.sta_netmask), IPSTR, IP2STR(&e->ip_info.netmask));
+            snprintf(s_status.sta_gw, sizeof(s_status.sta_gw), IPSTR, IP2STR(&e->ip_info.gw));
+            s_status.net = WIFI_NET_UNKNOWN;
             if (s_status.state != WIFI_MGR_AP) s_status.state = WIFI_MGR_STA_CONNECTED;
         });
         ESP_LOGI(TAG, "got IP %s", s_status.sta_ip);
         xEventGroupClearBits(s_ev, EV_DISCONNECTED);
-        xEventGroupSetBits(s_ev, EV_GOT_IP);
+        xEventGroupSetBits(s_ev, EV_GOT_IP | EV_PROBE_NOW);
     }
 }
 
@@ -182,15 +205,130 @@ static void set_mode(wifi_mode_t mode)
     LOCKED(s_status.ap_active = ap);
 }
 
+// ---------------------------------------------------------------------------
+// Captive portals: the internet probe and the login hotspot
+// ---------------------------------------------------------------------------
+
+static wifi_net_t probe_once(void)
+{
+    esp_http_client_config_t cfg = {
+        .url = PROBE_URL,
+        .timeout_ms = PROBE_TIMEOUT_MS,
+        .disable_auto_redirect = true, // a redirect is the answer, not something to follow
+    };
+    esp_http_client_handle_t c = esp_http_client_init(&cfg);
+    if (!c) return WIFI_NET_UNKNOWN;
+    wifi_net_t r = WIFI_NET_OFFLINE;
+    if (esp_http_client_perform(c) == ESP_OK) {
+        r = esp_http_client_get_status_code(c) == 204 ? WIFI_NET_ONLINE : WIFI_NET_PORTAL;
+    }
+    esp_http_client_cleanup(c);
+    return r;
+}
+
+static void probe_task(void *arg)
+{
+    for (;;) {
+        uint32_t ms = s_status.portal_assist ? PROBE_ASSIST_MS
+                      : s_status.net == WIFI_NET_PORTAL ? PROBE_PORTAL_MS : PROBE_ONLINE_MS;
+        xEventGroupWaitBits(s_ev, EV_PROBE_NOW, pdTRUE, pdFALSE, pdMS_TO_TICKS(ms));
+        if (!wifi_mgr_has_ip()) continue;
+        wifi_net_t r = probe_once();
+        if (r == WIFI_NET_OFFLINE) { // one lost packet shouldn't flip the icon
+            vTaskDelay(pdMS_TO_TICKS(3000));
+            r = probe_once();
+        }
+        if (r == WIFI_NET_UNKNOWN || !wifi_mgr_has_ip()) continue;
+        if (r != s_status.net) ESP_LOGI(TAG, "internet: %s", wifi_mgr_net_str(r));
+        LOCKED(s_status.net = r);
+    }
+}
+
+// What the AP's DHCP server hands out as DNS: the station network's own
+// server (login hotspot), or else the AP itself (setup mode's captive DNS).
+static void set_ap_dhcp(const esp_netif_ip_info_t *ip, const esp_netif_dns_info_t *dns)
+{
+    esp_netif_dhcps_stop(s_ap_netif);
+    if (ip) esp_netif_set_ip_info(s_ap_netif, ip);
+    uint8_t offer = dns ? OFFER_DNS : 0;
+    esp_netif_dhcps_option(s_ap_netif, ESP_NETIF_OP_SET, ESP_NETIF_DOMAIN_NAME_SERVER, &offer, sizeof(offer));
+    if (dns) esp_netif_set_dns_info(s_ap_netif, ESP_NETIF_DNS_MAIN, (esp_netif_dns_info_t *)dns);
+    esp_netif_dhcps_start(s_ap_netif);
+
+    esp_netif_ip_info_t now;
+    esp_netif_get_ip_info(s_ap_netif, &now);
+    LOCKED(snprintf(s_status.ap_ip, sizeof(s_status.ap_ip), IPSTR, IP2STR(&now.ip)));
+}
+
+static void portal_assist_stop(bool to_sta)
+{
+    if (!s_status.portal_assist) return;
+    ESP_LOGI(TAG, "login hotspot off");
+    esp_netif_napt_disable(s_ap_netif);
+    set_ap_dhcp(NULL, NULL);
+    LOCKED({
+        s_status.portal_assist = false;
+        s_status.portal_assist_left_s = 0;
+    });
+    if (to_sta) set_mode(WIFI_MODE_STA);
+}
+
+static void portal_assist_start(void)
+{
+    if (s_status.portal_assist) { // again: a fresh ten minutes
+        s_assist_deadline = xTaskGetTickCount() + pdMS_TO_TICKS(WIFI_MGR_PORTAL_ASSIST_S * 1000);
+        return;
+    }
+    if (s_status.state != WIFI_MGR_STA_CONNECTED) {
+        ESP_LOGW(TAG, "login hotspot needs a station connection");
+        return;
+    }
+    ESP_LOGI(TAG, "login hotspot on");
+    set_mode(WIFI_MODE_APSTA);
+    if (!(xEventGroupWaitBits(s_ev, EV_AP_UP, pdFALSE, pdFALSE, pdMS_TO_TICKS(5000)) & EV_AP_UP)) {
+        ESP_LOGE(TAG, "AP didn't start");
+        set_mode(WIFI_MODE_STA);
+        return;
+    }
+
+    esp_netif_ip_info_t sta, ap;
+    esp_netif_get_ip_info(s_sta_netif, &sta);
+    esp_netif_get_ip_info(s_ap_netif, &ap);
+    esp_netif_dns_info_t dns;
+    esp_netif_get_dns_info(s_sta_netif, ESP_NETIF_DNS_MAIN, &dns);
+    // The AP's subnet can't overlap the network it's routed into.
+    bool clash = ((sta.ip.addr ^ ap.ip.addr) & sta.netmask.addr & ap.netmask.addr) == 0;
+    if (clash) {
+        bool dflt = ap.ip.addr == ESP_IP4TOADDR(192, 168, 4, 1);
+        ap.ip.addr = ap.gw.addr = dflt ? ESP_IP4TOADDR(10, 48, 0, 1) : ESP_IP4TOADDR(192, 168, 4, 1);
+        ap.netmask.addr = ESP_IP4TOADDR(255, 255, 255, 0);
+        ESP_LOGI(TAG, "AP moved to " IPSTR " (station network overlaps)", IP2STR(&ap.ip));
+    }
+    set_ap_dhcp(clash ? &ap : NULL, &dns);
+
+    LOCKED(s_status.portal_assist = true); // set first: portal_assist_stop() checks it
+    esp_err_t err = esp_netif_napt_enable(s_ap_netif);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "NAT failed: %s", esp_err_to_name(err));
+        portal_assist_stop(true);
+        return;
+    }
+    s_assist_deadline = xTaskGetTickCount() + pdMS_TO_TICKS(WIFI_MGR_PORTAL_ASSIST_S * 1000);
+    LOCKED(s_status.portal_assist_left_s = WIFI_MGR_PORTAL_ASSIST_S);
+    xEventGroupSetBits(s_ev, EV_PROBE_NOW);
+}
+
 static void enter_ap_mode(void)
 {
     ESP_LOGI(TAG, "entering AP mode");
+    portal_assist_stop(false);
     s_auto_reconnect = false;
     esp_wifi_disconnect();
     make_ap_identity();
     LOCKED({
         s_status.state = WIFI_MGR_AP;
-        s_status.sta_ip[0] = '\0';
+        s_status.sta_ip[0] = s_status.sta_netmask[0] = s_status.sta_gw[0] = '\0';
+        s_status.net = WIFI_NET_OFFLINE;
     });
     set_mode(WIFI_MODE_AP);
     ESP_LOGI(TAG, "AP \"%s\" password \"%s\"", s_status.ap_ssid, s_status.ap_pass);
@@ -215,6 +353,7 @@ static bool wait_for_ip(uint32_t ms)
 
 static void test_credentials(const cmd_t *cmd)
 {
+    portal_assist_stop(true); // its routing and DNS belong to the network we're leaving
     char old_ssid[33], old_pass[65];
     bool have_old = settings_get_wifi(old_ssid, old_pass);
     bool was_ap = s_status.state == WIFI_MGR_AP;
@@ -261,10 +400,18 @@ static void wifi_task(void *arg)
         if (xQueueReceive(s_cmds, &cmd, pdMS_TO_TICKS(500))) {
             if (cmd.type == CMD_SET_CREDS) {
                 test_credentials(&cmd);
+            } else if (cmd.type == CMD_PORTAL_ASSIST) {
+                if (cmd.on) portal_assist_start();
+                else portal_assist_stop(true);
             } else {
                 enter_ap_mode();
             }
             continue;
+        }
+        if (s_status.portal_assist) {
+            int32_t left = (int32_t)(s_assist_deadline - xTaskGetTickCount());
+            if (left <= 0) portal_assist_stop(true);
+            else LOCKED(s_status.portal_assist_left_s = (left + configTICK_RATE_HZ - 1) / configTICK_RATE_HZ);
         }
         // Keep retrying the station connection while it's down.
         if (s_auto_reconnect && s_status.state == WIFI_MGR_STA_CONNECTING &&
@@ -301,19 +448,24 @@ void wifi_mgr_start(void)
 
     char ssid[33], pass[65];
     make_ap_identity();
-    if (settings_get_wifi(ssid, pass)) {
-        ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-        ESP_ERROR_CHECK(esp_wifi_start());
+    bool have = settings_get_wifi(ssid, pass);
+    ESP_ERROR_CHECK(esp_wifi_set_mode(have ? WIFI_MODE_STA : WIFI_MODE_AP));
+    ESP_ERROR_CHECK(esp_wifi_start());
+    // The station MAC (the C6's): what a captive portal knows the display by.
+    uint8_t mac[6];
+    if (esp_wifi_get_mac(WIFI_IF_STA, mac) == ESP_OK) {
+        LOCKED(snprintf(s_status.sta_mac, sizeof(s_status.sta_mac), MACSTR, MAC2STR(mac)));
+    }
+    if (have) {
         sta_connect(ssid, pass);
     } else {
         ESP_LOGI(TAG, "no saved network");
-        ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
-        ESP_ERROR_CHECK(esp_wifi_start());
         enter_ap_mode();
     }
 
     xTaskCreate(wifi_task, "wifi_mgr", 4096, NULL, 4, NULL);
     xTaskCreate(dns_task, "dns", 3072, NULL, 3, NULL);
+    xTaskCreate(probe_task, "net_probe", 6144, NULL, 3, NULL);
 }
 
 bool wifi_mgr_has_ip(void)
@@ -339,6 +491,23 @@ void wifi_mgr_start_ap(void)
 {
     cmd_t cmd = {.type = CMD_START_AP};
     xQueueSend(s_cmds, &cmd, 0);
+}
+
+void wifi_mgr_portal_assist(bool on)
+{
+    cmd_t cmd = {.type = CMD_PORTAL_ASSIST, .on = on};
+    xQueueSend(s_cmds, &cmd, 0);
+}
+
+const char *wifi_mgr_net_str(wifi_net_t n)
+{
+    switch (n) {
+    case WIFI_NET_UNKNOWN: return "checking";
+    case WIFI_NET_ONLINE: return "online";
+    case WIFI_NET_OFFLINE: return "offline";
+    case WIFI_NET_PORTAL: return "captive portal";
+    }
+    return "?";
 }
 
 const char *wifi_mgr_state_str(wifi_mgr_state_t s)
