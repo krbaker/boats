@@ -2,6 +2,12 @@
 
 A standalone display for local AIS traffic. It runs on the Waveshare ESP32-P4-WIFI6-Touch-LCD-3.4C (800×800 round touchscreen). It reads AIS from an NMEA 0183 TCP server, from an RTL-SDR dongle plugged into it (decoding AIS itself), or both at once. It shows the AIS contacts on a NOAA nautical chart, with the time and the next tide around the edge.
 
+## NOTES
+* This is a work in progress YMMV
+* This is 99% AI Slop
+* There is NO security on the config / firmware up page
+
+
 ```
 firmware/        ESP-IDF project (C, LVGL 9) for the display
 coprocessor/     ESP-Hosted firmware for the board's ESP32-C6 Wi-Fi chip
@@ -14,8 +20,7 @@ tools/ais_sim.py AIS test server (simulated traffic or replay of a capture)
 
 | Screen | How to get there | What it shows |
 |---|---|---|
-| **Map** | Default | The chart for the current zoom level, starting centred on your configured position. Drag with one finger to pan, up to 10 nm from the chart's centre. Each vessel is drawn as a hull: scaled to its reported length and beam, rotated to its heading, and coloured by vessel type. Hulls are to scale up to the third zoom level (2 nm on the standard chart); zoomed out further, they stay at that size so they remain visible. The hull's shape shows its heading, and a dashed line shows its course over ground and where it will be in 6 minutes (the two differ when current or wind sets it sideways). Its name and speed appear underneath. Vessels go dim after 3 minutes without a report (7 minutes if slow or at rest, since those report less often) and disappear after 10 minutes. **+ / −** on the right edge change the zoom level (0.5 to 10 nm radius). The time is at the top edge, the tide level and next high or low at the bottom, and the vessel count (or "AIS offline" / "AIS not set") on the left. **Weather** (if set up):
-<ul><li>an icon after the time: sun or moon at its phase, cloud, rain, snow;</li><li>a red **!** when the marine zone has a watch, warning or advisory. When one is new or updated, it also pops up over the screen as a red box with its full text, until you tap its **✕**;</li><li>a yellow arrow at the rim pointing in from where the wind comes from, with its speed in mph (and the gust when it's 10 mph more);</li><li>a blue triangle pointing in from where the waves come from, with their height and period. Many buoys measure no wave direction: then the height and period go at the end of the tide bubble instead, after a small wave icon, and the status table warns that the direction is missing.</li></ul> |
+| **Map** | Default | The chart for the current zoom level, starting centred on your configured position. Drag with one finger to pan, up to 10 nm from the chart's centre. Each vessel is drawn as a hull: scaled to its reported length and beam, rotated to its heading, and coloured by vessel type. Hulls are to scale up to the third zoom level (2 nm on the standard chart); zoomed out further, they stay at that size so they remain visible. The hull's shape shows its heading, and a dashed line shows its course over ground and where it will be in 6 minutes (the two differ when current or wind sets it sideways). Its name and speed appear underneath. Vessels go dim after 3 minutes without a report (7 minutes if slow or at rest, since those report less often) and disappear after 10 minutes. **+ / −** on the right edge change the zoom level (0.5 to 10 nm radius). The time is at the top edge, the tide level and next high or low at the bottom, and the vessel count (or "AIS offline" / "AIS not set") on the left. **Weather** (if set up): <ul><li>an icon after the time: sun or moon at its phase, cloud, rain, snow;</li><li>a red **!** when the marine zone has a watch, warning or advisory. When one is new or updated, it also pops up over the screen as a red box with its full text, until you tap its **✕**;</li><li>a yellow arrow at the rim pointing in from where the wind comes from, with its speed in mph (and the gust when it's 10 mph more);</li><li>a blue triangle pointing in from where the waves come from, with their height and period. Many buoys measure no wave direction: then the height and period go at the end of the tide bubble instead, after a small wave icon, and the status table warns that the direction is missing.</li></ul> |
 | **Weather** | Tap the time at the top edge | **Forecast** tab: active alerts first (tap one for the full text), then the NOAA marine forecast for your zone. **Waves** tab: the NDBC buoy's waves, wind, temperatures and pressure. **Weather** tab: your WeatherLink station's wind, temperature, humidity, pressure and trend, and rain; the sky from the nearest NWS station; sunrise and sunset; the moon's phase. |
 | **Tide** | Tap the tide at the bottom edge | Predicted water level from 6 hours ago to 24 hours ahead, with highs, lows and the current level. |
 | **Vessels** | Tap the vessel count on the left edge | **Vessels** tab: every vessel heard, nearest first, with distance and speed; tap one for its details. **Receiver** tab: the RTL-SDR's state, decoder CPU load, gain, noise floor and tuning correction, then packets per channel from the SDR and from the network feed (last minute and since boot), and how many vessels only one of them heard. **Options** tab: minimum length (0–300 ft) and speed (0–50 kn) for vessels on the map, whether vessels that report no size or speed are kept, whether vessels below the limits lose just their label or aren't drawn at all, whose label wins when labels overlap (fastest or largest), and whether labels show names and/or speeds. |
@@ -107,12 +112,12 @@ On first boot there's no saved Wi-Fi network, so the display starts in setup mod
 
 ### Hardware notes and troubleshooting
 
-- **Chip revision.** The ESPHome config ran the CPU at 360 MHz, which only early (pre-v3.0) ESP32-P4 chips use. `sdkconfig.defaults` therefore builds for revisions below v3. If `esptool.py --chip esp32p4 chip_id` reports v3.x, delete the two `ESP32P4_*REV*` lines from `firmware/sdkconfig.defaults`, then run `rm sdkconfig && idf.py build`. A build for the wrong revision won't boot.
+- **Chip revision.** I have the P4 CPU at 360 MHz, which only early (pre-v3.0) ESP32-P4 chips use. `sdkconfig.defaults` therefore builds for revisions below v3. If `esptool.py --chip esp32p4 chip_id` reports v3.x, delete the two `ESP32P4_*REV*` lines from `firmware/sdkconfig.defaults`, then run `rm sdkconfig && idf.py build`. A build for the wrong revision won't boot.
 - **Touch lands in the wrong place.** Set the swap and mirror options under `idf.py menuconfig` → *AIS Display*. The defaults (all off) come from the Waveshare BSP. Your ESPHome config used `swap_xy` + `mirror_x`, but ESPHome applies its own transform on top, so the two may not match.
 - **No Wi-Fi.** Wi-Fi runs on the board's ESP32-C6 co-processor through ESP-Hosted over SDIO. If the log shows ESP-Hosted version or RPC errors, the C6's firmware doesn't match the host library. Build `coprocessor/` (`. ~/esp/esp-idf/export.sh; cd coprocessor; idf.py set-target esp32c6; idf.py build`; the `set-target` step is only needed on a fresh checkout). Upload `coprocessor/build/eh_cp_ota_coprocessor_ota.bin` on the config page. If the C6's current firmware is too old to accept that, flash it once over its own USB/serial port with `idf.py -p <port> flash`.
 - **Pins** come from the ESPHome config and the Waveshare BSP. Display: MIPI-DSI, 2 lanes, JD9365 controller, reset on GPIO27. Backlight: GPIO26 PWM, inverted. Touch: GT911 on I2C, GPIO7/8. C6: SDIO CLK 18, CMD 19, D0–D3 14–17, reset 54.
 
-## Testing without a boat
+## Testing
 
 ```sh
 python3 tools/ais_sim.py --lat 47.6005 --lon -122.3550            # serves TCP port 10110
@@ -145,10 +150,10 @@ firmware/test/host/preview/build.sh mapbuilder/seattle     # PNGs in firmware/te
 
 ## Desk stand
 
-`enclosure/desk_stand.scad` (`desk_stand.stl`) is a one-piece stand that screws into the four M4 threaded holes on the back of the display (a centred 75 × 75 mm square, the VESA 75 pattern): an X-shaped bracket on four posts, a single leg and a 110 × 95 mm base. Nothing wraps around the screen. The display leans back 15° with its bottom edge about 20 mm above the desk, so the USB-C cable can bend down; it then runs in a groove in the base and out of the back. Print it base down with no supports, and fix it with four M4 × 16 mm screws, which bite about 4 mm into the display. Check how deep the threaded holes are first, so the screws can't bottom out against the display; adjust `thread_engage` at the top of the file if needed.
+`enclosure/desk_stand.scad` (`desk_stand.stl`) is a one-piece stand that screws into the four M4 threaded holes on the back of the display (a centred 75 × 75 mm square, the VESA 75 pattern): an X-shaped bracket on four posts, a single leg and a 110 × 95 mm base. Nothing wraps around the screen. The display leans back 15° with its bottom edge about 20 mm above the desk, so the USB-C cable can bend down; it then runs in a groove in the base and out of the back. I printed it base down with organic supports, and fix it with four M4 × 16 mm screws, which bite about 4 mm into the display.
 
 `enclosure/display_case.scad` is an alternative full case (bezel, back lid and a cradle stand) that wraps around the display.
 
 ## Licence
 
-GPL-2.0-or-later: you can redistribute and modify this under the terms of the GNU General Public License, version 2 or (at your option) any later version. The full text is in `LICENSE`. The firmware is GPL because the RTL-SDR tuner driver is ported from librtlsdr.
+GPL-2.0-or-later: you can redistribute and modify this under the terms of the GNU General Public License, version 2 or (at your option) any later version. The full text is in `LICENSE`.
