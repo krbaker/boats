@@ -6,7 +6,9 @@
 #include <sys/param.h>
 
 #include "cJSON.h"
+#include "esp_core_dump.h"
 #include "esp_heap_caps.h"
+#include "esp_partition.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
 #include "esp_system.h"
@@ -845,6 +847,29 @@ static esp_err_t sdr_capture_nmea_get(httpd_req_t *req)
     return httpd_resp_send_chunk(req, NULL, 0);
 }
 
+// The last crash's core dump, raw from flash: decode it with
+// esp-coredump info_corefile -t raw -c coredump.bin build/ais_display.elf
+static esp_err_t coredump_get(httpd_req_t *req)
+{
+    size_t addr, size;
+    const esp_partition_t *p =
+        esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_COREDUMP, NULL);
+    if (!p || esp_core_dump_image_get(&addr, &size) != ESP_OK) return send_error(req, "404 Not Found", "no core dump saved");
+    httpd_resp_set_type(req, "application/octet-stream");
+    httpd_resp_set_hdr(req, "Content-Disposition", "attachment; filename=\"coredump.bin\"");
+    char *buf = heap_caps_malloc(UPLOAD_CHUNK, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+    if (!buf) return send_error(req, "500 Internal Server Error", "out of memory");
+    esp_err_t err = ESP_OK;
+    for (size_t off = 0; off < size && err == ESP_OK; off += UPLOAD_CHUNK) {
+        size_t n = MIN(UPLOAD_CHUNK, size - off);
+        err = esp_partition_read(p, addr - p->address + off, buf, n);
+        if (err == ESP_OK) err = httpd_resp_send_chunk(req, buf, n);
+    }
+    free(buf);
+    if (err != ESP_OK) return err;
+    return httpd_resp_send_chunk(req, NULL, 0);
+}
+
 // The recent log, as plain text.
 static esp_err_t log_get(httpd_req_t *req)
 {
@@ -906,6 +931,7 @@ void web_server_start(void)
         {.uri = "/api/sdr/capture", .method = HTTP_GET, .handler = sdr_capture_get},
         {.uri = "/api/sdr/capture.nmea", .method = HTTP_GET, .handler = sdr_capture_nmea_get},
         {.uri = "/log", .method = HTTP_GET, .handler = log_get},
+        {.uri = "/api/coredump", .method = HTTP_GET, .handler = coredump_get},
     };
     for (size_t i = 0; i < sizeof(uris) / sizeof(uris[0]); i++) {
         httpd_register_uri_handler(server, &uris[i]);

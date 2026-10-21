@@ -30,6 +30,10 @@ CONFIG_SPIRAM_XIP_FROM_PSRAM=y
 CONFIG_FREERTOS_HZ=1000
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
 CONFIG_ESP_TASK_WDT_TIMEOUT_S=10
+# A crash saves a core dump to flash; the next boot logs a summary of it and
+# GET /api/coredump downloads it (esp-coredump info_corefile -t raw).
+CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
+CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF=y
 
 # --- Wi-Fi via the ESP32-C6 co-processor (ESP-Hosted over SDIO) ---
 CONFIG_ESP_HOSTED_CP_TARGET_ESP32C6=y

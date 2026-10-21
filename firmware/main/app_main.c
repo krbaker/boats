@@ -1,7 +1,11 @@
 // AIS display for the Waveshare ESP32-P4-WIFI6-Touch-LCD-3.4C.
 
+#include <stdlib.h>
+
 #include "bsp/esp-bsp.h"
+#include "esp_core_dump.h"
 #include "esp_log.h"
+#include "esp_system.h"
 
 #include "ais_fwd.h"
 #include "fw_update.h"
@@ -21,10 +25,31 @@
 
 static const char *TAG = "main";
 
+// Why the last run ended, and if it crashed, what the core dump says.
+static void log_last_reset(void)
+{
+    esp_reset_reason_t why = esp_reset_reason();
+    if (why == ESP_RST_POWERON || why == ESP_RST_SW) return;
+    ESP_LOGW(TAG, "last reset: reason %d", why);
+    if (esp_core_dump_image_check() != ESP_OK) return;
+    char reason[96] = "";
+    esp_core_dump_get_panic_reason(reason, sizeof(reason));
+    esp_core_dump_summary_t *s = malloc(sizeof(*s));
+    if (s && esp_core_dump_get_summary(s) == ESP_OK) {
+        ESP_LOGW(TAG, "core dump: task %s, pc 0x%08lx, ra 0x%08lx, mcause 0x%lx, mtval 0x%08lx: %s", s->exc_task,
+                 (unsigned long)s->exc_pc, (unsigned long)s->ex_info.ra, (unsigned long)s->ex_info.mcause,
+                 (unsigned long)s->ex_info.mtval, reason);
+    } else {
+        ESP_LOGW(TAG, "core dump saved: %s", reason);
+    }
+    free(s);
+}
+
 void app_main(void)
 {
     log_buf_init();
     ESP_LOGI(TAG, "AIS display starting");
+    log_last_reset();
     ESP_ERROR_CHECK(settings_init());
     map_store_init();
     vessel_db_init();

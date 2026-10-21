@@ -1,0 +1,455 @@
+I (1808) main: AIS display starting
+I (1821) settings: AIS 192.168.128.134:10110 tide 8443970 tz EST5EDT,M3.2.0,M11.1.0 centre 42.35752,-70.92732
+W (1821) ldo: The voltage value 0 is out of the recommended range [500, 2700]
+I (1828) sdmmc_periph: sdmmc_host_init: SDMMC host already initialized, skipping init flow
+I (2221) map_store: microSD: 612 MB free of 955 MB
+I (2244) esp_lvgl:adapter: LVGL adapter initialized successfully
+W (2244) ledc: GPIO 26 is not usable, maybe conflict with others
+I (2244) esp32_p4_wifi6_touch_lcd_xc: MIPI DSI PHY Powered on
+I (2251) esp32_p4_wifi6_touch_lcd_xc: Install MIPI DSI LCD control panel
+I (2256) esp32_p4_wifi6_touch_lcd_xc: Install Waveshare ESP32-P4-WIFI6-Touch-LCD-XC LCD control panel
+I (2265) jd9365: version: 2.0.2
+I (2305) vessels: vessel cache: 404 vessels loaded in 79 ms
+I (2462) jd9365: LCD ID: 93 65 04
+I (2604) esp32_p4_wifi6_touch_lcd_xc: Display initialized
+I (2605) esp_lvgl:bridge_v9: Initializing hardware resources
+I (2605) esp_lvgl:bridge_v9: Hardware resources initialized successfully
+I (2609) esp_lvgl:bridge: Initializing hardware resources
+I (2615) esp_lvgl:bridge: Hardware resources initialized successfully
+W (2621) i2c.master: Please check pull-up resistances whether be connected properly. Otherwise unexpected behavior would happen. For more detailed information, please read docs
+I (2636) esp32_p4_wifi6_touch_lcd_xc: Touch 0x5d found
+I (2641) GT911: I2C address initialization procedure skipped - using default GT9xx setup
+I (2649) GT911: TouchPad_ID:0x39,0x32,0x37
+I (2653) GT911: TouchPad_Config_Version:90
+W (2656) esp_lvgl:touch: LV_USE_GESTURE_RECOGNITION is disabled; only single-point pointer events are available
+I (2666) esp_lvgl:touch: Touch input device registered successfully (IRQ mode: disabled)
+I (2675) esp_lvgl:adapter: LVGL task started successfully
+I (3317) eh_host_port_reset: reset done pin=54 parked=1
+I (3351) eh_host_port_sdio: Function 0 Blocksize: 512
+I (3351) eh_host_port_sdio: Function 1 Blocksize: 512
+I (3451) eh_sdio: Card init success, TRANSPORT_RX_ACTIVE
+I (3480) eh_sdio: SDIO Host operating in STREAMING MODE
+I (3480) eh_sdio: Open data path at slave
+I (3480) eh_sdio: Starting SDIO process rx task
+I (3493) eh_init_evt: slave chip id: 0x0d (esp32c6)
+I (3493) eh_init_evt: capabilities: 0x01
+I (3493) eh_init_evt: Features supported are:
+I (3494) eh_init_evt: 	 * WLAN over SDIO
+I (3498) eh_init_evt: extended capabilities: 0x00000010
+I (3503) eh_init_evt: Extended Features supported:
+I (3507) eh_init_evt: 	 * WLAN
+I (3510) eh_init_evt: SDIO buf-config: e2h mode=0 bufsz=15872B, h2e mode=0 bufsz=15872B
+I (3518) eh_init_evt: RPC version negotiated: V2
+I (3522) eh_init_evt: esp-hosted fw versions: host=3.0.9 coprocessor=3.0.9 (match)
+I (3529) eh_init_evt: SDIO SW_AGGR negotiated (e2h=15872B h2e=15872B)
+I (3535) eh_init_evt: SDIO mode: slave=streaming host=streaming
+I (3541) eh_init_evt: chip=0x0d (esp32c6) fw=0x00030009 caps=0x01 ext=0x00000010
+I (3548) eh_auto_init: auto_init: found 1 descriptor(s)
+I (3553) eh_auto_init: auto_init: initialising 'wifi' (priority 150)
+I (3559) eh_wifi_itwt: wifi iTWT ext init
+I (3879) eh_wifi: rx RPC WifiEventNoArgs id=2
+I (3898) eh_wifi: rx RPC WifiEventNoArgs id=2
+I (3899) eh_wifi: set_config iface=STA ssid="TucksPoint" (10 bytes)
+I (3908) wifi: connecting to "TucksPoint"
+I (3913) tide: timezone America/New_York (EST5EDT,M3.2.0,M11.1.0)
+I (3915) web: HTTP server started
+I (3918) esp32_p4_wifi6_touch_lcd_xc: Installing USB Host
+I (3974) map_tiles: chart set: 5 zoom levels, pan 10.0 nm
+I (3987) fw_update: firmware e4205a5 (built Oct 21 2026 00:08:25) in ota_1
+I (3987) main: running
+I (3987) main_task: Returned from app_main()
+I (5449) sdr_probe: USB host ready: plug the RTL-SDR into the USB-A port
+I (6532) esp_wifi_remote: esp_wifi_internal_reg_rxcb: sta: 0x480fd402
+I (7558) esp_netif_handlers: sta ip: 192.168.129.101, mask: 255.255.254.0, gw: 192.168.128.1
+I (7558) wifi: got IP 192.168.129.101
+I (7675) wifi: internet: online
+I (7753) fwd: UDP 185.77.96.227:32005: sending
+I (8284) fwd: UDP ais.aisfriends.com:4847: sending
+I (8418) esp-x509-crt-bundle: Certificate validated
+I (8485) fwd: TCP listener.marinetraffic.com:14713: connected
+I (8737) weather: forecast for ANZ230, issued 1004 PM EDT Tue Oct 20 2026: 6 periods, 1 headlines
+I (8956) esp-x509-crt-bundle: Certificate validated
+I (9754) esp-x509-crt-bundle: Certificate validated
+I (10043) esp-x509-crt-bundle: Certificate validated
+I (10125) esp-x509-crt-bundle: Certificate validated
+I (10505) tide: station 8443970: 11 tide events
+I (10873) esp-x509-crt-bundle: Certificate validated
+I (11364) tide: station 8443970: 113 curve samples
+I (11414) esp-x509-crt-bundle: Certificate validated
+I (12714) esp-x509-crt-bundle: Certificate validated
+I (13270) esp-x509-crt-bundle: Certificate validated
+I (13744) esp-x509-crt-bundle: Certificate validated
+I (13976) weather: nearest NWS station: KBOS
+I (14766) esp-x509-crt-bundle: Certificate validated
+W (18487) fwd: TCP listener.marinetraffic.com:14713: closed by the other end; retrying in 5 s
+I (24125) fwd: TCP listener.marinetraffic.com:14713: connected
+W (34326) fwd: TCP listener.marinetraffic.com:14713: closed by the other end; retrying in 5 s
+I (39726) fwd: TCP listener.marinetraffic.com:14713: connected
+W (50126) fwd: TCP listener.marinetraffic.com:14713: closed by the other end; retrying in 5 s
+I (55328) fwd: TCP listener.marinetraffic.com:14713: connected
+W (65728) fwd: TCP listener.marinetraffic.com:14713: closed by the other end; retrying in 5 s
+I (71328) fwd: TCP listener.marinetraffic.com:14713: connected
+W (71984) httpd_uri: httpd_uri: URI '/logs' not found
+W (71984) httpd_txrx: httpd_resp_send_err: 404 Not Found - not found
+I (73466) esp-x509-crt-bundle: Certificate validated
+W (81528) fwd: TCP listener.marinetraffic.com:14713: closed by the other end; retrying in 5 s
+W (83150) httpd_uri: httpd_uri: URI '/logs' not found
+W (83156) httpd_txrx: httpd_resp_send_err: 404 Not Found - not found
+I (86929) fwd: TCP listener.marinetraffic.com:14713: connected
+W (97329) fwd: TCP listener.marinetraffic.com:14713: closed by the other end; retrying in 5 s
+I (102729) fwd: TCP listener.marinetraffic.com:14713: connected
+W (113329) fwd: TCP listener.marinetraffic.com:14713: closed by the other end; retrying in 5 s
+I (118929) fwd: TCP listener.marinetraffic.com:14713: connected
+W (129329) fwd: TCP listener.marinetraffic.com:14713: closed by the other end; retrying in 5 s
+I (135130) fwd: TCP listener.marinetraffic.com:14713: connected
+I (135724) esp-x509-crt-bundle: Certificate validated
+I (138694) wifi: login hotspot on
+I (138719) eh_wifi: set_config iface=AP ssid="AIS-Display-619C" (16 bytes)
+I (138830) eh_wifi: rx RPC WifiEventNoArgs id=12
+I (138838) esp_netif_lwip: DHCP server started on interface WIFI_AP_DEF with IP: 192.168.4.1
+I (138838) wifi: hotspot 192.168.4.1 -> station 192.168.129.101 gw 192.168.128.1, DNS relayed to 192.168.128.1
+I (138853) eh_wifi: rx RPC WifiEventNoArgs id=13
+I (138869) eh_wifi: rx RPC WifiEventNoArgs id=12
+I (138874) esp_netif_lwip: DHCP server started on interface WIFI_AP_DEF with IP: 192.168.4.1
+W (145330) fwd: TCP listener.marinetraffic.com:14713: closed by the other end; retrying in 5 s
+I (150730) fwd: TCP listener.marinetraffic.com:14713: connected
+W (161130) fwd: TCP listener.marinetraffic.com:14713: closed by the other end; retrying in 5 s
+I (166730) fwd: TCP listener.marinetraffic.com:14713: connected
+W (176930) fwd: TCP listener.marinetraffic.com:14713: closed by the other end; retrying in 5 s
+I (182530) fwd: TCP listener.marinetraffic.com:14713: connected
+W (192730) fwd: TCP listener.marinetraffic.com:14713: closed by the other end; retrying in 5 s
+I (196168) esp-x509-crt-bundle: Certificate validated
+I (198131) fwd: TCP listener.marinetraffic.com:14713: connected
+W (208531) fwd: TCP listener.marinetraffic.com:14713: closed by the other end; retrying in 5 s
+I (213931) fwd: TCP listener.marinetraffic.com:14713: connected
+W (224331) fwd: TCP listener.marinetraffic.com:14713: closed by the other end; retrying in 5 s
+I (229931) fwd: TCP listener.marinetraffic.com:14713: connected
+W (239931) fwd: TCP listener.marinetraffic.com:14713: closed by the other end; retrying in 5 s
+I (245531) fwd: TCP listener.marinetraffic.com:14713: connected
+W (255731) fwd: TCP listener.marinetraffic.com:14713: closed by the other end; retrying in 5 s
+I (256593) esp-x509-crt-bundle: Certificate validated
+I (261131) fwd: TCP listener.marinetraffic.com:14713: connected
+W (271531) fwd: TCP listener.marinetraffic.com:14713: closed by the other end; retrying in 5 s
+I (277131) fwd: TCP listener.marinetraffic.com:14713: connected
+W (287331) fwd: TCP listener.marinetraffic.com:14713: closed by the other end; retrying in 5 s
+I (292931) fwd: TCP listener.marinetraffic.com:14713: connected
+W (303131) fwd: TCP listener.marinetraffic.com:14713: closed by the other end; retrying in 5 s
+I (308808) fwd: TCP listener.marinetraffic.com:14713: connected
+I (311497) esp-x509-crt-bundle: Certificate validated
+I (316559) esp-x509-crt-bundle: Certificate validated
+W (319008) fwd: TCP listener.marinetraffic.com:14713: closed by the other end; retrying in 5 s
+I (324408) fwd: TCP listener.marinetraffic.com:14713: connected
+W (334808) fwd: TCP listener.marinetraffic.com:14713: closed by the other end; retrying in 5 s
+I (336983) nmea: connecting to 192.168.128.134:10110
+I (336993) nmea: connected
+I (338132) esp-x509-crt-bundle: Certificate validated
+I (338522) weather: forecast for ANZ230, issued 1004 PM EDT Tue Oct 20 2026: 6 periods, 1 headlines
+I (339058) esp-x509-crt-bundle: Certificate validated
+I (340402) esp-x509-crt-bundle: Certificate validated
+I (340412) fwd: TCP listener.marinetraffic.com:14713: connected
+I (341738) esp-x509-crt-bundle: Certificate validated
+I (342229) esp-x509-crt-bundle: Certificate validated
+I (343055) esp-x509-crt-bundle: Certificate validated
+I (345913) esp-x509-crt-bundle: Certificate validated
+I (346307) weather: forecast for ANZ230, issued 1004 PM EDT Tue Oct 20 2026: 6 periods, 1 headlines
+I (346768) esp-x509-crt-bundle: Certificate validated
+I (347645) esp-x509-crt-bundle: Certificate validated
+I (349103) esp-x509-crt-bundle: Certificate validated
+I (349811) esp-x509-crt-bundle: Certificate validated
+I (350414) esp-x509-crt-bundle: Certificate validated
+W (350612) fwd: TCP listener.marinetraffic.com:14713: closed by the other end; retrying in 5 s
+I (352165) esp-x509-crt-bundle: Certificate validated
+I (352622) weather: forecast for ANZ230, issued 1004 PM EDT Tue Oct 20 2026: 6 periods, 1 headlines
+I (352792) esp-x509-crt-bundle: Certificate validated
+I (353622) esp-x509-crt-bundle: Certificate validated
+I (354419) esp-x509-crt-bundle: Certificate validated
+I (355234) esp-x509-crt-bundle: Certificate validated
+I (355955) esp-x509-crt-bundle: Certificate validated
+I (356225) fwd: TCP listener.marinetraffic.com:14713: connected
+I (357590) esp-x509-crt-bundle: Certificate validated
+I (357987) weather: forecast for ANZ230, issued 1004 PM EDT Tue Oct 20 2026: 6 periods, 1 headlines
+I (358495) esp-x509-crt-bundle: Certificate validated
+I (359444) esp-x509-crt-bundle: Certificate validated
+I (360771) esp-x509-crt-bundle: Certificate validated
+I (361184) esp-x509-crt-bundle: Certificate validated
+I (362582) esp-x509-crt-bundle: Certificate validated
+I (364354) esp-x509-crt-bundle: Certificate validated
+I (364856) weather: forecast for ANZ230, issued 1004 PM EDT Tue Oct 20 2026: 6 periods, 1 headlines
+I (365463) esp-x509-crt-bundle: Certificate validated
+W (366225) fwd: TCP listener.marinetraffic.com:14713: closed by the other end; retrying in 5 s
+I (366225) esp-x509-crt-bundle: Certificate validated
+I (367319) esp-x509-crt-bundle: Certificate validated
+I (367740) esp-x509-crt-bundle: Certificate validated
+I (368655) esp-x509-crt-bundle: Certificate validated
+I (371615) esp-x509-crt-bundle: Certificate validated
+I (371643) fwd: TCP listener.marinetraffic.com:14713: connected
+I (372107) weather: forecast for ANZ230, issued 1004 PM EDT Tue Oct 20 2026: 6 periods, 1 headlines
+I (372283) esp-x509-crt-bundle: Certificate validated
+I (373393) esp-x509-crt-bundle: Certificate validated
+I (374558) esp-x509-crt-bundle: Certificate validated
+I (374935) esp-x509-crt-bundle: Certificate validated
+I (375501) esp-x509-crt-bundle: Certificate validated
+I (377458) esp-x509-crt-bundle: Certificate validated
+I (377692) weather: forecast for ANZ230, issued 1004 PM EDT Tue Oct 20 2026: 6 periods, 1 headlines
+I (378189) esp-x509-crt-bundle: Certificate validated
+I (379344) esp-x509-crt-bundle: Certificate validated
+I (381101) esp-x509-crt-bundle: Certificate validated
+W (381844) fwd: TCP listener.marinetraffic.com:14713: closed by the other end; retrying in 5 s
+I (381856) esp-x509-crt-bundle: Certificate validated
+I (382360) esp-x509-crt-bundle: Certificate validated
+I (385543) esp-x509-crt-bundle: Certificate validated
+I (385902) weather: forecast for ANZ230, issued 1004 PM EDT Tue Oct 20 2026: 6 periods, 1 headlines
+I (386081) esp-x509-crt-bundle: Certificate validated
+I (386920) esp-x509-crt-bundle: Certificate validated
+I (387256) fwd: TCP listener.marinetraffic.com:14713: connected
+I (388953) esp-x509-crt-bundle: Certificate validated
+I (389409) esp-x509-crt-bundle: Certificate validated
+I (390268) esp-x509-crt-bundle: Certificate validated
+I (391919) esp-x509-crt-bundle: Certificate validated
+I (392266) weather: forecast for ANZ230, issued 1004 PM EDT Tue Oct 20 2026: 6 periods, 1 headlines
+I (392776) esp-x509-crt-bundle: Certificate validated
+I (393392) esp-x509-crt-bundle: Certificate validated
+I (395715) esp-x509-crt-bundle: Certificate validated
+I (396530) esp-x509-crt-bundle: Certificate validated
+I (397163) esp-x509-crt-bundle: Certificate validated
+W (397457) fwd: TCP listener.marinetraffic.com:14713: closed by the other end; retrying in 5 s
+I (398773) esp-x509-crt-bundle: Certificate validated
+I (399251) weather: forecast for ANZ230, issued 1004 PM EDT Tue Oct 20 2026: 6 periods, 1 headlines
+I (399689) esp-x509-crt-bundle: Certificate validated
+I (400339) esp-x509-crt-bundle: Certificate validated
+I (402006) esp-x509-crt-bundle: Certificate validated
+I (402395) esp-x509-crt-bundle: Certificate validated
+I (402862) fwd: TCP listener.marinetraffic.com:14713: connected
+I (403278) esp-x509-crt-bundle: Certificate validated
+I (405001) esp-x509-crt-bundle: Certificate validated
+I (405515) weather: forecast for ANZ230, issued 1004 PM EDT Tue Oct 20 2026: 6 periods, 1 headlines
+I (405979) esp-x509-crt-bundle: Certificate validated
+I (406684) esp-x509-crt-bundle: Certificate validated
+I (408633) esp-x509-crt-bundle: Certificate validated
+I (409520) esp-x509-crt-bundle: Certificate validated
+I (409959) esp-x509-crt-bundle: Certificate validated
+I (411559) esp-x509-crt-bundle: Certificate validated
+I (412043) weather: forecast for ANZ230, issued 1004 PM EDT Tue Oct 20 2026: 6 periods, 1 headlines
+I (412561) esp-x509-crt-bundle: Certificate validated
+W (413062) fwd: TCP listener.marinetraffic.com:14713: closed by the other end; retrying in 5 s
+I (413106) esp-x509-crt-bundle: Certificate validated
+I (415865) esp-x509-crt-bundle: Certificate validated
+I (416233) esp-x509-crt-bundle: Certificate validated
+I (417291) esp-x509-crt-bundle: Certificate validated
+I (418666) fwd: TCP listener.marinetraffic.com:14713: connected
+I (419027) esp-x509-crt-bundle: Certificate validated
+I (419417) weather: forecast for ANZ230, issued 1004 PM EDT Tue Oct 20 2026: 6 periods, 1 headlines
+I (419599) esp-x509-crt-bundle: Certificate validated
+I (420491) esp-x509-crt-bundle: Certificate validated
+I (421766) esp-x509-crt-bundle: Certificate validated
+I (422214) esp-x509-crt-bundle: Certificate validated
+I (423039) esp-x509-crt-bundle: Certificate validated
+I (424657) esp-x509-crt-bundle: Certificate validated
+I (424945) weather: forecast for ANZ230, issued 1004 PM EDT Tue Oct 20 2026: 6 periods, 1 headlines
+I (425496) esp-x509-crt-bundle: Certificate validated
+I (425947) esp-x509-crt-bundle: Certificate validated
+I (427031) esp-x509-crt-bundle: Certificate validated
+I (427773) esp-x509-crt-bundle: Certificate validated
+I (428553) esp-x509-crt-bundle: Certificate validated
+W (428866) fwd: TCP listener.marinetraffic.com:14713: closed by the other end; retrying in 5 s
+I (430094) esp-x509-crt-bundle: Certificate validated
+I (430576) weather: forecast for ANZ230, issued 1004 PM EDT Tue Oct 20 2026: 6 periods, 1 headlines
+I (431538) esp-x509-crt-bundle: Certificate validated
+I (432351) esp-x509-crt-bundle: Certificate validated
+I (433478) esp-x509-crt-bundle: Certificate validated
+I (434150) esp-x509-crt-bundle: Certificate validated
+I (434272) fwd: TCP listener.marinetraffic.com:14713: connected
+I (435102) esp-x509-crt-bundle: Certificate validated
+I (436786) esp-x509-crt-bundle: Certificate validated
+I (437340) weather: forecast for ANZ230, issued 1004 PM EDT Tue Oct 20 2026: 6 periods, 1 headlines
+I (440730) esp-x509-crt-bundle: Certificate validated
+I (441581) esp-x509-crt-bundle: Certificate validated
+W (444472) fwd: TCP listener.marinetraffic.com:14713: closed by the other end; retrying in 5 s
+I (444978) esp-x509-crt-bundle: Certificate validated
+I (445357) esp-x509-crt-bundle: Certificate validated
+I (445985) esp-x509-crt-bundle: Certificate validated
+I (448006) esp-x509-crt-bundle: Certificate validated
+I (448600) weather: forecast for ANZ230, issued 1004 PM EDT Tue Oct 20 2026: 6 periods, 1 headlines
+I (448844) esp-x509-crt-bundle: Certificate validated
+I (449624) esp-x509-crt-bundle: Certificate validated
+I (449882) fwd: TCP listener.marinetraffic.com:14713: connected
+I (451505) esp-x509-crt-bundle: Certificate validated
+I (452346) esp-x509-crt-bundle: Certificate validated
+I (453102) esp-x509-crt-bundle: Certificate validated
+I (454668) esp-x509-crt-bundle: Certificate validated
+I (455233) weather: forecast for ANZ230, issued 1004 PM EDT Tue Oct 20 2026: 6 periods, 1 headlines
+I (455549) esp-x509-crt-bundle: Certificate validated
+I (456520) esp-x509-crt-bundle: Certificate validated
+I (457925) esp-x509-crt-bundle: Certificate validated
+I (458792) esp-x509-crt-bundle: Certificate validated
+I (459599) esp-x509-crt-bundle: Certificate validated
+W (460082) fwd: TCP listener.marinetraffic.com:14713: closed by the other end; retrying in 5 s
+I (461321) esp-x509-crt-bundle: Certificate validated
+I (461708) weather: forecast for ANZ230, issued 1004 PM EDT Tue Oct 20 2026: 6 periods, 1 headlines
+I (462064) esp-x509-crt-bundle: Certificate validated
+I (463075) esp-x509-crt-bundle: Certificate validated
+I (464850) esp-x509-crt-bundle: Certificate validated
+I (465440) esp-x509-crt-bundle: Certificate validated
+I (465619) fwd: TCP listener.marinetraffic.com:14713: connected
+I (466186) esp-x509-crt-bundle: Certificate validated
+I (467972) esp-x509-crt-bundle: Certificate validated
+I (468425) weather: forecast for ANZ230, issued 1004 PM EDT Tue Oct 20 2026: 6 periods, 1 headlines
+I (469005) esp-x509-crt-bundle: Certificate validated
+I (469751) esp-x509-crt-bundle: Certificate validated
+I (471394) esp-x509-crt-bundle: Certificate validated
+I (472303) esp-x509-crt-bundle: Certificate validated
+I (473099) esp-x509-crt-bundle: Certificate validated
+W (475819) fwd: TCP listener.marinetraffic.com:14713: closed by the other end; retrying in 5 s
+I (475857) esp-x509-crt-bundle: Certificate validated
+I (476223) weather: forecast for ANZ230, issued 1004 PM EDT Tue Oct 20 2026: 6 periods, 1 headlines
+I (476912) esp-x509-crt-bundle: Certificate validated
+I (478211) esp-x509-crt-bundle: Certificate validated
+I (480401) esp-x509-crt-bundle: Certificate validated
+I (480872) esp-x509-crt-bundle: Certificate validated
+I (481222) fwd: TCP listener.marinetraffic.com:14713: connected
+I (481680) esp-x509-crt-bundle: Certificate validated
+I (484606) esp-x509-crt-bundle: Certificate validated
+I (484957) weather: forecast for ANZ230, issued 1004 PM EDT Tue Oct 20 2026: 6 periods, 1 headlines
+I (485471) esp-x509-crt-bundle: Certificate validated
+I (486093) esp-x509-crt-bundle: Certificate validated
+I (487137) esp-x509-crt-bundle: Certificate validated
+I (487874) esp-x509-crt-bundle: Certificate validated
+I (488793) esp-x509-crt-bundle: Certificate validated
+I (490301) esp-x509-crt-bundle: Certificate validated
+I (490685) weather: forecast for ANZ230, issued 1004 PM EDT Tue Oct 20 2026: 6 periods, 1 headlines
+I (491224) esp-x509-crt-bundle: Certificate validated
+W (491422) fwd: TCP listener.marinetraffic.com:14713: closed by the other end; retrying in 5 s
+I (492300) esp-x509-crt-bundle: Certificate validated
+I (493506) esp-x509-crt-bundle: Certificate validated
+I (494221) esp-x509-crt-bundle: Certificate validated
+I (494690) esp-x509-crt-bundle: Certificate validated
+I (497667) esp-x509-crt-bundle: Certificate validated
+I (497956) weather: forecast for ANZ230, issued 1004 PM EDT Tue Oct 20 2026: 6 periods, 1 headlines
+I (498545) esp-x509-crt-bundle: Certificate validated
+I (498566) fwd: TCP listener.marinetraffic.com:14713: connected
+I (499224) esp-x509-crt-bundle: Certificate validated
+I (506747) esp-x509-crt-bundle: Certificate validated
+I (507873) esp-x509-crt-bundle: Certificate validated
+W (508766) fwd: TCP listener.marinetraffic.com:14713: closed by the other end; retrying in 5 s
+I (508846) esp-x509-crt-bundle: Certificate validated
+I (511650) esp_netif_lwip: DHCP server assigned IP to a client, IP is: 192.168.4.2
+I (512212) esp-x509-crt-bundle: Certificate validated
+I (512671) weather: forecast for ANZ230, issued 1004 PM EDT Tue Oct 20 2026: 6 periods, 1 headlines
+I (512847) esp-x509-crt-bundle: Certificate validated
+I (513717) esp-x509-crt-bundle: Certificate validated
+I (514211) fwd: TCP listener.marinetraffic.com:14713: connected
+I (514927) esp-x509-crt-bundle: Certificate validated
+I (515569) esp-x509-crt-bundle: Certificate validated
+I (516393) esp-x509-crt-bundle: Certificate validated
+I (520686) esp-x509-crt-bundle: Certificate validated
+I (520972) weather: forecast for ANZ230, issued 1004 PM EDT Tue Oct 20 2026: 6 periods, 1 headlines
+I (521179) esp-x509-crt-bundle: Certificate validated
+I (522048) esp-x509-crt-bundle: Certificate validated
+I (523310) esp-x509-crt-bundle: Certificate validated
+I (524020) esp-x509-crt-bundle: Certificate validated
+W (524411) fwd: TCP listener.marinetraffic.com:14713: closed by the other end; retrying in 5 s
+I (524520) esp-x509-crt-bundle: Certificate validated
+I (526048) esp-x509-crt-bundle: Certificate validated
+I (526299) weather: forecast for ANZ230, issued 1004 PM EDT Tue Oct 20 2026: 6 periods, 1 headlines
+I (526492) esp-x509-crt-bundle: Certificate validated
+I (527076) esp-x509-crt-bundle: Certificate validated
+I (528253) esp-x509-crt-bundle: Certificate validated
+I (529004) esp-x509-crt-bundle: Certificate validated
+I (529870) fwd: TCP listener.marinetraffic.com:14713: connected
+I (530358) esp-x509-crt-bundle: Certificate validated
+I (532394) esp-x509-crt-bundle: Certificate validated
+I (532747) weather: forecast for ANZ230, issued 1004 PM EDT Tue Oct 20 2026: 6 periods, 1 headlines
+I (534318) esp-x509-crt-bundle: Certificate validated
+I (535059) esp-x509-crt-bundle: Certificate validated
+I (536076) esp-x509-crt-bundle: Certificate validated
+I (536753) esp-x509-crt-bundle: Certificate validated
+I (537206) esp-x509-crt-bundle: Certificate validated
+I (538808) esp-x509-crt-bundle: Certificate validated
+I (539038) weather: forecast for ANZ230, issued 1004 PM EDT Tue Oct 20 2026: 6 periods, 1 headlines
+I (539268) esp-x509-crt-bundle: Certificate validated
+I (540005) esp-x509-crt-bundle: Certificate validated
+W (540070) fwd: TCP listener.marinetraffic.com:14713: closed by the other end; retrying in 5 s
+I (541131) esp-x509-crt-bundle: Certificate validated
+I (541576) esp-x509-crt-bundle: Certificate validated
+I (542387) esp-x509-crt-bundle: Certificate validated
+I (543849) esp-x509-crt-bundle: Certificate validated
+I (544103) weather: forecast for ANZ230, issued 1004 PM EDT Tue Oct 20 2026: 6 periods, 1 headlines
+I (544293) esp-x509-crt-bundle: Certificate validated
+I (544701) esp-x509-crt-bundle: Certificate validated
+I (545482) fwd: TCP listener.marinetraffic.com:14713: connected
+I (546015) esp-x509-crt-bundle: Certificate validated
+I (546646) esp-x509-crt-bundle: Certificate validated
+I (547111) esp-x509-crt-bundle: Certificate validated
+I (549703) esp-x509-crt-bundle: Certificate validated
+I (549971) weather: forecast for ANZ230, issued 1004 PM EDT Tue Oct 20 2026: 6 periods, 1 headlines
+I (550495) esp-x509-crt-bundle: Certificate validated
+I (551361) esp-x509-crt-bundle: Certificate validated
+I (552571) esp-x509-crt-bundle: Certificate validated
+I (553345) esp-x509-crt-bundle: Certificate validated
+I (554072) esp-x509-crt-bundle: Certificate validated
+W (555682) fwd: TCP listener.marinetraffic.com:14713: closed by the other end; retrying in 5 s
+I (555769) esp-x509-crt-bundle: Certificate validated
+I (556018) weather: forecast for ANZ230, issued 1004 PM EDT Tue Oct 20 2026: 6 periods, 1 headlines
+I (556450) esp-x509-crt-bundle: Certificate validated
+I (556890) esp-x509-crt-bundle: Certificate validated
+I (557707) esp-x509-crt-bundle: Certificate validated
+I (558434) esp-x509-crt-bundle: Certificate validated
+I (558923) esp-x509-crt-bundle: Certificate validated
+I (560510) esp-x509-crt-bundle: Certificate validated
+I (560854) weather: forecast for ANZ230, issued 1004 PM EDT Tue Oct 20 2026: 6 periods, 1 headlines
+I (561088) fwd: TCP listener.marinetraffic.com:14713: connected
+I (561287) esp-x509-crt-bundle: Certificate validated
+I (561988) esp-x509-crt-bundle: Certificate validated
+I (563050) esp-x509-crt-bundle: Certificate validated
+I (563723) esp-x509-crt-bundle: Certificate validated
+I (564493) esp-x509-crt-bundle: Certificate validated
+I (566142) esp-x509-crt-bundle: Certificate validated
+I (566676) weather: forecast for ANZ230, issued 1004 PM EDT Tue Oct 20 2026: 6 periods, 1 headlines
+I (567156) esp-x509-crt-bundle: Certificate validated
+I (568058) esp-x509-crt-bundle: Certificate validated
+I (568956) esp-x509-crt-bundle: Certificate validated
+I (569663) esp-x509-crt-bundle: Certificate validated
+I (570122) esp-x509-crt-bundle: Certificate validated
+W (571289) fwd: TCP listener.marinetraffic.com:14713: closed by the other end; retrying in 5 s
+I (572758) esp-x509-crt-bundle: Certificate validated
+I (573569) weather: forecast for ANZ230, issued 1004 PM EDT Tue Oct 20 2026: 6 periods, 1 headlines
+I (573799) esp-x509-crt-bundle: Certificate validated
+I (574590) esp-x509-crt-bundle: Certificate validated
+I (575391) esp-x509-crt-bundle: Certificate validated
+I (576048) esp-x509-crt-bundle: Certificate validated
+I (576898) fwd: TCP listener.marinetraffic.com:14713: connected
+I (576969) esp-x509-crt-bundle: Certificate validated
+I (578517) esp-x509-crt-bundle: Certificate validated
+I (578976) weather: forecast for ANZ230, issued 1004 PM EDT Tue Oct 20 2026: 6 periods, 1 headlines
+I (579469) esp-x509-crt-bundle: Certificate validated
+I (580274) esp-x509-crt-bundle: Certificate validated
+I (581330) esp-x509-crt-bundle: Certificate validated
+I (581800) esp-x509-crt-bundle: Certificate validated
+I (582301) esp-x509-crt-bundle: Certificate validated
+I (583871) esp-x509-crt-bundle: Certificate validated
+I (584905) weather: forecast for ANZ230, issued 1004 PM EDT Tue Oct 20 2026: 6 periods, 1 headlines
+I (585366) esp-x509-crt-bundle: Certificate validated
+I (585845) esp-x509-crt-bundle: Certificate validated
+I (586768) esp-x509-crt-bundle: Certificate validated
+W (587098) fwd: TCP listener.marinetraffic.com:14713: closed by the other end; retrying in 5 s
+I (587240) esp-x509-crt-bundle: Certificate validated
+I (588026) esp-x509-crt-bundle: Certificate validated
+I (589602) esp-x509-crt-bundle: Certificate validated
+I (589847) weather: forecast for ANZ230, issued 1004 PM EDT Tue Oct 20 2026: 6 periods, 1 headlines
+I (590058) esp-x509-crt-bundle: Certificate validated
+I (590637) esp-x509-crt-bundle: Certificate validated
+I (592549) fwd: TCP listener.marinetraffic.com:14713: connected
+I (593010) esp-x509-crt-bundle: Certificate validated
+I (593898) esp-x509-crt-bundle: Certificate validated
+I (594699) esp-x509-crt-bundle: Certificate validated
+I (596218) esp-x509-crt-bundle: Certificate validated
+I (596460) weather: forecast for ANZ230, issued 1004 PM EDT Tue Oct 20 2026: 6 periods, 1 headlines
+I (596653) esp-x509-crt-bundle: Certificate validated
+I (597078) esp-x509-crt-bundle: Certificate validated
+I (598228) esp-x509-crt-bundle: Certificate validated
+I (598617) esp-x509-crt-bundle: Certificate validated
+I (599167) esp-x509-crt-bundle: Certificate validated
+I (600658) esp-x509-crt-bundle: Certificate validated
+I (600939) weather: forecast for ANZ230, issued 1004 PM EDT Tue Oct 20 2026: 6 periods, 1 headlines
+I (601383) esp-x509-crt-bundle: Certificate validated
+I (602027) esp-x509-crt-bundle: Certificate validated

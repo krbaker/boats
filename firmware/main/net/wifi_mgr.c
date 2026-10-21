@@ -54,6 +54,7 @@ static QueueHandle_t s_cmds;
 static esp_netif_t *s_sta_netif, *s_ap_netif;
 static volatile bool s_auto_reconnect;
 static TickType_t s_assist_deadline;
+static uint8_t s_ap_channel = 6;
 
 #define LOCKED(stmt) do { xSemaphoreTake(s_lock, portMAX_DELAY); stmt; xSemaphoreGive(s_lock); } while (0)
 
@@ -246,7 +247,7 @@ static void apply_ap_config(void)
     strcpy((char *)ap.ap.ssid, s_status.ap_ssid);
     ap.ap.ssid_len = strlen(s_status.ap_ssid);
     strcpy((char *)ap.ap.password, s_status.ap_pass);
-    ap.ap.channel = 6;
+    ap.ap.channel = s_ap_channel;
     ap.ap.max_connection = 4;
     ap.ap.authmode = WIFI_AUTH_WPA2_PSK;
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap));
@@ -254,6 +255,25 @@ static void apply_ap_config(void)
     esp_netif_ip_info_t ip;
     esp_netif_get_ip_info(s_ap_netif, &ip);
     LOCKED(snprintf(s_status.ap_ip, sizeof(s_status.ap_ip), IPSTR, IP2STR(&ip.ip)));
+}
+
+// The channel the strongest access point named ssid is on, or 0 if none is heard.
+static uint8_t scan_channel(const char *ssid)
+{
+    wifi_scan_config_t sc = {.ssid = (uint8_t *)ssid};
+    if (esp_wifi_scan_start(&sc, true) != ESP_OK) return 0;
+    uint16_t n = 0;
+    esp_wifi_scan_get_ap_num(&n);
+    uint8_t ch = 0;
+    int8_t best = -128;
+    wifi_ap_record_t rec;
+    while (n--) {
+        uint16_t one = 1;
+        if (esp_wifi_scan_get_ap_records(&one, &rec) != ESP_OK || one == 0) break;
+        if (rec.rssi > best) { best = rec.rssi; ch = rec.primary; }
+    }
+    esp_wifi_clear_ap_list();
+    return ch;
 }
 
 static void sta_connect(const char *ssid, const char *pass)
@@ -453,7 +473,18 @@ static void test_credentials(const cmd_t *cmd)
         if (was_ap) s_status.state = WIFI_MGR_STA_CONNECTING;
     });
     // Keep the AP up while testing so a phone configuring us stays connected.
-    if (was_ap) set_mode(WIFI_MODE_APSTA);
+    // Its radio can only be on one channel: put the AP on the network's
+    // channel first, or the join's authentication can go unanswered while the
+    // radio hops back to serve the AP (disconnect reason 2, AUTH_EXPIRE).
+    if (was_ap) {
+        set_mode(WIFI_MODE_APSTA);
+        uint8_t ch = scan_channel(cmd->ssid);
+        if (ch && ch != s_ap_channel) {
+            ESP_LOGI(TAG, "AP moving to channel %d, where \"%s\" is", ch, cmd->ssid);
+            s_ap_channel = ch;
+            apply_ap_config(); // restarts the AP: the phone rejoins on the new channel
+        }
+    }
 
     sta_connect(cmd->ssid, cmd->pass);
     if (wait_for_ip(TEST_TIMEOUT_MS)) {
