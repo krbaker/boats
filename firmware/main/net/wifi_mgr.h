@@ -61,9 +61,13 @@ void wifi_mgr_get_status(wifi_mgr_status_t *out);
 // Try new station credentials asynchronously (see wifi_mgr_status_t.test).
 void wifi_mgr_set_credentials(const char *ssid, const char *pass);
 
-// Drop the station connection and become an access point with a fresh random
-// password. Saved station credentials are kept.
+// Drop the station connection and become an access point (with its saved
+// password). Saved station credentials are kept.
 void wifi_mgr_start_ap(void);
+
+// Make and save a new random access-point password. If the access point is up
+// it restarts with it, disconnecting anyone joined.
+void wifi_mgr_new_ap_password(void);
 
 // Start / stop the login hotspot. It only starts while the station is
 // connected, and stops by itself after WIFI_MGR_PORTAL_ASSIST_S.
