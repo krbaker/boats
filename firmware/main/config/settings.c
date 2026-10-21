@@ -280,3 +280,24 @@ esp_err_t settings_set_wl_secret(const char *secret)
     notify(SETTINGS_EV_WEATHER);
     return err;
 }
+
+void settings_get_ap_pass(char pass[16])
+{
+    pass[0] = '\0';
+    nvs_handle_t h;
+    if (nvs_open(NS, NVS_READONLY, &h) != ESP_OK) return;
+    size_t len = 16;
+    if (nvs_get_str(h, "ap_pass", pass, &len) != ESP_OK) pass[0] = '\0';
+    nvs_close(h);
+}
+
+esp_err_t settings_set_ap_pass(const char *pass)
+{
+    nvs_handle_t h;
+    esp_err_t err = nvs_open(NS, NVS_READWRITE, &h);
+    if (err != ESP_OK) return err;
+    nvs_set_str(h, "ap_pass", pass);
+    err = nvs_commit(h);
+    nvs_close(h);
+    return err;
+}

@@ -14,8 +14,9 @@
 #define CONFIRM_TIMEOUT_MS 4000
 
 static lv_obj_t *s_scr, *s_info, *s_ap_box, *s_ap_ssid, *s_ap_pass, *s_ap_url, *s_reset_btn, *s_reset_lbl;
-static lv_obj_t *s_portal_btn, *s_portal_lbl;
+static lv_obj_t *s_portal_btn, *s_portal_lbl, *s_pass_cap, *s_pass_btn;
 static uint32_t s_confirm_since; // 0 = not awaiting confirmation
+static uint32_t s_pass_confirm_since; // likewise, for a new AP password
 
 static void back_cb(lv_event_t *e)
 {
@@ -27,6 +28,25 @@ static void set_confirm(bool on)
     s_confirm_since = on ? lv_tick_get() | 1 : 0;
     lv_label_set_text(s_reset_lbl, on ? "Tap again to confirm" : "Reset to AP mode");
     lv_obj_set_style_bg_color(s_reset_btn, on ? UI_COLOR_BAD : UI_COLOR_PANEL, 0);
+}
+
+static void set_pass_confirm(bool on)
+{
+    s_pass_confirm_since = on ? lv_tick_get() | 1 : 0;
+    lv_label_set_text(s_pass_cap, on ? "Tap " LV_SYMBOL_REFRESH " again for a new password" : "Password");
+    lv_obj_set_style_text_color(s_pass_cap, on ? UI_COLOR_BAD : UI_COLOR_MUTED, 0);
+    lv_obj_set_style_bg_color(s_pass_btn, on ? UI_COLOR_BAD : UI_COLOR_PANEL, 0);
+}
+
+// A new access-point password (it restarts the AP, so confirm first).
+static void new_pass_cb(lv_event_t *e)
+{
+    if (!s_pass_confirm_since) {
+        set_pass_confirm(true);
+        return;
+    }
+    set_pass_confirm(false);
+    wifi_mgr_new_ap_password();
 }
 
 static void reset_cb(lv_event_t *e)
@@ -68,6 +88,7 @@ static void refresh(void)
     tide_get_status(&t);
 
     if (s_confirm_since && lv_tick_elaps(s_confirm_since) > CONFIRM_TIMEOUT_MS) set_confirm(false);
+    if (s_pass_confirm_since && lv_tick_elaps(s_pass_confirm_since) > CONFIRM_TIMEOUT_MS) set_pass_confirm(false);
 
     char buf[768];
     int len = 0;
@@ -76,7 +97,7 @@ static void refresh(void)
         lv_obj_set_hidden(s_reset_btn, true);
         lv_obj_set_hidden(s_portal_btn, true);
         lv_label_set_text(s_ap_ssid, w.ap_ssid);
-        lv_label_set_text(s_ap_pass, w.ap_pass);
+        if (strcmp(lv_label_get_text(s_ap_pass), w.ap_pass) != 0) lv_label_set_text(s_ap_pass, w.ap_pass);
         lv_label_set_text_fmt(s_ap_url, "then open  http://%s/", w.ap_ip);
         len += snprintf(buf + len, sizeof(buf) - len, "#f5b13f Setup (access point) mode#\n");
     } else {
@@ -187,8 +208,25 @@ lv_obj_t *ui_netinfo_create(void)
     lv_obj_set_style_pad_row(s_ap_box, 6, 0);
     lv_label_set_text(centered_label(s_ap_box, &lv_font_montserrat_20, UI_COLOR_MUTED), "Join Wi-Fi network");
     s_ap_ssid = centered_label(s_ap_box, &lv_font_montserrat_32, UI_COLOR_TEXT);
-    lv_label_set_text(centered_label(s_ap_box, &lv_font_montserrat_20, UI_COLOR_MUTED), "Password");
-    s_ap_pass = centered_label(s_ap_box, &lv_font_montserrat_48, UI_COLOR_WARN);
+    s_pass_cap = centered_label(s_ap_box, &lv_font_montserrat_20, UI_COLOR_MUTED);
+
+    // The password with a new-password button to its right, and an empty
+    // spacer as wide on its left so the password stays centred.
+    lv_obj_t *row = lv_obj_create(s_ap_box);
+    lv_obj_remove_style_all(row);
+    lv_obj_set_size(row, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(row, 20, 0);
+    lv_obj_t *spacer = lv_obj_create(row);
+    lv_obj_remove_style_all(spacer);
+    lv_obj_set_size(spacer, 56, 56);
+    s_ap_pass = centered_label(row, &lv_font_montserrat_48, UI_COLOR_WARN);
+    lv_obj_set_width(s_ap_pass, LV_SIZE_CONTENT);
+    s_pass_btn = ui_round_button(row, LV_SYMBOL_REFRESH, 56, 56);
+    lv_obj_add_event_cb(s_pass_btn, new_pass_cb, LV_EVENT_CLICKED, NULL);
+    set_pass_confirm(false);
+
     s_ap_url = centered_label(s_ap_box, &lv_font_montserrat_24, UI_COLOR_ACCENT);
     lv_obj_set_hidden(s_ap_box, true);
 
@@ -218,5 +256,6 @@ lv_obj_t *ui_netinfo_create(void)
 void ui_netinfo_on_show(void)
 {
     set_confirm(false);
+    set_pass_confirm(false);
     refresh();
 }

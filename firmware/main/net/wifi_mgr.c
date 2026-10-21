@@ -37,7 +37,7 @@ static const char *TAG = "wifi";
 #define EV_AP_UP        BIT2
 #define EV_PROBE_NOW    BIT3
 
-typedef enum { CMD_SET_CREDS, CMD_START_AP, CMD_PORTAL_ASSIST } cmd_type_t;
+typedef enum { CMD_SET_CREDS, CMD_START_AP, CMD_PORTAL_ASSIST, CMD_NEW_AP_PASS } cmd_type_t;
 
 typedef struct {
     cmd_type_t type;
@@ -217,16 +217,22 @@ static void on_wifi_event(void *arg, esp_event_base_t base, int32_t id, void *da
     }
 }
 
-static void make_ap_identity(void)
+// The password is made once and saved, so it stays the same until a new one is
+// asked for (fresh).
+static void make_ap_identity(bool fresh)
 {
     // The P4 has no Wi-Fi of its own (the C6 co-processor does), so there is no
     // local soft-AP MAC: name the access point after the chip's base MAC.
     uint8_t mac[6] = {0};
     esp_efuse_mac_get_default(mac);
     static const char alphabet[] = "abcdefghjkmnpqrstuvwxyz23456789"; // no look-alikes
-    char pass[11];
-    for (int i = 0; i < 10; i++) pass[i] = alphabet[esp_random() % (sizeof(alphabet) - 1)];
-    pass[10] = '\0';
+    char pass[16];
+    if (!fresh) settings_get_ap_pass(pass);
+    if (fresh || strlen(pass) < 8) { // WPA2 needs 8 or more
+        for (int i = 0; i < 10; i++) pass[i] = alphabet[esp_random() % (sizeof(alphabet) - 1)];
+        pass[10] = '\0';
+        settings_set_ap_pass(pass);
+    }
     LOCKED({
         snprintf(s_status.ap_ssid, sizeof(s_status.ap_ssid), "AIS-Display-%02X%02X", mac[4], mac[5]);
         strcpy(s_status.ap_pass, pass);
@@ -406,7 +412,7 @@ static void enter_ap_mode(void)
     portal_assist_stop(false);
     s_auto_reconnect = false;
     esp_wifi_disconnect();
-    make_ap_identity();
+    make_ap_identity(false);
     LOCKED({
         s_status.state = WIFI_MGR_AP;
         s_status.sta_ip[0] = s_status.sta_netmask[0] = s_status.sta_gw[0] = '\0';
@@ -482,6 +488,10 @@ static void wifi_task(void *arg)
         if (xQueueReceive(s_cmds, &cmd, pdMS_TO_TICKS(500))) {
             if (cmd.type == CMD_SET_CREDS) {
                 test_credentials(&cmd);
+            } else if (cmd.type == CMD_NEW_AP_PASS) {
+                make_ap_identity(true);
+                if (s_status.ap_active) apply_ap_config(); // restarts the AP: its clients drop off
+                ESP_LOGI(TAG, "AP \"%s\" new password \"%s\"", s_status.ap_ssid, s_status.ap_pass);
             } else if (cmd.type == CMD_PORTAL_ASSIST) {
                 if (cmd.on) portal_assist_start();
                 else portal_assist_stop(true);
@@ -529,7 +539,7 @@ void wifi_mgr_start(void)
     ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, on_wifi_event, NULL));
 
     char ssid[33], pass[65];
-    make_ap_identity();
+    make_ap_identity(false);
     bool have = settings_get_wifi(ssid, pass);
     ESP_ERROR_CHECK(esp_wifi_set_mode(have ? WIFI_MODE_STA : WIFI_MODE_AP));
     ESP_ERROR_CHECK(esp_wifi_start());
@@ -572,6 +582,12 @@ void wifi_mgr_set_credentials(const char *ssid, const char *pass)
 void wifi_mgr_start_ap(void)
 {
     cmd_t cmd = {.type = CMD_START_AP};
+    xQueueSend(s_cmds, &cmd, 0);
+}
+
+void wifi_mgr_new_ap_password(void)
+{
+    cmd_t cmd = {.type = CMD_NEW_AP_PASS};
     xQueueSend(s_cmds, &cmd, 0);
 }
 

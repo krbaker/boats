@@ -99,3 +99,8 @@ esp_err_t settings_set_wifi(const char *ssid, const char *pass);
 // password, so it's never copied around or sent back to the web page.
 void settings_get_wl_secret(char secret[48]);
 esp_err_t settings_set_wl_secret(const char *secret);
+
+// The setup access point's password, kept so it's the same every time ("" if
+// none has been made yet).
+void settings_get_ap_pass(char pass[16]);
+esp_err_t settings_set_ap_pass(const char *pass);
