@@ -5,6 +5,7 @@
 
 #include "ais_fwd.h"
 #include "fw_update.h"
+#include "log_buf.h"
 
 #include "map_tiles.h"
 #include "map_store.h"
@@ -22,6 +23,7 @@ static const char *TAG = "main";
 
 void app_main(void)
 {
+    log_buf_init();
     ESP_LOGI(TAG, "AIS display starting");
     ESP_ERROR_CHECK(settings_init());
     map_store_init();

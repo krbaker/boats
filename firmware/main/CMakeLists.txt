@@ -4,6 +4,7 @@ idf_component_register(
         "config/settings.c"
         "net/wifi_mgr.c"
         "net/web_server.c"
+        "net/log_buf.c"
         "net/cp_update.c"
         "net/fw_update.c"
         "net/ais_fwd.c"

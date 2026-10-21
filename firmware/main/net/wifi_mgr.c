@@ -2,7 +2,6 @@
 
 #include <string.h>
 
-#include "dhcpserver/dhcpserver.h"
 #include "esp_event.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
@@ -58,52 +57,132 @@ static TickType_t s_assist_deadline;
 #define LOCKED(stmt) do { xSemaphoreTake(s_lock, portMAX_DELAY); stmt; xSemaphoreGive(s_lock); } while (0)
 
 // ---------------------------------------------------------------------------
-// Captive-portal DNS: answer every A query with the AP's address so phones
-// pop up the configuration page.
+// DNS on the AP. Setup mode: answer every A query with the AP's address so
+// phones pop up the configuration page. Login hotspot: relay its clients'
+// queries to the station network's DNS server, so name lookups don't depend
+// on that server being reachable (or NATed properly) from the AP's subnet.
 // ---------------------------------------------------------------------------
+
+#define DNS_RELAY_SLOTS 16
+
+typedef struct {
+    bool used;
+    uint16_t id, client_id;
+    struct sockaddr_in client;
+    TickType_t sent;
+} relay_slot_t;
+
+static relay_slot_t s_relay[DNS_RELAY_SLOTS];
+static uint16_t s_relay_next;
+
+static void dns_answer_captive(int sock, uint8_t *buf, int n, const struct sockaddr_in *from)
+{
+    uint16_t qdcount = (buf[4] << 8) | buf[5];
+    if (qdcount != 1) return; // only plain single queries
+
+    // Find the end of the question (name + type + class).
+    int p = 12;
+    while (p < n && buf[p]) p += buf[p] + 1;
+    p += 5;
+    if (p > n) return;
+    uint16_t qtype = (buf[p - 4] << 8) | buf[p - 3];
+
+    esp_netif_ip_info_t ip;
+    esp_netif_get_ip_info(s_ap_netif, &ip);
+
+    buf[2] = 0x84 | (buf[2] & 0x01); // response, authoritative, keep RD
+    buf[3] = 0x80;                   // RA, no error
+    buf[6] = 0; buf[7] = (qtype == 1) ? 1 : 0; // ANCOUNT
+    buf[8] = buf[9] = buf[10] = buf[11] = 0;
+    n = p;
+    if (qtype == 1) {
+        static const uint8_t ans[] = {0xC0, 0x0C, 0, 1, 0, 1, 0, 0, 0, 60, 0, 4};
+        memcpy(buf + n, ans, sizeof(ans));
+        n += sizeof(ans);
+        memcpy(buf + n, &ip.ip.addr, 4);
+        n += 4;
+    }
+    sendto(sock, buf, n, 0, (const struct sockaddr *)from, sizeof(*from));
+}
+
+static void dns_relay_query(int up, uint8_t *buf, int n, const struct sockaddr_in *from)
+{
+    // Only for the hotspot's own clients: not an open resolver for the station side.
+    esp_netif_ip_info_t ap;
+    esp_netif_get_ip_info(s_ap_netif, &ap);
+    if ((from->sin_addr.s_addr ^ ap.ip.addr) & ap.netmask.addr) return;
+
+    esp_netif_dns_info_t dns = {0};
+    esp_netif_get_dns_info(s_sta_netif, ESP_NETIF_DNS_MAIN, &dns);
+    if (dns.ip.type != ESP_IPADDR_TYPE_V4 || dns.ip.u_addr.ip4.addr == 0) {
+        ESP_LOGW(TAG, "DNS relay: station network has no DNS server");
+        return;
+    }
+
+    // A free slot, else the oldest.
+    relay_slot_t *s = &s_relay[0];
+    for (int i = 0; i < DNS_RELAY_SLOTS; i++) {
+        if (!s_relay[i].used) { s = &s_relay[i]; break; }
+        if ((int32_t)(s_relay[i].sent - s->sent) < 0) s = &s_relay[i];
+    }
+    s->used = true;
+    s->client = *from;
+    s->client_id = (buf[0] << 8) | buf[1];
+    s->id = s_relay_next++;
+    s->sent = xTaskGetTickCount();
+    buf[0] = s->id >> 8;
+    buf[1] = s->id & 0xFF;
+
+    struct sockaddr_in to = {.sin_family = AF_INET, .sin_port = htons(53), .sin_addr.s_addr = dns.ip.u_addr.ip4.addr};
+    sendto(up, buf, n, 0, (struct sockaddr *)&to, sizeof(to));
+}
+
+static void dns_relay_reply(int sock, uint8_t *buf, int n)
+{
+    uint16_t id = (buf[0] << 8) | buf[1];
+    for (int i = 0; i < DNS_RELAY_SLOTS; i++) {
+        relay_slot_t *s = &s_relay[i];
+        if (!s->used || s->id != id) continue;
+        s->used = false;
+        buf[0] = s->client_id >> 8;
+        buf[1] = s->client_id & 0xFF;
+        sendto(sock, buf, n, 0, (struct sockaddr *)&s->client, sizeof(s->client));
+        return;
+    }
+}
 
 static void dns_task(void *arg)
 {
     int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    int up = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP); // to the upstream server, from an ephemeral port
     struct sockaddr_in addr = {.sin_family = AF_INET, .sin_port = htons(53), .sin_addr.s_addr = htonl(INADDR_ANY)};
-    if (sock < 0 || bind(sock, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+    if (sock < 0 || up < 0 || bind(sock, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
         ESP_LOGE(TAG, "DNS socket failed");
         vTaskDelete(NULL);
         return;
     }
-    uint8_t buf[512];
+    s_relay_next = esp_random();
+    static uint8_t buf[1500]; // relayed answers can exceed 512 bytes (EDNS0)
     for (;;) {
+        fd_set rd;
+        FD_ZERO(&rd);
+        FD_SET(sock, &rd);
+        FD_SET(up, &rd);
+        if (select((sock > up ? sock : up) + 1, &rd, NULL, NULL, NULL) <= 0) continue;
+
         struct sockaddr_in from;
         socklen_t fromlen = sizeof(from);
-        int n = recvfrom(sock, buf, sizeof(buf) - 16, 0, (struct sockaddr *)&from, &fromlen);
-        // Not while the login hotspot is on: then its clients use the real DNS.
-        if (n < 12 || !s_status.ap_active || s_status.portal_assist) continue;
-        uint16_t qdcount = (buf[4] << 8) | buf[5];
-        if ((buf[2] & 0x80) || qdcount != 1) continue; // only plain single queries
-
-        // Find the end of the question (name + type + class).
-        int p = 12;
-        while (p < n && buf[p]) p += buf[p] + 1;
-        p += 5;
-        if (p > n) continue;
-        uint16_t qtype = (buf[p - 4] << 8) | buf[p - 3];
-
-        esp_netif_ip_info_t ip;
-        esp_netif_get_ip_info(s_ap_netif, &ip);
-
-        buf[2] = 0x84 | (buf[2] & 0x01); // response, authoritative, keep RD
-        buf[3] = 0x80;                   // RA, no error
-        buf[6] = 0; buf[7] = (qtype == 1) ? 1 : 0; // ANCOUNT
-        buf[8] = buf[9] = buf[10] = buf[11] = 0;
-        n = p;
-        if (qtype == 1) {
-            static const uint8_t ans[] = {0xC0, 0x0C, 0, 1, 0, 1, 0, 0, 0, 60, 0, 4};
-            memcpy(buf + n, ans, sizeof(ans));
-            n += sizeof(ans);
-            memcpy(buf + n, &ip.ip.addr, 4);
-            n += 4;
+        if (FD_ISSET(up, &rd)) {
+            int n = recvfrom(up, buf, sizeof(buf), 0, (struct sockaddr *)&from, &fromlen);
+            if (n >= 12 && (buf[2] & 0x80) && s_status.portal_assist) dns_relay_reply(sock, buf, n);
         }
-        sendto(sock, buf, n, 0, (struct sockaddr *)&from, fromlen);
+        if (FD_ISSET(sock, &rd)) {
+            fromlen = sizeof(from);
+            int n = recvfrom(sock, buf, sizeof(buf) - 16, 0, (struct sockaddr *)&from, &fromlen);
+            if (n < 12 || (buf[2] & 0x80)) continue; // queries only
+            if (s_status.portal_assist) dns_relay_query(up, buf, n, &from);
+            else if (s_status.ap_active) dns_answer_captive(sock, buf, n, &from);
+        }
     }
 }
 
@@ -244,20 +323,14 @@ static void probe_task(void *arg)
     }
 }
 
-// What the AP's DHCP server hands out as DNS: the station network's own
-// server (login hotspot), or else the AP itself (setup mode's captive DNS).
-static void set_ap_dhcp(const esp_netif_ip_info_t *ip, const esp_netif_dns_info_t *dns)
+// Move the AP to another address (its DHCP server has to be stopped for it).
+// Its clients always get the AP itself as their DNS server (see dns_task).
+static void set_ap_ip(const esp_netif_ip_info_t *ip)
 {
     esp_netif_dhcps_stop(s_ap_netif);
-    if (ip) esp_netif_set_ip_info(s_ap_netif, ip);
-    uint8_t offer = dns ? OFFER_DNS : 0;
-    esp_netif_dhcps_option(s_ap_netif, ESP_NETIF_OP_SET, ESP_NETIF_DOMAIN_NAME_SERVER, &offer, sizeof(offer));
-    if (dns) esp_netif_set_dns_info(s_ap_netif, ESP_NETIF_DNS_MAIN, (esp_netif_dns_info_t *)dns);
+    esp_netif_set_ip_info(s_ap_netif, ip);
     esp_netif_dhcps_start(s_ap_netif);
-
-    esp_netif_ip_info_t now;
-    esp_netif_get_ip_info(s_ap_netif, &now);
-    LOCKED(snprintf(s_status.ap_ip, sizeof(s_status.ap_ip), IPSTR, IP2STR(&now.ip)));
+    LOCKED(snprintf(s_status.ap_ip, sizeof(s_status.ap_ip), IPSTR, IP2STR(&ip->ip)));
 }
 
 static void portal_assist_stop(bool to_sta)
@@ -265,7 +338,6 @@ static void portal_assist_stop(bool to_sta)
     if (!s_status.portal_assist) return;
     ESP_LOGI(TAG, "login hotspot off");
     esp_netif_napt_disable(s_ap_netif);
-    set_ap_dhcp(NULL, NULL);
     LOCKED({
         s_status.portal_assist = false;
         s_status.portal_assist_left_s = 0;
@@ -294,8 +366,6 @@ static void portal_assist_start(void)
     esp_netif_ip_info_t sta, ap;
     esp_netif_get_ip_info(s_sta_netif, &sta);
     esp_netif_get_ip_info(s_ap_netif, &ap);
-    esp_netif_dns_info_t dns;
-    esp_netif_get_dns_info(s_sta_netif, ESP_NETIF_DNS_MAIN, &dns);
     // The AP's subnet can't overlap the network it's routed into.
     bool clash = ((sta.ip.addr ^ ap.ip.addr) & sta.netmask.addr & ap.netmask.addr) == 0;
     if (clash) {
@@ -303,8 +373,20 @@ static void portal_assist_start(void)
         ap.ip.addr = ap.gw.addr = dflt ? ESP_IP4TOADDR(10, 48, 0, 1) : ESP_IP4TOADDR(192, 168, 4, 1);
         ap.netmask.addr = ESP_IP4TOADDR(255, 255, 255, 0);
         ESP_LOGI(TAG, "AP moved to " IPSTR " (station network overlaps)", IP2STR(&ap.ip));
+        set_ap_ip(&ap);
     }
-    set_ap_dhcp(clash ? &ap : NULL, &dns);
+    esp_netif_dns_info_t dns = {0};
+    esp_netif_get_dns_info(s_sta_netif, ESP_NETIF_DNS_MAIN, &dns);
+    ESP_LOGI(TAG, "hotspot " IPSTR " -> station " IPSTR " gw " IPSTR ", DNS relayed to " IPSTR,
+             IP2STR(&ap.ip), IP2STR(&sta.ip), IP2STR(&sta.gw), IP2STR(&dns.ip.u_addr.ip4));
+
+    // Forwarded traffic leaves by the default netif; bringing the AP up can
+    // leave that pointing at the AP, which bounces everything back to it.
+    esp_netif_t *was = esp_netif_get_default_netif();
+    if (was != s_sta_netif)
+        ESP_LOGW(TAG, "default route was %s, moving it to the station",
+                 was ? esp_netif_get_desc(was) : "none");
+    esp_netif_set_default_netif(s_sta_netif);
 
     LOCKED(s_status.portal_assist = true); // set first: portal_assist_stop() checks it
     esp_err_t err = esp_netif_napt_enable(s_ap_netif);
@@ -464,7 +546,7 @@ void wifi_mgr_start(void)
     }
 
     xTaskCreate(wifi_task, "wifi_mgr", 4096, NULL, 4, NULL);
-    xTaskCreate(dns_task, "dns", 3072, NULL, 3, NULL);
+    xTaskCreate(dns_task, "dns", 4096, NULL, 3, NULL);
     xTaskCreate(probe_task, "net_probe", 6144, NULL, 3, NULL);
 }
 
