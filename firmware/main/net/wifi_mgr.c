@@ -36,6 +36,7 @@ static const char *TAG = "wifi";
 #define EV_DISCONNECTED BIT1
 #define EV_AP_UP        BIT2
 #define EV_PROBE_NOW    BIT3
+#define EV_AP_STARTED   BIT4    // the AP (re)started: its lwIP netif is new, with NAT off
 
 typedef enum { CMD_SET_CREDS, CMD_START_AP, CMD_PORTAL_ASSIST, CMD_NEW_AP_PASS } cmd_type_t;
 
@@ -199,7 +200,7 @@ static void on_wifi_event(void *arg, esp_event_base_t base, int32_t id, void *da
             if (s_status.state == WIFI_MGR_STA_CONNECTED) s_status.state = WIFI_MGR_STA_CONNECTING;
         });
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_AP_START) {
-        xEventGroupSetBits(s_ev, EV_AP_UP);
+        xEventGroupSetBits(s_ev, EV_AP_UP | EV_AP_STARTED);
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_AP_STOP) {
         xEventGroupClearBits(s_ev, EV_AP_UP);
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
@@ -504,6 +505,13 @@ static void wifi_task(void *arg)
             int32_t left = (int32_t)(s_assist_deadline - xTaskGetTickCount());
             if (left <= 0) portal_assist_stop(true);
             else LOCKED(s_status.portal_assist_left_s = (left + configTICK_RATE_HZ - 1) / configTICK_RATE_HZ);
+        }
+        // The AP restarts after its config is set (and on a new password), and
+        // each start re-adds its netif with NAT off: turn it back on.
+        if ((xEventGroupClearBits(s_ev, EV_AP_STARTED) & EV_AP_STARTED) && s_status.portal_assist) {
+            esp_err_t err = esp_netif_napt_enable(s_ap_netif);
+            if (err == ESP_OK) ESP_LOGI(TAG, "AP started: NAT on");
+            else ESP_LOGE(TAG, "AP restarted, NAT failed: %s", esp_err_to_name(err));
         }
         // Keep retrying the station connection while it's down.
         if (s_auto_reconnect && s_status.state == WIFI_MGR_STA_CONNECTING &&
