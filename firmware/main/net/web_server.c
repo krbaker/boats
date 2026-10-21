@@ -17,6 +17,7 @@
 #include "ais_fwd.h"
 #include "cp_update.h"
 #include "fw_update.h"
+#include "log_buf.h"
 #include "map_store.h"
 #include "nmea_client.h"
 #include "rx_stats.h"
@@ -844,6 +845,19 @@ static esp_err_t sdr_capture_nmea_get(httpd_req_t *req)
     return httpd_resp_send_chunk(req, NULL, 0);
 }
 
+// The recent log, as plain text.
+static esp_err_t log_get(httpd_req_t *req)
+{
+    size_t len;
+    char *buf = log_buf_copy(&len);
+    if (!buf) return send_error(req, "500 Internal Server Error", "out of memory");
+    httpd_resp_set_type(req, "text/plain; charset=utf-8");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    esp_err_t err = httpd_resp_send(req, buf, len);
+    free(buf);
+    return err;
+}
+
 // In AP mode, send every unknown URL to the config page (captive portal).
 // Not for the login hotspot: its clients are signing in to someone else's.
 static esp_err_t not_found(httpd_req_t *req, httpd_err_code_t code)
@@ -891,6 +905,7 @@ void web_server_start(void)
         {.uri = "/api/sdr/capture", .method = HTTP_POST, .handler = sdr_capture_post},
         {.uri = "/api/sdr/capture", .method = HTTP_GET, .handler = sdr_capture_get},
         {.uri = "/api/sdr/capture.nmea", .method = HTTP_GET, .handler = sdr_capture_nmea_get},
+        {.uri = "/log", .method = HTTP_GET, .handler = log_get},
     };
     for (size_t i = 0; i < sizeof(uris) / sizeof(uris[0]); i++) {
         httpd_register_uri_handler(server, &uris[i]);
