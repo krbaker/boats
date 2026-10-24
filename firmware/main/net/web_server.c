@@ -3,6 +3,7 @@
 #include <ctype.h>
 #include <math.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/param.h>
 
 #include "cJSON.h"
@@ -16,6 +17,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "lwip/sockets.h"
+#include "mbedtls/base64.h"
 
 #include "ais_fwd.h"
 #include "cp_update.h"
@@ -967,6 +969,46 @@ static esp_err_t not_found(httpd_req_t *req, httpd_err_code_t code)
     return ESP_FAIL;
 }
 
+// The whole page is behind HTTP Basic sign-in with the access point's password
+// (shown on the display's Network screen); any user name. It's plain HTTP, so
+// this keeps out casual visitors on a shared network, not eavesdroppers.
+static bool authorized(httpd_req_t *req)
+{
+    char hdr[160];
+    if (httpd_req_get_hdr_value_str(req, "Authorization", hdr, sizeof(hdr)) != ESP_OK ||
+        strncasecmp(hdr, "Basic ", 6) != 0) {
+        return false;
+    }
+    unsigned char dec[120];
+    size_t n = 0;
+    if (mbedtls_base64_decode(dec, sizeof(dec) - 1, &n, (const unsigned char *)hdr + 6, strlen(hdr + 6)) != 0) {
+        return false;
+    }
+    dec[n] = '\0';
+    const char *pass = memchr(dec, ':', n);
+    if (!pass) return false;
+    pass++;
+
+    wifi_mgr_status_t w;
+    wifi_mgr_get_status(&w);
+    size_t len = strlen(w.ap_pass), got = n - (pass - (const char *)dec);
+    unsigned char diff = len != got || len == 0;
+    for (size_t i = 0; i < got && i < len; i++) diff |= pass[i] ^ w.ap_pass[i]; // constant time
+    return !diff;
+}
+
+// Every handler runs through this; user_ctx is its entry in uris[].
+static esp_err_t guarded(httpd_req_t *req)
+{
+    if (!authorized(req)) {
+        httpd_resp_set_status(req, "401 Unauthorized");
+        httpd_resp_set_hdr(req, "WWW-Authenticate", "Basic realm=\"AIS display\", charset=\"UTF-8\"");
+        httpd_resp_set_type(req, "text/plain");
+        return httpd_resp_sendstr(req, "Sign in with the access point's password (on the display's Network screen).");
+    }
+    return ((const httpd_uri_t *)req->user_ctx)->handler(req);
+}
+
 void web_server_start(void)
 {
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
@@ -981,7 +1023,7 @@ void web_server_start(void)
         ESP_LOGE(TAG, "failed to start HTTP server");
         return;
     }
-    const httpd_uri_t uris[] = {
+    static const httpd_uri_t uris[] = {
         {.uri = "/", .method = HTTP_GET, .handler = index_get},
         {.uri = "/api/config", .method = HTTP_GET, .handler = config_get},
         {.uri = "/api/config", .method = HTTP_POST, .handler = config_post},
@@ -1003,7 +1045,10 @@ void web_server_start(void)
         {.uri = "/api/logs/file", .method = HTTP_GET, .handler = logs_file_get},
     };
     for (size_t i = 0; i < sizeof(uris) / sizeof(uris[0]); i++) {
-        httpd_register_uri_handler(server, &uris[i]);
+        httpd_uri_t u = uris[i];
+        u.handler = guarded;
+        u.user_ctx = (void *)&uris[i];
+        httpd_register_uri_handler(server, &u);
     }
     httpd_register_err_handler(server, HTTPD_404_NOT_FOUND, not_found);
     ESP_LOGI(TAG, "HTTP server started");
