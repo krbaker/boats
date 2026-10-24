@@ -110,7 +110,6 @@ void ui_start(void)
     s_detail_scr = ui_detail_create();
     s_net_scr = ui_netinfo_create();
     create_hold_indicator();
-    ui_portal_init();
     ui_map_on_show();
     lv_screen_load(s_map_scr);
     lv_timer_create(hold_timer_cb, 100, NULL);

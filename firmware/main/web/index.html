@@ -129,7 +129,7 @@
     <input id="wifi_pass" type="password" autocomplete="new-password">
     <button id="wifi_btn" onclick="saveWifi()">Connect</button>
     <div class="msg" id="wifi_msg"></div>
-    <div class="hint">The new network is tested before it's saved. If it fails, the display goes back to the previous network (or its setup access point).</div>
+    <div class="hint">The new network is tested before it's saved. If it fails, the display goes back to the previous network (and keeps its access point on).</div>
   </section>
 
   <section>
@@ -204,6 +204,15 @@
     <div id="fwd_rows"></div>
     <button onclick="saveFwd()">Save</button>
     <div class="msg" id="fwd_msg"></div>
+  </section>
+
+  <section>
+    <h2>Logs</h2>
+    <div class="hint">Saved with <b>Save logs</b> on the display's Network screen (it works without the network),
+      to the microSD card. The newest 10 are kept, each with the last crash's core dump if there was one.</div>
+    <table id="logs"><tr><td>Loading…</td><td></td></tr></table>
+    <div class="hint"><a href="/log" target="_blank">Live log</a> ·
+      <a href="/api/coredump" download>Last crash's core dump</a></div>
   </section>
 </main>
 
@@ -657,13 +666,13 @@ function fmtTime(t) { return new Date(t * 1000).toLocaleString([], { weekday: "s
 function showWifiInfo(w) {
   const dash = v => v ? esc(v) : "—";
   const net = { "online": "ok", "captive portal": "warn", "offline": "bad" }[w.internet] || "";
-  let html = row("Network", w.state === "access point" ? "none (setup access point)" : `${esc(w.ssid)} (${esc(w.state)})`);
+  let html = row("Network", w.state === "no network" ? "none set up" : `${esc(w.ssid)} (${esc(w.state)})`);
   html += row("IP address", dash(w.ip));
   html += row("Netmask", dash(w.netmask));
   html += row("Gateway", dash(w.gateway));
   html += row("MAC address", dash(w.mac));
-  if (w.state !== "access point") html += row("Internet", esc(w.internet) + (w.internet === "captive portal" ? " — sign in using the login hotspot on the display's Network screen" : ""), net);
-  if (w.portal_assist) html += row("Login hotspot", `on (<b>${esc(w.ap_ssid)}</b>), ${Math.ceil(w.portal_assist_left_s / 60)} min left`, "warn");
+  if (w.state === "connected") html += row("Internet", esc(w.internet) + (w.internet === "captive portal" ? " — enable the AP on the display's Network screen, join it from a phone and sign in there" : ""), net);
+  if (w.ap_active) html += row("Access point", `on (<b>${esc(w.ap_ssid)}</b>), ` + (w.ap_left_s ? `${Math.ceil(w.ap_left_s / 60)} min left` : "until a network is set up"), "warn");
   $("wifi_info").innerHTML = html;
 }
 function row(k, v, cls) { return `<tr><td>${k}</td><td class="${cls || ""}">${v}</td></tr>`; }
@@ -764,7 +773,7 @@ async function pollStatus() {
     let html = "";
     $("cp_version").textContent = w.coprocessor || "unknown";
     showWifiInfo(w);
-    if (w.state === "access point") html += row("Wi-Fi", `Setup access point <b>${esc(w.ap_ssid)}</b>`, "warn");
+    if (w.state === "no network") html += row("Wi-Fi", `No network set up (access point <b>${esc(w.ap_ssid)}</b>)`, "warn");
     else html += row("Wi-Fi", `${esc(w.state)} to <b>${esc(w.ssid)}</b>` + (w.ip ? ` — ${w.ip} (${w.rssi} dBm)` : ""), w.ip ? "ok" : "warn");
     html += row("AIS feed", esc(a.state) + (a.error && a.state !== "connected" ? ` (${esc(a.error)})` : "") +
       (a.last_rx_s >= 0 ? `, data ${ago(a.last_rx_s)}` : ""), a.state === "connected" ? "ok" : a.state === "off" ? "" : "bad");
@@ -790,7 +799,7 @@ async function pollStatus() {
       $("wifi_pass").value = "";
       if (w.test === "ok") setMsg("wifi_msg", `Connected to ${w.test_ssid}. New address: ${w.ip}` + (w.ap_active ? " — reconnect your device to that network and open http://" + w.ip + "/" : ""), "ok");
       else if (w.test === "failed_reverted") setMsg("wifi_msg", `Could not join ${w.test_ssid}; went back to ${w.ssid}.`, "bad");
-      else setMsg("wifi_msg", `Could not join ${w.test_ssid}; the display is in setup (access point) mode.`, "bad");
+      else setMsg("wifi_msg", `Could not join ${w.test_ssid}; the display's access point ${esc(w.ap_ssid)} is on.`, "bad");
     }
   } catch (e) {
     if (wifiPending) setMsg("wifi_msg", "Lost contact with the display while it changes networks… still trying.", "warn");
@@ -803,6 +812,22 @@ buildFwdRows();
 loadConfig().catch(e => setMsg("ais_msg", "Could not load settings: " + e.message, "bad"));
 pollStatus();
 setInterval(pollStatus, 3000);
+
+function fmtSize(b) { return b >= 1048576 ? (b / 1048576).toFixed(1) + " MB" : Math.ceil(b / 1024) + " KB"; }
+async function loadLogs() {
+  try {
+    const r = await fetch("/api/logs");
+    const logs = (await r.json()).logs;
+    const link = n => `/api/logs/file?name=${encodeURIComponent(n)}`;
+    $("logs").innerHTML = logs.length ? logs.map(l =>
+      row(l.time ? fmtTime(l.time) : "(clock not set)",
+        `<a href="${link(l.name)}" download>${esc(l.name)}</a> (${fmtSize(l.size)})` +
+        (l.dump_size ? ` · <a href="${link(l.name.replace(/\.txt$/, ".bin"))}" download>core dump</a> (${fmtSize(l.dump_size)})` : ""))
+    ).join("") : row("None saved yet", "");
+  } catch (e) {}
+}
+loadLogs();
+setInterval(loadLogs, 30000);
 </script>
 </body>
 </html>

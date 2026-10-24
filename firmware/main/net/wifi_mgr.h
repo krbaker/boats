@@ -1,13 +1,21 @@
-// Wi-Fi station / access-point management.
+// Wi-Fi: two modes.
+//
+// Client: the station joins the saved network, and keeps rejoining it.
+// Dual: the access point runs alongside the station, so a phone can join it
+// and open the configuration page. Its traffic is routed (NATed) out through
+// the station, so the phone can also sign in to the station network's captive
+// portal on the display's behalf: the portal only ever sees the display. It
+// turns off by itself after WIFI_MGR_AP_S, except while no network is saved
+// (first start-up).
+//
+// The radio is on one channel for both, so in dual mode the access point moves
+// to the channel of the network the station is joining.
 //
 // Station credentials are only committed to NVS after they've been proven to
-// work; a failed change falls back to the previous network, then to AP mode.
+// work; a failed change falls back to the previous network.
 //
-// Captive portals: an HTTP probe tells whether the station network reaches the
-// internet. If it's held at a sign-in page, the "login hotspot" brings the AP
-// up alongside the station and routes (NATs) it out through the station, so a
-// phone joined to the AP can sign in on the display's behalf: the portal only
-// ever sees the display.
+// An HTTP probe tells whether the station network reaches the internet or is
+// held at a captive portal's sign-in page (for the status icon).
 
 #pragma once
 
@@ -17,7 +25,7 @@
 typedef enum {
     WIFI_MGR_STA_CONNECTING,
     WIFI_MGR_STA_CONNECTED,
-    WIFI_MGR_AP,            // access point only (setup mode)
+    WIFI_MGR_NO_NETWORK,    // none saved: the station is idle (and the access point on)
 } wifi_mgr_state_t;
 
 typedef enum {
@@ -25,7 +33,7 @@ typedef enum {
     WIFI_TEST_RUNNING,
     WIFI_TEST_OK,
     WIFI_TEST_FAILED_REVERTED,  // went back to the previous network
-    WIFI_TEST_FAILED_AP,        // previous network also failed (or none): AP mode
+    WIFI_TEST_FAILED,           // previous network also failed (or none): the access point is on
 } wifi_test_result_t;
 
 typedef enum {
@@ -37,7 +45,8 @@ typedef enum {
 
 typedef struct {
     wifi_mgr_state_t state;
-    bool ap_active;         // AP interface up (AP mode, or keeping it up during/after a test)
+    bool ap_active;         // dual mode: the access point is up
+    uint16_t ap_left_s;     // until it turns off by itself; 0 = it stays on (no network saved)
     char sta_ssid[33];
     char sta_ip[16];
     char sta_netmask[16];
@@ -45,8 +54,6 @@ typedef struct {
     char sta_mac[18];
     int8_t rssi;
     wifi_net_t net;
-    bool portal_assist;     // login hotspot (AP + NAT) on
-    uint16_t portal_assist_left_s;
     char ap_ssid[33];
     char ap_pass[16];
     char ap_ip[16];
@@ -61,18 +68,13 @@ void wifi_mgr_get_status(wifi_mgr_status_t *out);
 // Try new station credentials asynchronously (see wifi_mgr_status_t.test).
 void wifi_mgr_set_credentials(const char *ssid, const char *pass);
 
-// Drop the station connection and become an access point (with its saved
-// password). Saved station credentials are kept.
-void wifi_mgr_start_ap(void);
+// Dual mode on (for WIFI_MGR_AP_S, again from the start if already on) or off.
+#define WIFI_MGR_AP_S (10 * 60)
+void wifi_mgr_ap(bool on);
 
 // Make and save a new random access-point password. If the access point is up
 // it restarts with it, disconnecting anyone joined.
 void wifi_mgr_new_ap_password(void);
-
-// Start / stop the login hotspot. It only starts while the station is
-// connected, and stops by itself after WIFI_MGR_PORTAL_ASSIST_S.
-#define WIFI_MGR_PORTAL_ASSIST_S (10 * 60)
-void wifi_mgr_portal_assist(bool on);
 
 const char *wifi_mgr_state_str(wifi_mgr_state_t s);
 const char *wifi_mgr_net_str(wifi_net_t n);

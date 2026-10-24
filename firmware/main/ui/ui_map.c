@@ -60,7 +60,7 @@
 #define WAVE_ICON_PX    26      // the wave icon in the tide bubble (buoy without wave direction)
 
 // Wi-Fi icon before the time: signal bars online, struck through offline,
-// "?" in place of the inner bars at a captive portal (tap for the sign-in).
+// "?" in place of the inner bars at a captive portal.
 #define NET_ICON_PX     36
 #define NET_ICON_GAP_PX 6
 #define WAVE_ICON_GAP   10
@@ -162,7 +162,6 @@ typedef enum { NET_ICON_NONE, NET_ICON_BARS, NET_ICON_OFFLINE, NET_ICON_PORTAL }
 static struct {
     net_icon_t kind;
     int bars;               // 0-3, for NET_ICON_BARS
-    bool tappable;          // opens the portal popup
 } s_net;
 
 // ---------------------------------------------------------------------------
@@ -513,15 +512,6 @@ static void draw_net_icon(lv_layer_t *layer)
     }
 }
 
-// True if a point on the time pill is on the Wi-Fi icon (or the cap before it).
-static bool on_net_icon(lv_point_t pt)
-{
-    float ang = atan2f(pt.y - UI_CENTER, pt.x - UI_CENTER) * 180.0f / (float)M_PI, start, end;
-    net_icon_room(&start, &end);
-    float d = fmodf(ang - start + 540, 360) - 180; // degrees past the room's start
-    return d >= -(PILL_PAD_DEG + 8) && d <= end - start + 2;
-}
-
 // The Wi-Fi icon from the manager's status.
 static void update_net_icon(void)
 {
@@ -529,9 +519,7 @@ static void update_net_icon(void)
     wifi_mgr_get_status(&ws);
     net_icon_t kind;
     int bars = 0;
-    if (ws.state == WIFI_MGR_AP) {
-        kind = NET_ICON_NONE; // setup mode says so in the middle of the screen
-    } else if (ws.net == WIFI_NET_PORTAL) {
+    if (ws.state == WIFI_MGR_STA_CONNECTED && ws.net == WIFI_NET_PORTAL) {
         kind = NET_ICON_PORTAL;
     } else if (ws.state != WIFI_MGR_STA_CONNECTED || ws.net == WIFI_NET_OFFLINE) {
         kind = NET_ICON_OFFLINE;
@@ -539,7 +527,6 @@ static void update_net_icon(void)
         kind = NET_ICON_BARS;
         bars = ws.rssi >= -60 ? 3 : ws.rssi >= -70 ? 2 : ws.rssi >= -80 ? 1 : 0;
     }
-    s_net.tappable = kind == NET_ICON_PORTAL || ws.portal_assist;
     if (kind != s_net.kind || bars != s_net.bars) {
         s_net.kind = kind;
         s_net.bars = bars;
@@ -1132,8 +1119,7 @@ static void overlay_click_cb(lv_event_t *e)
     if (s_drag.active) return; // the end of a drag, not a tap
     pill_t *pill = pill_at(p);
     if (pill) {
-        if (pill == &s_pills[PILL_TIME] && s_net.tappable && on_net_icon(p)) ui_portal_open();
-        else if (!pill->disabled) pill->on_tap();
+        if (!pill->disabled) pill->on_tap();
         return;
     }
     int best = -1;
@@ -1211,12 +1197,9 @@ static void update_border_text(void)
     // Centre message for setup problems.
     wifi_mgr_status_t ws;
     wifi_mgr_get_status(&ws);
-    const char *ip = ws.state == WIFI_MGR_AP ? ws.ap_ip : ws.sta_ip;
+    const char *ip = ws.sta_ip[0] || !ws.ap_active ? ws.sta_ip : ws.ap_ip;
     buf[0] = '\0';
-    if (ws.state == WIFI_MGR_AP) {
-        snprintf(buf, sizeof(buf), "Setup mode: join Wi-Fi \"%s\"\npassword %s\nthen open http://%s/", ws.ap_ssid,
-                 ws.ap_pass, ws.ap_ip);
-    } else if (map_tiles_state() == MAP_TILES_NO_CARD) {
+    if (map_tiles_state() == MAP_TILES_NO_CARD) {
         strcpy(buf, "Insert a microSD card with a chart,\nthen restart the display");
     } else if (map_tiles_state() == MAP_TILES_LOADING) {
         strcpy(buf, "Loading chart...");

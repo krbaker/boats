@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "ais_fwd.h"
+#include "log_save.h"
 #include "nmea_client.h"
 #include "sdr_probe.h"
 #include "tide.h"
@@ -12,22 +13,17 @@
 #include "wifi_mgr.h"
 
 #define CONFIRM_TIMEOUT_MS 4000
+#define SAVE_RESULT_MS     5000    // how long the save button shows how it went
 
-static lv_obj_t *s_scr, *s_info, *s_ap_box, *s_ap_ssid, *s_ap_pass, *s_ap_url, *s_reset_btn, *s_reset_lbl;
-static lv_obj_t *s_portal_btn, *s_portal_lbl, *s_pass_cap, *s_pass_btn;
-static uint32_t s_confirm_since; // 0 = not awaiting confirmation
-static uint32_t s_pass_confirm_since; // likewise, for a new AP password
+static lv_obj_t *s_scr, *s_info, *s_ap_box, *s_ap_ssid, *s_ap_pass, *s_ap_url, *s_ap_btn, *s_ap_lbl;
+static lv_obj_t *s_pass_cap, *s_pass_btn, *s_save_btn, *s_save_lbl;
+static bool s_saving;            // a save started here hasn't finished
+static uint32_t s_saved_at;      // lv_tick it finished, 0 = not showing a result
+static uint32_t s_pass_confirm_since; // 0 = not awaiting confirmation of a new AP password
 
 static void back_cb(lv_event_t *e)
 {
     ui_show_map();
-}
-
-static void set_confirm(bool on)
-{
-    s_confirm_since = on ? lv_tick_get() | 1 : 0;
-    lv_label_set_text(s_reset_lbl, on ? "Tap again to confirm" : "Reset to AP mode");
-    lv_obj_set_style_bg_color(s_reset_btn, on ? UI_COLOR_BAD : UI_COLOR_PANEL, 0);
 }
 
 static void set_pass_confirm(bool on)
@@ -49,23 +45,39 @@ static void new_pass_cb(lv_event_t *e)
     wifi_mgr_new_ap_password();
 }
 
-static void reset_cb(lv_event_t *e)
-{
-    if (!s_confirm_since) {
-        set_confirm(true);
-        return;
-    }
-    set_confirm(false);
-    wifi_mgr_start_ap();
-}
-
-// Login hotspot for captive portals: start it (and show the popup), or stop it.
-static void portal_cb(lv_event_t *e)
+// The access point (alongside the station) on or off.
+static void ap_cb(lv_event_t *e)
 {
     wifi_mgr_status_t w;
     wifi_mgr_get_status(&w);
-    if (w.portal_assist) wifi_mgr_portal_assist(false);
-    else ui_portal_start();
+    wifi_mgr_ap(!w.ap_active);
+}
+
+static void refresh(void);
+
+// The log to the microSD card, in the background.
+static void save_cb(lv_event_t *e)
+{
+    if (s_saving) return;
+    s_saving = true;
+    s_saved_at = 0;
+    log_save_start();
+    refresh();
+}
+
+static void refresh_save_btn(void)
+{
+    char msg[64], bl[80] = "Save logs";
+    log_save_state_t st = log_save_state(msg, sizeof(msg));
+    if (s_saving && st != LOG_SAVE_BUSY) {
+        s_saving = false;
+        s_saved_at = lv_tick_get() | 1;
+    }
+    if (s_saved_at && lv_tick_elaps(s_saved_at) > SAVE_RESULT_MS) s_saved_at = 0;
+    if (s_saving) strcpy(bl, "Saving...");
+    else if (s_saved_at && st == LOG_SAVE_OK) strcpy(bl, "#3ccf7a Saved to card#");
+    else if (s_saved_at) snprintf(bl, sizeof(bl), "#f2545b %s#", msg);
+    if (strcmp(lv_label_get_text(s_save_lbl), bl) != 0) lv_label_set_text(s_save_lbl, bl);
 }
 
 static const char *net_text(const wifi_mgr_status_t *w)
@@ -87,42 +99,36 @@ static void refresh(void)
     tide_status_t t;
     tide_get_status(&t);
 
-    if (s_confirm_since && lv_tick_elaps(s_confirm_since) > CONFIRM_TIMEOUT_MS) set_confirm(false);
     if (s_pass_confirm_since && lv_tick_elaps(s_pass_confirm_since) > CONFIRM_TIMEOUT_MS) set_pass_confirm(false);
 
     char buf[768];
     int len = 0;
-    if (w.state == WIFI_MGR_AP) {
-        lv_obj_set_hidden(s_ap_box, false);
-        lv_obj_set_hidden(s_reset_btn, true);
-        lv_obj_set_hidden(s_portal_btn, true);
+    if (w.state == WIFI_MGR_STA_CONNECTED) {
+        len += snprintf(buf + len, sizeof(buf) - len,
+                        "Wi-Fi: #3ccf7a %s#  (%d dBm)\nIP address: #3fa7f5 %s#  /  %s\nGateway: %s\nMAC: %s\n"
+                        "Internet: %s\nSettings: http://%s/\n",
+                        w.sta_ssid, w.rssi, w.sta_ip, w.sta_netmask, w.sta_gw, w.sta_mac, net_text(&w), w.sta_ip);
+    } else if (w.state == WIFI_MGR_STA_CONNECTING) {
+        len += snprintf(buf + len, sizeof(buf) - len, "Wi-Fi: #f5b13f connecting to %s...#\nMAC: %s\n", w.sta_ssid,
+                        w.sta_mac);
+    } else {
+        len += snprintf(buf + len, sizeof(buf) - len, "Wi-Fi: #f5b13f no network set up#\n");
+    }
+
+    lv_obj_set_hidden(s_ap_box, !w.ap_active);
+    if (w.ap_active) {
         lv_label_set_text(s_ap_ssid, w.ap_ssid);
         if (strcmp(lv_label_get_text(s_ap_pass), w.ap_pass) != 0) lv_label_set_text(s_ap_pass, w.ap_pass);
         lv_label_set_text_fmt(s_ap_url, "then open  http://%s/", w.ap_ip);
-        len += snprintf(buf + len, sizeof(buf) - len, "#f5b13f Setup (access point) mode#\n");
-    } else {
-        lv_obj_set_hidden(s_ap_box, true);
-        lv_obj_set_hidden(s_reset_btn, false);
-        lv_obj_set_hidden(s_portal_btn, false);
-        if (w.state == WIFI_MGR_STA_CONNECTED) {
-            len += snprintf(buf + len, sizeof(buf) - len,
-                            "Wi-Fi: #3ccf7a %s#  (%d dBm)\nIP address: #3fa7f5 %s#  /  %s\nGateway: %s\nMAC: %s\n"
-                            "Internet: %s\n",
-                            w.sta_ssid, w.rssi, w.sta_ip, w.sta_netmask, w.sta_gw, w.sta_mac, net_text(&w));
-            if (w.portal_assist) {
-                len += snprintf(buf + len, sizeof(buf) - len, "Login hotspot: #f5b13f %s#, %u min left\n", w.ap_ssid,
-                                (w.portal_assist_left_s + 59) / 60);
-            }
-            len += snprintf(buf + len, sizeof(buf) - len, "Settings: http://%s/\n", w.sta_ip);
-        } else {
-            len += snprintf(buf + len, sizeof(buf) - len, "Wi-Fi: #f5b13f connecting to %s...#\nMAC: %s\n", w.sta_ssid,
-                            w.sta_mac);
-        }
-        const char *pl = w.portal_assist ? "Stop login hotspot" : "Login hotspot";
-        if (strcmp(lv_label_get_text(s_portal_lbl), pl) != 0) lv_label_set_text(s_portal_lbl, pl);
-        if (w.state == WIFI_MGR_STA_CONNECTED || w.portal_assist) lv_obj_remove_state(s_portal_btn, LV_STATE_DISABLED);
-        else lv_obj_add_state(s_portal_btn, LV_STATE_DISABLED);
     }
+    // With no network set up the AP stays on: it's the only way in.
+    char bl[40] = "Enable AP";
+    if (w.ap_active && w.ap_left_s) snprintf(bl, sizeof(bl), "Disable AP (%u min left)", (w.ap_left_s + 59) / 60);
+    else if (w.ap_active) strcpy(bl, "AP on");
+    if (strcmp(lv_label_get_text(s_ap_lbl), bl) != 0) lv_label_set_text(s_ap_lbl, bl);
+    if (w.ap_active && !w.ap_left_s) lv_obj_add_state(s_ap_btn, LV_STATE_DISABLED);
+    else lv_obj_remove_state(s_ap_btn, LV_STATE_DISABLED);
+    refresh_save_btn();
 
     len += snprintf(buf + len, sizeof(buf) - len, "\nAIS: %s%s%s", nmea_state_str(n.state),
                     n.host[0] ? " to " : "", n.host);
@@ -159,8 +165,8 @@ static void refresh(void)
     if (t.station[0]) {
         len += snprintf(buf + len, sizeof(buf) - len, "\nTide station: %s %s", t.station, t.station_name);
     }
-    if (w.state == WIFI_MGR_AP) {
-        // Keep it short so the access-point details below fit.
+    if (w.ap_active) {
+        // Just the Wi-Fi line, so the access-point details below fit.
         char *nl = strchr(buf, '\n');
         if (nl) nl[1] = '\0';
     }
@@ -230,20 +236,20 @@ lv_obj_t *ui_netinfo_create(void)
     s_ap_url = centered_label(s_ap_box, &lv_font_montserrat_24, UI_COLOR_ACCENT);
     lv_obj_set_hidden(s_ap_box, true);
 
-    // Side by side: the login hotspot (captive portals) and reset to AP mode.
-    s_portal_btn = ui_round_button(s_scr, "", 280, 64);
-    s_portal_lbl = lv_obj_get_child(s_portal_btn, 0);
-    lv_obj_set_style_text_font(s_portal_lbl, &lv_font_montserrat_20, 0);
-    lv_obj_set_style_opa(s_portal_btn, LV_OPA_50, LV_STATE_DISABLED);
-    lv_obj_align(s_portal_btn, LV_ALIGN_BOTTOM_MID, -150, -140);
-    lv_obj_add_event_cb(s_portal_btn, portal_cb, LV_EVENT_CLICKED, NULL);
+    // Side by side: the access point and saving the log.
+    s_ap_btn = ui_round_button(s_scr, "", 280, 64);
+    s_ap_lbl = lv_obj_get_child(s_ap_btn, 0);
+    lv_obj_set_style_text_font(s_ap_lbl, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_opa(s_ap_btn, LV_OPA_50, LV_STATE_DISABLED);
+    lv_obj_align(s_ap_btn, LV_ALIGN_BOTTOM_MID, -150, -140);
+    lv_obj_add_event_cb(s_ap_btn, ap_cb, LV_EVENT_CLICKED, NULL);
 
-    s_reset_btn = ui_round_button(s_scr, "", 280, 64);
-    s_reset_lbl = lv_obj_get_child(s_reset_btn, 0);
-    lv_obj_set_style_text_font(s_reset_lbl, &lv_font_montserrat_20, 0);
-    lv_obj_align(s_reset_btn, LV_ALIGN_BOTTOM_MID, 150, -140);
-    lv_obj_add_event_cb(s_reset_btn, reset_cb, LV_EVENT_CLICKED, NULL);
-    set_confirm(false);
+    s_save_btn = ui_round_button(s_scr, "Save logs", 280, 64);
+    s_save_lbl = lv_obj_get_child(s_save_btn, 0);
+    lv_obj_set_style_text_font(s_save_lbl, &lv_font_montserrat_20, 0);
+    lv_label_set_recolor(s_save_lbl, true);
+    lv_obj_align(s_save_btn, LV_ALIGN_BOTTOM_MID, 150, -140);
+    lv_obj_add_event_cb(s_save_btn, save_cb, LV_EVENT_CLICKED, NULL);
 
     lv_obj_t *back = ui_round_button(s_scr, LV_SYMBOL_LEFT " Map", 160, 64);
     lv_obj_align(back, LV_ALIGN_BOTTOM_MID, 0, -50);
@@ -255,7 +261,6 @@ lv_obj_t *ui_netinfo_create(void)
 
 void ui_netinfo_on_show(void)
 {
-    set_confirm(false);
     set_pass_confirm(false);
     refresh();
 }

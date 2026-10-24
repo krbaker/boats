@@ -54,11 +54,6 @@ void ui_tide_open(void);
 lv_obj_t *ui_weather_create(lv_obj_t *parent);
 void ui_weather_open(void);
 
-// Captive-portal popup (on the top layer, over any screen)
-void ui_portal_init(void);
-void ui_portal_open(void);
-void ui_portal_start(void);     // start the login hotspot and show the popup
-
 // Shared widgets
 lv_obj_t *ui_round_button(lv_obj_t *parent, const char *text, int32_t w, int32_t h);
 // Hidden full-screen round panel with a close button at the top.

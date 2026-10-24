@@ -15,11 +15,13 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "lwip/sockets.h"
 
 #include "ais_fwd.h"
 #include "cp_update.h"
 #include "fw_update.h"
 #include "log_buf.h"
+#include "log_save.h"
 #include "map_store.h"
 #include "nmea_client.h"
 #include "rx_stats.h"
@@ -366,7 +368,7 @@ static const char *test_str(wifi_test_result_t t)
     case WIFI_TEST_RUNNING: return "testing";
     case WIFI_TEST_OK: return "ok";
     case WIFI_TEST_FAILED_REVERTED: return "failed_reverted";
-    case WIFI_TEST_FAILED_AP: return "failed_ap";
+    case WIFI_TEST_FAILED: return "failed";
     default: return "none";
     }
 }
@@ -464,9 +466,8 @@ static esp_err_t status_get(httpd_req_t *req)
     cJSON_AddStringToObject(wj, "gateway", w.sta_gw);
     cJSON_AddStringToObject(wj, "mac", w.sta_mac);
     cJSON_AddStringToObject(wj, "internet", wifi_mgr_net_str(w.net));
-    cJSON_AddBoolToObject(wj, "portal_assist", w.portal_assist);
-    cJSON_AddNumberToObject(wj, "portal_assist_left_s", w.portal_assist_left_s);
     cJSON_AddBoolToObject(wj, "ap_active", w.ap_active);
+    cJSON_AddNumberToObject(wj, "ap_left_s", w.ap_left_s);
     cJSON_AddStringToObject(wj, "ap_ssid", w.ap_ssid);
     cJSON_AddStringToObject(wj, "test", test_str(w.test));
     cJSON_AddStringToObject(wj, "test_ssid", w.test_ssid);
@@ -870,6 +871,59 @@ static esp_err_t coredump_get(httpd_req_t *req)
     return httpd_resp_send_chunk(req, NULL, 0);
 }
 
+// The logs saved to the microSD card (log_save), newest first.
+static esp_err_t logs_get(httpd_req_t *req)
+{
+    log_file_t *files = heap_caps_malloc(LOG_SAVE_KEEP * 2 * sizeof(log_file_t), MALLOC_CAP_SPIRAM);
+    if (!files) return send_error(req, "500 Internal Server Error", "out of memory");
+    int n = log_save_list(files, LOG_SAVE_KEEP * 2);
+    cJSON *o = cJSON_CreateObject();
+    cJSON *list = cJSON_AddArrayToObject(o, "logs");
+    for (int i = 0; i < n; i++) {
+        cJSON *f = cJSON_CreateObject();
+        cJSON_AddStringToObject(f, "name", files[i].name);
+        cJSON_AddNumberToObject(f, "size", files[i].size);
+        cJSON_AddNumberToObject(f, "time", (double)files[i].mtime);
+        cJSON_AddNumberToObject(f, "dump_size", files[i].dump_size);
+        cJSON_AddItemToArray(list, f);
+    }
+    free(files);
+    return send_json(req, o);
+}
+
+// One saved log or core dump: /api/logs/file?name=log_....txt
+static esp_err_t logs_file_get(httpd_req_t *req)
+{
+    char q[96], name[48], path[96];
+    if (httpd_req_get_url_query_str(req, q, sizeof(q)) != ESP_OK ||
+        httpd_query_key_value(q, "name", name, sizeof(name)) != ESP_OK || !log_save_valid_name(name)) {
+        return send_error(req, "400 Bad Request", "no such log");
+    }
+    snprintf(path, sizeof(path), LOG_SAVE_DIR "/%s", name);
+    FILE *f = fopen(path, "rb");
+    if (!f) return send_error(req, "404 Not Found", "no such log");
+
+    char disp[80];
+    snprintf(disp, sizeof(disp), "attachment; filename=\"%s\"", name);
+    bool text = strcmp(name + strlen(name) - 4, ".txt") == 0;
+    httpd_resp_set_type(req, text ? "text/plain; charset=utf-8" : "application/octet-stream");
+    httpd_resp_set_hdr(req, "Content-Disposition", disp);
+    char *buf = heap_caps_malloc(UPLOAD_CHUNK, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+    if (!buf) {
+        fclose(f);
+        return send_error(req, "500 Internal Server Error", "out of memory");
+    }
+    esp_err_t err = ESP_OK;
+    size_t n;
+    while ((n = fread(buf, 1, UPLOAD_CHUNK, f)) > 0) {
+        if ((err = httpd_resp_send_chunk(req, buf, n)) != ESP_OK) break;
+    }
+    fclose(f);
+    free(buf);
+    if (err != ESP_OK) return err; // browser went away
+    return httpd_resp_send_chunk(req, NULL, 0);
+}
+
 // The recent log, as plain text.
 static esp_err_t log_get(httpd_req_t *req)
 {
@@ -883,13 +937,26 @@ static esp_err_t log_get(httpd_req_t *req)
     return err;
 }
 
-// In AP mode, send every unknown URL to the config page (captive portal).
-// Not for the login hotspot: its clients are signing in to someone else's.
+// True if the request came in by the access point (to its address).
+static bool via_ap(httpd_req_t *req, const wifi_mgr_status_t *w)
+{
+    struct sockaddr_storage local;
+    socklen_t len = sizeof(local);
+    if (!w->ap_active || getsockname(httpd_req_to_sockfd(req), (struct sockaddr *)&local, &len) != 0) return false;
+    uint32_t addr;
+    if (local.ss_family == AF_INET) addr = ((struct sockaddr_in *)&local)->sin_addr.s_addr;
+    else if (local.ss_family == AF_INET6) memcpy(&addr, &((struct sockaddr_in6 *)&local)->sin6_addr.s6_addr[12], 4); // IPv4-mapped
+    else return false;
+    return addr == inet_addr(w->ap_ip);
+}
+
+// By the access point, send every unknown URL to the config page (captive
+// portal). Not by the station: the AP's address can't be reached from there.
 static esp_err_t not_found(httpd_req_t *req, httpd_err_code_t code)
 {
     wifi_mgr_status_t w;
     wifi_mgr_get_status(&w);
-    if (w.ap_active && !w.portal_assist && strncmp(req->uri, "/api/", 5) != 0) {
+    if (via_ap(req, &w) && strncmp(req->uri, "/api/", 5) != 0) {
         char loc[40];
         snprintf(loc, sizeof(loc), "http://%s/", w.ap_ip);
         httpd_resp_set_status(req, "302 Found");
@@ -932,6 +999,8 @@ void web_server_start(void)
         {.uri = "/api/sdr/capture.nmea", .method = HTTP_GET, .handler = sdr_capture_nmea_get},
         {.uri = "/log", .method = HTTP_GET, .handler = log_get},
         {.uri = "/api/coredump", .method = HTTP_GET, .handler = coredump_get},
+        {.uri = "/api/logs", .method = HTTP_GET, .handler = logs_get},
+        {.uri = "/api/logs/file", .method = HTTP_GET, .handler = logs_file_get},
     };
     for (size_t i = 0; i < sizeof(uris) / sizeof(uris[0]); i++) {
         httpd_register_uri_handler(server, &uris[i]);

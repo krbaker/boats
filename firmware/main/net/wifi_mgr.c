@@ -2,6 +2,7 @@
 
 #include <string.h>
 
+#include "dhcpserver/dhcpserver.h"
 #include "esp_event.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
@@ -21,24 +22,26 @@
 static const char *TAG = "wifi";
 
 #define TEST_TIMEOUT_MS     20000
-#define AP_LINGER_MS        60000   // keep the AP up after a successful change so the page can show the result
 #define RECONNECT_DELAY_MS  3000
+#define RECONNECT_DUAL_MS   10000   // ...with the access point up: each try scans, which takes the radio off its channel
+#define AP_LEASE_MIN        2       // short, so the AP's clients soon pick up a change of DNS server
+#define RECONNECT_STUCK_MS  60000   // no address and no join attempt this long: start over
 
 // Internet probe: the same check Android makes. 204 = online; a redirect or
 // any other answer = a captive portal's sign-in page; no answer = offline.
 #define PROBE_URL           "http://connectivitycheck.gstatic.com/generate_204"
 #define PROBE_TIMEOUT_MS    5000
 #define PROBE_ONLINE_MS     60000   // between probes while online or offline
-#define PROBE_PORTAL_MS     15000   // ...at a portal (signing in some other way)
-#define PROBE_ASSIST_MS     5000    // ...while the login hotspot is on
+#define PROBE_PORTAL_MS     15000   // ...at a portal (to see the sign-in soon)
 
 #define EV_GOT_IP       BIT0
 #define EV_DISCONNECTED BIT1
-#define EV_AP_UP        BIT2
-#define EV_PROBE_NOW    BIT3
-#define EV_AP_STARTED   BIT4    // the AP (re)started: its lwIP netif is new, with NAT off
+#define EV_PROBE_NOW    BIT2
+#define EV_LOST_IP      BIT3
+#define EV_STA_CHANGED  BIT4    // the station got or lost its address: the AP may need updating (ap_update)
+#define EV_AP_STARTED   BIT5    // the AP (re)started: its lwIP netif is new, with NAT off
 
-typedef enum { CMD_SET_CREDS, CMD_START_AP, CMD_PORTAL_ASSIST, CMD_NEW_AP_PASS } cmd_type_t;
+typedef enum { CMD_SET_CREDS, CMD_AP, CMD_NEW_AP_PASS } cmd_type_t;
 
 typedef struct {
     cmd_type_t type;
@@ -53,138 +56,64 @@ static EventGroupHandle_t s_ev;
 static QueueHandle_t s_cmds;
 static esp_netif_t *s_sta_netif, *s_ap_netif;
 static volatile bool s_auto_reconnect;
-static TickType_t s_assist_deadline;
+static char s_ssid[33], s_pass[65];     // the network the station joins
+static bool s_saved;                    // a network is saved
+static TickType_t s_last_join;          // the last esp_wifi_connect()
+static TickType_t s_ap_deadline;
 static uint8_t s_ap_channel = 6;
+static uint32_t s_ap_dns;               // the DNS server the AP's DHCP hands out; 0 = the AP itself
+static bool s_ap_stale;                 // the AP's config changed while it was off
 
 #define LOCKED(stmt) do { xSemaphoreTake(s_lock, portMAX_DELAY); stmt; xSemaphoreGive(s_lock); } while (0)
 
 // ---------------------------------------------------------------------------
-// DNS on the AP. Setup mode: answer every A query with the AP's address so
-// phones pop up the configuration page. Login hotspot: relay its clients'
-// queries to the station network's DNS server, so name lookups don't depend
-// on that server being reachable (or NATed properly) from the AP's subnet.
+// Captive-portal DNS for the access point: answer every A query with the AP's
+// address so phones pop up the configuration page. Only asked while the
+// station has no address: then the AP's DHCP names the station network's DNS
+// server instead (ap_update).
 // ---------------------------------------------------------------------------
-
-#define DNS_RELAY_SLOTS 16
-
-typedef struct {
-    bool used;
-    uint16_t id, client_id;
-    struct sockaddr_in client;
-    TickType_t sent;
-} relay_slot_t;
-
-static relay_slot_t s_relay[DNS_RELAY_SLOTS];
-static uint16_t s_relay_next;
-
-static void dns_answer_captive(int sock, uint8_t *buf, int n, const struct sockaddr_in *from)
-{
-    uint16_t qdcount = (buf[4] << 8) | buf[5];
-    if (qdcount != 1) return; // only plain single queries
-
-    // Find the end of the question (name + type + class).
-    int p = 12;
-    while (p < n && buf[p]) p += buf[p] + 1;
-    p += 5;
-    if (p > n) return;
-    uint16_t qtype = (buf[p - 4] << 8) | buf[p - 3];
-
-    esp_netif_ip_info_t ip;
-    esp_netif_get_ip_info(s_ap_netif, &ip);
-
-    buf[2] = 0x84 | (buf[2] & 0x01); // response, authoritative, keep RD
-    buf[3] = 0x80;                   // RA, no error
-    buf[6] = 0; buf[7] = (qtype == 1) ? 1 : 0; // ANCOUNT
-    buf[8] = buf[9] = buf[10] = buf[11] = 0;
-    n = p;
-    if (qtype == 1) {
-        static const uint8_t ans[] = {0xC0, 0x0C, 0, 1, 0, 1, 0, 0, 0, 60, 0, 4};
-        memcpy(buf + n, ans, sizeof(ans));
-        n += sizeof(ans);
-        memcpy(buf + n, &ip.ip.addr, 4);
-        n += 4;
-    }
-    sendto(sock, buf, n, 0, (const struct sockaddr *)from, sizeof(*from));
-}
-
-static void dns_relay_query(int up, uint8_t *buf, int n, const struct sockaddr_in *from)
-{
-    // Only for the hotspot's own clients: not an open resolver for the station side.
-    esp_netif_ip_info_t ap;
-    esp_netif_get_ip_info(s_ap_netif, &ap);
-    if ((from->sin_addr.s_addr ^ ap.ip.addr) & ap.netmask.addr) return;
-
-    esp_netif_dns_info_t dns = {0};
-    esp_netif_get_dns_info(s_sta_netif, ESP_NETIF_DNS_MAIN, &dns);
-    if (dns.ip.type != ESP_IPADDR_TYPE_V4 || dns.ip.u_addr.ip4.addr == 0) {
-        ESP_LOGW(TAG, "DNS relay: station network has no DNS server");
-        return;
-    }
-
-    // A free slot, else the oldest.
-    relay_slot_t *s = &s_relay[0];
-    for (int i = 0; i < DNS_RELAY_SLOTS; i++) {
-        if (!s_relay[i].used) { s = &s_relay[i]; break; }
-        if ((int32_t)(s_relay[i].sent - s->sent) < 0) s = &s_relay[i];
-    }
-    s->used = true;
-    s->client = *from;
-    s->client_id = (buf[0] << 8) | buf[1];
-    s->id = s_relay_next++;
-    s->sent = xTaskGetTickCount();
-    buf[0] = s->id >> 8;
-    buf[1] = s->id & 0xFF;
-
-    struct sockaddr_in to = {.sin_family = AF_INET, .sin_port = htons(53), .sin_addr.s_addr = dns.ip.u_addr.ip4.addr};
-    sendto(up, buf, n, 0, (struct sockaddr *)&to, sizeof(to));
-}
-
-static void dns_relay_reply(int sock, uint8_t *buf, int n)
-{
-    uint16_t id = (buf[0] << 8) | buf[1];
-    for (int i = 0; i < DNS_RELAY_SLOTS; i++) {
-        relay_slot_t *s = &s_relay[i];
-        if (!s->used || s->id != id) continue;
-        s->used = false;
-        buf[0] = s->client_id >> 8;
-        buf[1] = s->client_id & 0xFF;
-        sendto(sock, buf, n, 0, (struct sockaddr *)&s->client, sizeof(s->client));
-        return;
-    }
-}
 
 static void dns_task(void *arg)
 {
     int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-    int up = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP); // to the upstream server, from an ephemeral port
     struct sockaddr_in addr = {.sin_family = AF_INET, .sin_port = htons(53), .sin_addr.s_addr = htonl(INADDR_ANY)};
-    if (sock < 0 || up < 0 || bind(sock, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+    if (sock < 0 || bind(sock, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
         ESP_LOGE(TAG, "DNS socket failed");
         vTaskDelete(NULL);
         return;
     }
-    s_relay_next = esp_random();
-    static uint8_t buf[1500]; // relayed answers can exceed 512 bytes (EDNS0)
+    uint8_t buf[512];
     for (;;) {
-        fd_set rd;
-        FD_ZERO(&rd);
-        FD_SET(sock, &rd);
-        FD_SET(up, &rd);
-        if (select((sock > up ? sock : up) + 1, &rd, NULL, NULL, NULL) <= 0) continue;
-
         struct sockaddr_in from;
         socklen_t fromlen = sizeof(from);
-        if (FD_ISSET(up, &rd)) {
-            int n = recvfrom(up, buf, sizeof(buf), 0, (struct sockaddr *)&from, &fromlen);
-            if (n >= 12 && (buf[2] & 0x80) && s_status.portal_assist) dns_relay_reply(sock, buf, n);
+        int n = recvfrom(sock, buf, sizeof(buf) - 16, 0, (struct sockaddr *)&from, &fromlen);
+        if (n < 12 || !s_status.ap_active) continue;
+        uint16_t qdcount = (buf[4] << 8) | buf[5];
+        if ((buf[2] & 0x80) || qdcount != 1) continue; // only plain single queries
+
+        // Find the end of the question (name + type + class).
+        int p = 12;
+        while (p < n && buf[p]) p += buf[p] + 1;
+        p += 5;
+        if (p > n) continue;
+        uint16_t qtype = (buf[p - 4] << 8) | buf[p - 3];
+
+        esp_netif_ip_info_t ip;
+        esp_netif_get_ip_info(s_ap_netif, &ip);
+
+        buf[2] = 0x84 | (buf[2] & 0x01); // response, authoritative, keep RD
+        buf[3] = 0x80;                   // RA, no error
+        buf[6] = 0; buf[7] = (qtype == 1) ? 1 : 0; // ANCOUNT
+        buf[8] = buf[9] = buf[10] = buf[11] = 0;
+        n = p;
+        if (qtype == 1) {
+            static const uint8_t ans[] = {0xC0, 0x0C, 0, 1, 0, 1, 0, 0, 0, 60, 0, 4};
+            memcpy(buf + n, ans, sizeof(ans));
+            n += sizeof(ans);
+            memcpy(buf + n, &ip.ip.addr, 4);
+            n += 4;
         }
-        if (FD_ISSET(sock, &rd)) {
-            fromlen = sizeof(from);
-            int n = recvfrom(sock, buf, sizeof(buf) - 16, 0, (struct sockaddr *)&from, &fromlen);
-            if (n < 12 || (buf[2] & 0x80)) continue; // queries only
-            if (s_status.portal_assist) dns_relay_query(up, buf, n, &from);
-            else if (s_status.ap_active) dns_answer_captive(sock, buf, n, &from);
-        }
+        sendto(sock, buf, n, 0, (struct sockaddr *)&from, fromlen);
     }
 }
 
@@ -194,16 +123,29 @@ static void on_wifi_event(void *arg, esp_event_base_t base, int32_t id, void *da
 {
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
         xEventGroupClearBits(s_ev, EV_GOT_IP);
-        xEventGroupSetBits(s_ev, EV_DISCONNECTED);
+        xEventGroupSetBits(s_ev, EV_DISCONNECTED | EV_STA_CHANGED);
         LOCKED({
             s_status.sta_ip[0] = s_status.sta_netmask[0] = s_status.sta_gw[0] = '\0';
             s_status.net = WIFI_NET_OFFLINE;
             if (s_status.state == WIFI_MGR_STA_CONNECTED) s_status.state = WIFI_MGR_STA_CONNECTING;
         });
+    } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_CONNECTED) {
+        // If the access point is up, the driver has moved it to this channel too.
+        wifi_event_sta_connected_t *e = data;
+        if (s_status.ap_active && e->channel != s_ap_channel) ESP_LOGI(TAG, "AP following to channel %d", e->channel);
+        s_ap_channel = e->channel;
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_AP_START) {
-        xEventGroupSetBits(s_ev, EV_AP_UP | EV_AP_STARTED);
-    } else if (base == WIFI_EVENT && id == WIFI_EVENT_AP_STOP) {
-        xEventGroupClearBits(s_ev, EV_AP_UP);
+        xEventGroupSetBits(s_ev, EV_AP_STARTED);
+    } else if (base == IP_EVENT && id == IP_EVENT_STA_LOST_IP) {
+        // DHCP couldn't renew: still joined, but with no address. wifi_task rejoins.
+        ESP_LOGW(TAG, "lost IP");
+        xEventGroupClearBits(s_ev, EV_GOT_IP);
+        xEventGroupSetBits(s_ev, EV_LOST_IP | EV_STA_CHANGED);
+        LOCKED({
+            s_status.sta_ip[0] = s_status.sta_netmask[0] = s_status.sta_gw[0] = '\0';
+            s_status.net = WIFI_NET_OFFLINE;
+            if (s_status.state == WIFI_MGR_STA_CONNECTED) s_status.state = WIFI_MGR_STA_CONNECTING;
+        });
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *e = data;
         LOCKED({
@@ -211,11 +153,11 @@ static void on_wifi_event(void *arg, esp_event_base_t base, int32_t id, void *da
             snprintf(s_status.sta_netmask, sizeof(s_status.sta_netmask), IPSTR, IP2STR(&e->ip_info.netmask));
             snprintf(s_status.sta_gw, sizeof(s_status.sta_gw), IPSTR, IP2STR(&e->ip_info.gw));
             s_status.net = WIFI_NET_UNKNOWN;
-            if (s_status.state != WIFI_MGR_AP) s_status.state = WIFI_MGR_STA_CONNECTED;
+            s_status.state = WIFI_MGR_STA_CONNECTED;
         });
         ESP_LOGI(TAG, "got IP %s", s_status.sta_ip);
         xEventGroupClearBits(s_ev, EV_DISCONNECTED);
-        xEventGroupSetBits(s_ev, EV_GOT_IP | EV_PROBE_NOW);
+        xEventGroupSetBits(s_ev, EV_GOT_IP | EV_PROBE_NOW | EV_STA_CHANGED);
     }
 }
 
@@ -251,6 +193,7 @@ static void apply_ap_config(void)
     ap.ap.max_connection = 4;
     ap.ap.authmode = WIFI_AUTH_WPA2_PSK;
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap));
+    s_ap_stale = false;
 
     esp_netif_ip_info_t ip;
     esp_netif_get_ip_info(s_ap_netif, &ip);
@@ -261,7 +204,12 @@ static void apply_ap_config(void)
 static uint8_t scan_channel(const char *ssid)
 {
     wifi_scan_config_t sc = {.ssid = (uint8_t *)ssid};
-    if (esp_wifi_scan_start(&sc, true) != ESP_OK) return 0;
+    esp_err_t err = esp_wifi_scan_start(&sc, true);
+    if (err == ESP_ERR_WIFI_STATE) { // the station is still busy with the last join
+        vTaskDelay(pdMS_TO_TICKS(1000));
+        err = esp_wifi_scan_start(&sc, true);
+    }
+    if (err != ESP_OK) return 0;
     uint16_t n = 0;
     esp_wifi_scan_get_ap_num(&n);
     uint8_t ch = 0;
@@ -276,29 +224,55 @@ static uint8_t scan_channel(const char *ssid)
     return ch;
 }
 
-static void sta_connect(const char *ssid, const char *pass)
+// One try at joining s_ssid. With the access point up, it first moves to the
+// network's channel: the radio can only be on one, and a join's
+// authentication on another goes unanswered while the radio hops back to serve
+// the AP (disconnect reason 2, AUTH_EXPIRE). The station then looks only there.
+static void sta_join(void)
 {
     wifi_config_t sta = {0};
-    strlcpy((char *)sta.sta.ssid, ssid, sizeof(sta.sta.ssid));
-    strlcpy((char *)sta.sta.password, pass, sizeof(sta.sta.password));
-    sta.sta.threshold.authmode = pass[0] ? WIFI_AUTH_WEP : WIFI_AUTH_OPEN;
+    strlcpy((char *)sta.sta.ssid, s_ssid, sizeof(sta.sta.ssid));
+    strlcpy((char *)sta.sta.password, s_pass, sizeof(sta.sta.password));
+    sta.sta.threshold.authmode = s_pass[0] ? WIFI_AUTH_WEP : WIFI_AUTH_OPEN;
     sta.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
     sta.sta.sort_method = WIFI_CONNECT_AP_BY_SIGNAL;
+    if (s_status.ap_active) {
+        uint8_t ch = scan_channel(s_ssid), cur = 0;
+        wifi_second_chan_t sec;
+        esp_wifi_get_channel(&cur, &sec);
+        if (ch && ch != cur) {
+            ESP_LOGI(TAG, "AP moving to channel %d, where \"%s\" is", ch, s_ssid);
+            s_ap_channel = ch;
+            apply_ap_config(); // restarts the AP: its clients rejoin on the new channel
+        }
+        sta.sta.channel = ch;
+    }
+    esp_err_t err = esp_wifi_set_config(WIFI_IF_STA, &sta);
+    if (err != ESP_OK) ESP_LOGW(TAG, "station config: %s", esp_err_to_name(err));
+    s_last_join = xTaskGetTickCount();
+    esp_wifi_connect();
+}
 
+static void sta_connect(const char *ssid, const char *pass)
+{
     s_auto_reconnect = false;
     esp_wifi_disconnect();
-    xEventGroupClearBits(s_ev, EV_GOT_IP | EV_DISCONNECTED);
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &sta));
+    xEventGroupClearBits(s_ev, EV_GOT_IP | EV_DISCONNECTED | EV_LOST_IP);
+    strlcpy(s_ssid, ssid, sizeof(s_ssid));
+    strlcpy(s_pass, pass, sizeof(s_pass));
     LOCKED({
         strlcpy(s_status.sta_ssid, ssid, sizeof(s_status.sta_ssid));
         s_status.sta_ip[0] = '\0';
-        if (s_status.state != WIFI_MGR_AP) s_status.state = WIFI_MGR_STA_CONNECTING;
+        s_status.state = WIFI_MGR_STA_CONNECTING;
     });
     ESP_LOGI(TAG, "connecting to \"%s\"", ssid);
-    esp_wifi_connect();
+    sta_join();
     s_auto_reconnect = true;
 }
 
+// The AP's config is loaded at start-up (wifi_mgr_start) and kept by the driver
+// across mode changes, so turning the AP on starts it once. Setting the config
+// again restarts it, so that's only done when it changed while the AP was off.
 static void set_mode(wifi_mode_t mode)
 {
     wifi_mode_t cur;
@@ -307,12 +281,12 @@ static void set_mode(wifi_mode_t mode)
         ESP_ERROR_CHECK(esp_wifi_set_mode(mode));
     }
     bool ap = (mode == WIFI_MODE_AP || mode == WIFI_MODE_APSTA);
-    if (ap) apply_ap_config();
+    if (ap && s_ap_stale) apply_ap_config();
     LOCKED(s_status.ap_active = ap);
 }
 
 // ---------------------------------------------------------------------------
-// Captive portals: the internet probe and the login hotspot
+// The internet probe
 // ---------------------------------------------------------------------------
 
 static wifi_net_t probe_once(void)
@@ -335,8 +309,7 @@ static wifi_net_t probe_once(void)
 static void probe_task(void *arg)
 {
     for (;;) {
-        uint32_t ms = s_status.portal_assist ? PROBE_ASSIST_MS
-                      : s_status.net == WIFI_NET_PORTAL ? PROBE_PORTAL_MS : PROBE_ONLINE_MS;
+        uint32_t ms = s_status.net == WIFI_NET_PORTAL ? PROBE_PORTAL_MS : PROBE_ONLINE_MS;
         xEventGroupWaitBits(s_ev, EV_PROBE_NOW, pdTRUE, pdFALSE, pdMS_TO_TICKS(ms));
         if (!wifi_mgr_has_ip()) continue;
         wifi_net_t r = probe_once();
@@ -350,97 +323,67 @@ static void probe_task(void *arg)
     }
 }
 
-// Move the AP to another address (its DHCP server has to be stopped for it).
-// Its clients always get the AP itself as their DNS server (see dns_task).
-static void set_ap_ip(const esp_netif_ip_info_t *ip)
-{
-    esp_netif_dhcps_stop(s_ap_netif);
-    esp_netif_set_ip_info(s_ap_netif, ip);
-    esp_netif_dhcps_start(s_ap_netif);
-    LOCKED(snprintf(s_status.ap_ip, sizeof(s_status.ap_ip), IPSTR, IP2STR(&ip->ip)));
-}
+// ---------------------------------------------------------------------------
+// Dual mode
+// ---------------------------------------------------------------------------
 
-static void portal_assist_stop(bool to_sta)
+// Fit the AP to the station. Its clients' DNS server: the station network's
+// while the station has an address, so they reach the internet (or its
+// captive portal) through NAT; else the AP itself, for the captive DNS that
+// pops up the configuration page. And its subnet can't overlap the station's
+// network, or replies to its clients could leave by the station. Its DHCP
+// server is stopped for either to change.
+static void ap_update(bool force)
 {
-    if (!s_status.portal_assist) return;
-    ESP_LOGI(TAG, "login hotspot off");
-    esp_netif_napt_disable(s_ap_netif);
-    LOCKED({
-        s_status.portal_assist = false;
-        s_status.portal_assist_left_s = 0;
-    });
-    if (to_sta) set_mode(WIFI_MODE_STA);
-}
-
-static void portal_assist_start(void)
-{
-    if (s_status.portal_assist) { // again: a fresh ten minutes
-        s_assist_deadline = xTaskGetTickCount() + pdMS_TO_TICKS(WIFI_MGR_PORTAL_ASSIST_S * 1000);
-        return;
-    }
-    if (s_status.state != WIFI_MGR_STA_CONNECTED) {
-        ESP_LOGW(TAG, "login hotspot needs a station connection");
-        return;
-    }
-    ESP_LOGI(TAG, "login hotspot on");
-    set_mode(WIFI_MODE_APSTA);
-    if (!(xEventGroupWaitBits(s_ev, EV_AP_UP, pdFALSE, pdFALSE, pdMS_TO_TICKS(5000)) & EV_AP_UP)) {
-        ESP_LOGE(TAG, "AP didn't start");
-        set_mode(WIFI_MODE_STA);
-        return;
-    }
-
+    if (!s_status.ap_active) return;
     esp_netif_ip_info_t sta, ap;
     esp_netif_get_ip_info(s_sta_netif, &sta);
     esp_netif_get_ip_info(s_ap_netif, &ap);
-    // The AP's subnet can't overlap the network it's routed into.
-    bool clash = ((sta.ip.addr ^ ap.ip.addr) & sta.netmask.addr & ap.netmask.addr) == 0;
+    bool up = wifi_mgr_has_ip();
+    bool clash = up && ((sta.ip.addr ^ ap.ip.addr) & sta.netmask.addr & ap.netmask.addr) == 0;
+    esp_netif_dns_info_t dns = {0};
+    if (!up || esp_netif_get_dns_info(s_sta_netif, ESP_NETIF_DNS_MAIN, &dns) != ESP_OK ||
+        dns.ip.type != ESP_IPADDR_TYPE_V4) {
+        dns.ip.u_addr.ip4.addr = 0;
+    }
+    if (!force && !clash && dns.ip.u_addr.ip4.addr == s_ap_dns) return;
+
+    esp_netif_dhcps_stop(s_ap_netif);
     if (clash) {
         bool dflt = ap.ip.addr == ESP_IP4TOADDR(192, 168, 4, 1);
         ap.ip.addr = ap.gw.addr = dflt ? ESP_IP4TOADDR(10, 48, 0, 1) : ESP_IP4TOADDR(192, 168, 4, 1);
         ap.netmask.addr = ESP_IP4TOADDR(255, 255, 255, 0);
-        ESP_LOGI(TAG, "AP moved to " IPSTR " (station network overlaps)", IP2STR(&ap.ip));
-        set_ap_ip(&ap);
+        ESP_LOGI(TAG, "AP moving to " IPSTR " (the station network overlaps)", IP2STR(&ap.ip));
+        esp_netif_set_ip_info(s_ap_netif, &ap);
+        LOCKED(snprintf(s_status.ap_ip, sizeof(s_status.ap_ip), IPSTR, IP2STR(&ap.ip)));
     }
-    esp_netif_dns_info_t dns = {0};
-    esp_netif_get_dns_info(s_sta_netif, ESP_NETIF_DNS_MAIN, &dns);
-    ESP_LOGI(TAG, "hotspot " IPSTR " -> station " IPSTR " gw " IPSTR ", DNS relayed to " IPSTR,
-             IP2STR(&ap.ip), IP2STR(&sta.ip), IP2STR(&sta.gw), IP2STR(&dns.ip.u_addr.ip4));
-
-    // Forwarded traffic leaves by the default netif; bringing the AP up can
-    // leave that pointing at the AP, which bounces everything back to it.
-    esp_netif_t *was = esp_netif_get_default_netif();
-    if (was != s_sta_netif)
-        ESP_LOGW(TAG, "default route was %s, moving it to the station",
-                 was ? esp_netif_get_desc(was) : "none");
-    esp_netif_set_default_netif(s_sta_netif);
-
-    LOCKED(s_status.portal_assist = true); // set first: portal_assist_stop() checks it
-    esp_err_t err = esp_netif_napt_enable(s_ap_netif);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "NAT failed: %s", esp_err_to_name(err));
-        portal_assist_stop(true);
-        return;
-    }
-    s_assist_deadline = xTaskGetTickCount() + pdMS_TO_TICKS(WIFI_MGR_PORTAL_ASSIST_S * 1000);
-    LOCKED(s_status.portal_assist_left_s = WIFI_MGR_PORTAL_ASSIST_S);
-    xEventGroupSetBits(s_ev, EV_PROBE_NOW);
+    s_ap_dns = dns.ip.u_addr.ip4.addr;
+    uint8_t offer = s_ap_dns ? OFFER_DNS : 0;
+    esp_netif_dhcps_option(s_ap_netif, ESP_NETIF_OP_SET, ESP_NETIF_DOMAIN_NAME_SERVER, &offer, sizeof(offer));
+    if (s_ap_dns) esp_netif_set_dns_info(s_ap_netif, ESP_NETIF_DNS_MAIN, &dns);
+    uint32_t lease = AP_LEASE_MIN;
+    esp_netif_dhcps_option(s_ap_netif, ESP_NETIF_OP_SET, ESP_NETIF_IP_ADDRESS_LEASE_TIME, &lease, sizeof(lease));
+    esp_netif_dhcps_start(s_ap_netif);
+    if (s_ap_dns) ESP_LOGI(TAG, "AP clients: DNS " IPSTR ", out through the station", IP2STR(&dns.ip.u_addr.ip4));
+    else ESP_LOGI(TAG, "AP clients: captive DNS (setup page)");
 }
 
-static void enter_ap_mode(void)
+// On, or if already on, a fresh WIFI_MGR_AP_S. With no network saved it stays on.
+static void ap_on(void)
 {
-    ESP_LOGI(TAG, "entering AP mode");
-    portal_assist_stop(false);
-    s_auto_reconnect = false;
-    esp_wifi_disconnect();
-    make_ap_identity(false);
-    LOCKED({
-        s_status.state = WIFI_MGR_AP;
-        s_status.sta_ip[0] = s_status.sta_netmask[0] = s_status.sta_gw[0] = '\0';
-        s_status.net = WIFI_NET_OFFLINE;
-    });
-    set_mode(WIFI_MODE_AP);
-    ESP_LOGI(TAG, "AP \"%s\" password \"%s\"", s_status.ap_ssid, s_status.ap_pass);
+    s_ap_deadline = xTaskGetTickCount() + pdMS_TO_TICKS(WIFI_MGR_AP_S * 1000);
+    LOCKED(s_status.ap_left_s = s_saved ? WIFI_MGR_AP_S : 0);
+    if (s_status.ap_active) return;
+    ESP_LOGI(TAG, "AP \"%s\" on, password \"%s\"", s_status.ap_ssid, s_status.ap_pass);
+    set_mode(WIFI_MODE_APSTA); // NAT and DHCP are set up once it starts (wifi_task)
+}
+
+static void ap_off(void)
+{
+    if (!s_status.ap_active || !s_saved) return; // with no network saved it's the only way in
+    ESP_LOGI(TAG, "AP off");
+    set_mode(WIFI_MODE_STA);
+    LOCKED(s_status.ap_left_s = 0);
 }
 
 // Wait for an address, re-trying the join whenever it fails, until timeout.
@@ -455,46 +398,29 @@ static bool wait_for_ip(uint32_t ms)
         if (bits & EV_DISCONNECTED) {
             xEventGroupClearBits(s_ev, EV_DISCONNECTED);
             vTaskDelay(pdMS_TO_TICKS(1000));
-            esp_wifi_connect();
+            sta_join();
         }
     }
 }
 
 static void test_credentials(const cmd_t *cmd)
 {
-    portal_assist_stop(true); // its routing and DNS belong to the network we're leaving
     char old_ssid[33], old_pass[65];
     bool have_old = settings_get_wifi(old_ssid, old_pass);
-    bool was_ap = s_status.state == WIFI_MGR_AP;
 
     LOCKED({
         s_status.test = WIFI_TEST_RUNNING;
         strlcpy(s_status.test_ssid, cmd->ssid, sizeof(s_status.test_ssid));
-        if (was_ap) s_status.state = WIFI_MGR_STA_CONNECTING;
     });
-    // Keep the AP up while testing so a phone configuring us stays connected.
-    // Its radio can only be on one channel: put the AP on the network's
-    // channel first, or the join's authentication can go unanswered while the
-    // radio hops back to serve the AP (disconnect reason 2, AUTH_EXPIRE).
-    if (was_ap) {
-        set_mode(WIFI_MODE_APSTA);
-        uint8_t ch = scan_channel(cmd->ssid);
-        if (ch && ch != s_ap_channel) {
-            ESP_LOGI(TAG, "AP moving to channel %d, where \"%s\" is", ch, cmd->ssid);
-            s_ap_channel = ch;
-            apply_ap_config(); // restarts the AP: the phone rejoins on the new channel
-        }
-    }
-
     sta_connect(cmd->ssid, cmd->pass);
     if (wait_for_ip(TEST_TIMEOUT_MS)) {
         ESP_LOGI(TAG, "new network OK, saving");
         settings_set_wifi(cmd->ssid, cmd->pass);
-        LOCKED(s_status.test = WIFI_TEST_OK);
-        if (was_ap) {
-            vTaskDelay(pdMS_TO_TICKS(AP_LINGER_MS));
-            set_mode(WIFI_MODE_STA);
+        if (!s_saved) { // the first: the AP's time starts now
+            s_saved = true;
+            if (s_status.ap_active) ap_on();
         }
+        LOCKED(s_status.test = WIFI_TEST_OK);
         return;
     }
 
@@ -504,12 +430,18 @@ static void test_credentials(const cmd_t *cmd)
         if (wait_for_ip(TEST_TIMEOUT_MS)) {
             ESP_LOGI(TAG, "reverted to \"%s\"", old_ssid);
             LOCKED(s_status.test = WIFI_TEST_FAILED_REVERTED);
-            if (was_ap) set_mode(WIFI_MODE_STA);
             return;
         }
     }
-    enter_ap_mode();
-    LOCKED(s_status.test = WIFI_TEST_FAILED_AP);
+    // Nothing works: the AP is the way back in. The station keeps trying the
+    // saved network, if there is one.
+    if (!have_old) {
+        s_auto_reconnect = false;
+        esp_wifi_disconnect();
+        LOCKED(s_status.state = WIFI_MGR_NO_NETWORK);
+    }
+    ap_on();
+    LOCKED(s_status.test = WIFI_TEST_FAILED);
 }
 
 static void wifi_task(void *arg)
@@ -523,34 +455,48 @@ static void wifi_task(void *arg)
             } else if (cmd.type == CMD_NEW_AP_PASS) {
                 make_ap_identity(true);
                 if (s_status.ap_active) apply_ap_config(); // restarts the AP: its clients drop off
+                else s_ap_stale = true;
                 ESP_LOGI(TAG, "AP \"%s\" new password \"%s\"", s_status.ap_ssid, s_status.ap_pass);
-            } else if (cmd.type == CMD_PORTAL_ASSIST) {
-                if (cmd.on) portal_assist_start();
-                else portal_assist_stop(true);
             } else {
-                enter_ap_mode();
+                if (cmd.on) ap_on();
+                else ap_off();
             }
             continue;
         }
-        if (s_status.portal_assist) {
-            int32_t left = (int32_t)(s_assist_deadline - xTaskGetTickCount());
-            if (left <= 0) portal_assist_stop(true);
-            else LOCKED(s_status.portal_assist_left_s = (left + configTICK_RATE_HZ - 1) / configTICK_RATE_HZ);
+        if (s_status.ap_active && s_saved) {
+            int32_t left = (int32_t)(s_ap_deadline - xTaskGetTickCount());
+            if (left <= 0) ap_off();
+            else LOCKED(s_status.ap_left_s = (left + configTICK_RATE_HZ - 1) / configTICK_RATE_HZ);
         }
-        // The AP restarts after its config is set (and on a new password), and
-        // each start re-adds its netif with NAT off: turn it back on.
-        if ((xEventGroupClearBits(s_ev, EV_AP_STARTED) & EV_AP_STARTED) && s_status.portal_assist) {
+        // Each AP start (on, or a restart for a new channel or password) makes
+        // its netif anew, with NAT off: turn it on, and fit the AP's DHCP.
+        if ((xEventGroupClearBits(s_ev, EV_AP_STARTED) & EV_AP_STARTED) && s_status.ap_active) {
             esp_err_t err = esp_netif_napt_enable(s_ap_netif);
-            if (err == ESP_OK) ESP_LOGI(TAG, "AP started: NAT on");
-            else ESP_LOGE(TAG, "AP restarted, NAT failed: %s", esp_err_to_name(err));
+            if (err == ESP_OK) ESP_LOGI(TAG, "AP up: NAT on");
+            else ESP_LOGE(TAG, "NAT failed: %s", esp_err_to_name(err));
+            ap_update(true);
         }
-        // Keep retrying the station connection while it's down.
-        if (s_auto_reconnect && s_status.state == WIFI_MGR_STA_CONNECTING &&
-            (xEventGroupGetBits(s_ev) & EV_DISCONNECTED) &&
-            xTaskGetTickCount() - last_reconnect > pdMS_TO_TICKS(RECONNECT_DELAY_MS)) {
-            xEventGroupClearBits(s_ev, EV_DISCONNECTED);
-            last_reconnect = xTaskGetTickCount();
-            esp_wifi_connect();
+        if (xEventGroupClearBits(s_ev, EV_STA_CHANGED) & EV_STA_CHANGED) ap_update(false);
+        // Keep retrying the station connection while it's down. A join that
+        // fails without a disconnect event, or an address that DHCP couldn't
+        // renew, would otherwise leave it down for good: start over.
+        TickType_t now = xTaskGetTickCount();
+        EventBits_t bits = xEventGroupGetBits(s_ev);
+        if (s_auto_reconnect && s_status.state == WIFI_MGR_STA_CONNECTING) {
+            if ((bits & EV_LOST_IP) || now - s_last_join > pdMS_TO_TICKS(RECONNECT_STUCK_MS)) {
+                ESP_LOGW(TAG, "no address: rejoining");
+                xEventGroupClearBits(s_ev, EV_LOST_IP);
+                esp_wifi_disconnect();
+                vTaskDelay(pdMS_TO_TICKS(500)); // let its disconnect event land first
+                xEventGroupClearBits(s_ev, EV_DISCONNECTED);
+                sta_join();
+                last_reconnect = xTaskGetTickCount();
+            } else if ((bits & EV_DISCONNECTED) &&
+                       now - last_reconnect > pdMS_TO_TICKS(s_status.ap_active ? RECONNECT_DUAL_MS : RECONNECT_DELAY_MS)) {
+                xEventGroupClearBits(s_ev, EV_DISCONNECTED);
+                sta_join();
+                last_reconnect = xTaskGetTickCount();
+            }
         }
         if (s_status.state == WIFI_MGR_STA_CONNECTED) {
             wifi_ap_record_t info;
@@ -576,22 +522,28 @@ void wifi_mgr_start(void)
     ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
     ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, on_wifi_event, NULL));
     ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, on_wifi_event, NULL));
+    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_LOST_IP, on_wifi_event, NULL));
 
     char ssid[33], pass[65];
     make_ap_identity(false);
-    bool have = settings_get_wifi(ssid, pass);
-    ESP_ERROR_CHECK(esp_wifi_set_mode(have ? WIFI_MODE_STA : WIFI_MODE_AP));
+    s_saved = settings_get_wifi(ssid, pass);
+    // Load the AP's config now, before Wi-Fi starts, so turning the AP on later
+    // starts it once instead of starting and restarting it.
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
+    apply_ap_config();
+    ESP_ERROR_CHECK(esp_wifi_set_mode(s_saved ? WIFI_MODE_STA : WIFI_MODE_APSTA));
     ESP_ERROR_CHECK(esp_wifi_start());
     // The station MAC (the C6's): what a captive portal knows the display by.
     uint8_t mac[6];
     if (esp_wifi_get_mac(WIFI_IF_STA, mac) == ESP_OK) {
         LOCKED(snprintf(s_status.sta_mac, sizeof(s_status.sta_mac), MACSTR, MAC2STR(mac)));
     }
-    if (have) {
+    if (s_saved) {
         sta_connect(ssid, pass);
     } else {
         ESP_LOGI(TAG, "no saved network");
-        enter_ap_mode();
+        LOCKED(s_status.state = WIFI_MGR_NO_NETWORK);
+        ap_on();
     }
 
     xTaskCreate(wifi_task, "wifi_mgr", 4096, NULL, 4, NULL);
@@ -618,21 +570,15 @@ void wifi_mgr_set_credentials(const char *ssid, const char *pass)
     xQueueSend(s_cmds, &cmd, 0);
 }
 
-void wifi_mgr_start_ap(void)
+void wifi_mgr_ap(bool on)
 {
-    cmd_t cmd = {.type = CMD_START_AP};
+    cmd_t cmd = {.type = CMD_AP, .on = on};
     xQueueSend(s_cmds, &cmd, 0);
 }
 
 void wifi_mgr_new_ap_password(void)
 {
     cmd_t cmd = {.type = CMD_NEW_AP_PASS};
-    xQueueSend(s_cmds, &cmd, 0);
-}
-
-void wifi_mgr_portal_assist(bool on)
-{
-    cmd_t cmd = {.type = CMD_PORTAL_ASSIST, .on = on};
     xQueueSend(s_cmds, &cmd, 0);
 }
 
@@ -652,7 +598,7 @@ const char *wifi_mgr_state_str(wifi_mgr_state_t s)
     switch (s) {
     case WIFI_MGR_STA_CONNECTING: return "connecting";
     case WIFI_MGR_STA_CONNECTED: return "connected";
-    case WIFI_MGR_AP: return "access point";
+    case WIFI_MGR_NO_NETWORK: return "no network";
     }
     return "?";
 }
