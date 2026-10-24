@@ -39,10 +39,12 @@ bool log_save_valid_name(const char *name)
     return true;
 }
 
-// path + ".bin" in place of ".txt"
+// path with ".bin" in place of ".txt"
 static void dump_path(char *out, size_t len, const char *log_path)
 {
-    snprintf(out, len, "%.*s.bin", (int)(strlen(log_path) - 4), log_path);
+    strlcpy(out, log_path, len);
+    size_t n = strlen(out);
+    if (n >= 4) strcpy(out + n - 4, ".bin");
 }
 
 static int by_newest(const void *a, const void *b)
@@ -61,12 +63,13 @@ int log_save_list(log_file_t *out, int max)
     while (n < max && (e = readdir(d))) {
         size_t len = strlen(e->d_name);
         if (!log_save_valid_name(e->d_name) || strcmp(e->d_name + len - 4, ".txt") != 0) continue;
+        log_file_t *f = &out[n];
+        strlcpy(f->name, e->d_name, sizeof(f->name)); // fits: checked above
         char path[96], dump[96];
         struct stat st;
-        snprintf(path, sizeof(path), LOG_SAVE_DIR "/%s", e->d_name);
+        snprintf(path, sizeof(path), LOG_SAVE_DIR "/%s", f->name);
         if (stat(path, &st) != 0) continue;
-        log_file_t *f = &out[n++];
-        strlcpy(f->name, e->d_name, sizeof(f->name));
+        n++;
         f->size = st.st_size;
         f->mtime = st.st_mtime < 365 * 86400 * 30 ? 0 : st.st_mtime; // FAT's 1980 = no clock
         dump_path(dump, sizeof(dump), path);
