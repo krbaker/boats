@@ -58,6 +58,9 @@ void nmea_client_get_status(nmea_status_t *out)
 {
     memset(out, 0, sizeof(*out));
     out->state = NMEA_STATE_CONNECTED;
+    static const uint32_t net_types[28] = {[1] = 402, [2] = 11, [3] = 160, [4] = 55, [5] = 48, [8] = 17, [9] = 2,
+                                           [18] = 71, [19] = 4, [20] = 6, [21] = 28, [24] = 12, [27] = 1};
+    memcpy(out->stats.by_type, net_types, sizeof(net_types));
 }
 
 void wifi_mgr_get_status(wifi_mgr_status_t *out)
@@ -444,6 +447,8 @@ void sdr_get_status(sdr_status_t *out)
     out->demod.ppm = -2.2f;
     out->gain = 372;
     out->gain_best = true;
+    static const uint32_t sdr_types[28] = {[1] = 61, [3] = 22, [4] = 9, [5] = 6, [8] = 2, [18] = 14, [21] = 3, [24] = 1};
+    memcpy(out->parser.by_type, sdr_types, sizeof(sdr_types));
 }
 
 const char *sdr_state_str(sdr_state_t st) { return st == SDR_READY ? "receiving" : "?"; }
@@ -583,6 +588,9 @@ int main(int argc, char **argv)
     lv_tabview_set_active(find_class(scr, &lv_tabview_class), 1, LV_ANIM_OFF);
     lv_obj_send_event(find_class(scr, &lv_tabview_class), LV_EVENT_VALUE_CHANGED, NULL);
     snap("receiver");
+    drag(400, 640, 400, 260); // down to the message types
+    run_ms(600);
+    snap("receiver_types");
     lv_tabview_set_active(find_class(scr, &lv_tabview_class), 2, LV_ANIM_OFF);
     snap("options");
     hide_overlays(scr);

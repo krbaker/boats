@@ -10,6 +10,7 @@
 #include "esp_heap_caps.h"
 
 #include "geo.h"
+#include "nmea_client.h"
 #include "rx_stats.h"
 #include "sdr_probe.h"
 #include "settings.h"
@@ -32,7 +33,8 @@ typedef struct {
 } row_t;
 
 static lv_obj_t *s_root, *s_tabs, *s_table, *s_empty;
-static lv_obj_t *s_rx_status, *s_rx_table, *s_rx_vessels;
+static lv_obj_t *s_rx_status, *s_rx_table, *s_rx_vessels, *s_type_table;
+static bool s_type_used[29];    // by row of s_type_table: the display uses that message type
 static lv_obj_t *s_len_lbl, *s_len_slider, *s_speed_lbl, *s_speed_slider;
 static lv_obj_t *s_unknown_cb, *s_mode_dd, *s_order_dd, *s_name_cb, *s_speed_cb;
 static vessel_t *s_vessels;
@@ -154,6 +156,37 @@ static void refresh_rx(void)
     lv_table_set_cell_value_fmt(s_rx_table, 4, 1, "%d", sdr_only);
     lv_table_set_cell_value_fmt(s_rx_table, 4, 2, "%d", net_only);
     lv_label_set_text_fmt(s_rx_vessels, "Vessels heard by both: %d", both);
+
+    // Every message type heard since start-up, from each receiver.
+    static const char *const names[28] = {
+        "Too short", "Position A", "Position A", "Position A", "Base station", "Static A", "Binary addr.",
+        "Binary ack", "Binary bcast", "SAR aircraft", "UTC inquiry", "UTC response", "Safety addr.", "Safety ack",
+        "Safety bcast", "Interrogation", "Assign mode", "DGNSS", "Position B", "Ext. pos. B", "Data link",
+        "Aid to nav.", "Channel mgmt", "Group assign", "Static B", "Binary 1-slot", "Binary multi", "Long range",
+    };
+    nmea_status_t ns;
+    nmea_client_get_status(&ns);
+    int row = 1;
+    for (int t = 0; t < 28; t++) {
+        uint32_t sdr = r.parser.by_type[t], net = ns.stats.by_type[t];
+        if (!sdr && !net) continue;
+        lv_table_set_row_count(s_type_table, row + 1);
+        lv_table_set_cell_value_fmt(s_type_table, row, 0, "%d %s", t, names[t]);
+        lv_table_set_cell_value_fmt(s_type_table, row, 1, "%lu", (unsigned long)sdr);
+        lv_table_set_cell_value_fmt(s_type_table, row, 2, "%lu", (unsigned long)net);
+        s_type_used[row++] = ais_msg_type_used(t);
+    }
+    lv_table_set_row_count(s_type_table, row);
+}
+
+// Types the display doesn't use, muted (after the header row's styling).
+static void type_table_draw_cb(lv_event_t *e)
+{
+    lv_draw_task_t *t = lv_event_get_draw_task(e);
+    lv_draw_dsc_base_t *base = lv_draw_task_get_draw_dsc(t);
+    if (base->part != LV_PART_ITEMS || base->id1 == 0 || base->id1 >= 29 || s_type_used[base->id1]) return;
+    lv_draw_label_dsc_t *label = lv_draw_task_get_label_dsc(t);
+    if (label) label->color = UI_COLOR_MUTED;
 }
 
 static void rx_timer_cb(lv_timer_t *t)
@@ -202,6 +235,18 @@ static void build_rx(lv_obj_t *tab)
     style_table(s_rx_table);
 
     s_rx_vessels = text(tab, "", UI_COLOR_MUTED);
+
+    // Message types, below (the tab scrolls when there are many).
+    s_type_table = lv_table_create(tab);
+    lv_table_set_column_count(s_type_table, 3);
+    lv_table_set_column_width(s_type_table, 0, 210);
+    lv_table_set_column_width(s_type_table, 1, 130);
+    lv_table_set_column_width(s_type_table, 2, 130);
+    lv_table_set_cell_value(s_type_table, 0, 0, "Message types");
+    lv_table_set_cell_value(s_type_table, 0, 1, "SDR");
+    lv_table_set_cell_value(s_type_table, 0, 2, "Network");
+    style_table(s_type_table);
+    lv_obj_add_event_cb(s_type_table, type_table_draw_cb, LV_EVENT_DRAW_TASK_ADDED, NULL);
 }
 
 // ---------------------------------------------------------------------------
