@@ -153,6 +153,12 @@ static void set_weather(int scenario)
         b->dom_period_s = (buoy_val_t){true, 9, now - 1200};
         b->wave_dir.ok = false;
         s_wx.obs.cloud = CLOUD_CLEAR;
+    } else if (scenario == 4) { // wind and waves from nearly the same way: the arrows overlap
+        c->wind_avg10_mph = 14, c->gust10_mph = 26, c->wind_dir_avg10 = 300;
+        b->wave_ft = (buoy_val_t){true, 2.3f, now - 1200};
+        b->wave_dir = (buoy_val_t){true, 290, now - 1200};
+        b->dom_period_s = (buoy_val_t){true, 8, now - 1200};
+        s_wx.obs.cloud = CLOUD_CLEAR;
     } else { // calm, waves from the south (behind the tide bubble)
         c->wind_avg10_mph = 0.4f, c->gust10_mph = 2, c->wind_dir_avg10 = 200;
         b->wave_ft = (buoy_val_t){true, 0.7f, now - 1200};
@@ -624,5 +630,8 @@ int main(int argc, char **argv)
     set_weather(3);
     run_ms(1100);
     snap("map_weather_no_wave_dir");
+    set_weather(4);
+    run_ms(1100);
+    snap("map_weather_overlap");
     return 0;
 }

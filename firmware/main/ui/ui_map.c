@@ -49,14 +49,13 @@
 #define WIND_STALE_S    3600    // the wind arrow goes after an hour without a reading
 #define WAVE_STALE_S    (3 * 3600)
 #define GUST_SHOW_MPH   10      // show the gust when it's this far above the average
-#define WIND_TAIL_R     356     // px from the centre: the wind arrow, just inside the bubbles...
+#define WIND_TAIL_R     356     // px from the centre: the wind and wave arrows, just inside the bubbles
 #define WIND_HEAD_R     302
 #define WIND_TIP_R      264
 #define WIND_SHAFT_W    48
 #define WIND_HEAD_W     78
-#define WAVE_BASE_R     256     // ...and the wave triangle just inside that
-#define WAVE_TIP_R      176
-#define WAVE_BASE_W     112
+#define WX_OVERLAP_DEG  16      // wind and wave arrows this close in direction share one label
+#define WAVE_TEXT_COLOR lv_color_hex(0x9AD4FF)  // wave figures in a shared label: a lighter blue, to read on the arrows
 #define WAVE_ICON_PX    26      // the wave icon in the tide bubble (buoy without wave direction)
 
 // Wi-Fi icon before the time: signal bars online, struck through offline,
@@ -329,23 +328,27 @@ static void fill_tri(lv_layer_t *layer, lv_point_precise_t a, lv_point_precise_t
     lv_draw_triangle(layer, &d);
 }
 
+// A dark rim, then the coloured edge on it: clear on light water and land alike.
 static void outline(lv_layer_t *layer, const lv_point_precise_t *pts, int n, lv_color_t color)
 {
     lv_draw_line_dsc_t d;
     lv_draw_line_dsc_init(&d);
-    d.color = color;
-    d.width = 2;
-    d.opa = LV_OPA_80;
     d.round_start = d.round_end = 1;
-    for (int i = 0; i < n; i++) {
-        d.p1 = pts[i];
-        d.p2 = pts[(i + 1) % n];
-        lv_draw_line(layer, &d);
+    for (int pass = 0; pass < 2; pass++) {
+        d.color = pass ? color : lv_color_black();
+        d.width = pass ? 2 : 6;
+        d.opa = pass ? LV_OPA_90 : LV_OPA_60;
+        for (int i = 0; i < n; i++) {
+            d.p1 = pts[i];
+            d.p2 = pts[(i + 1) % n];
+            lv_draw_line(layer, &d);
+        }
     }
 }
 
 // Text centred on a point, upright, with a dark shadow so it reads on the colour.
-static void text_at(lv_layer_t *layer, const char *text, const lv_font_t *font, lv_point_precise_t c)
+static void text_at_color(lv_layer_t *layer, const char *text, const lv_font_t *font, lv_point_precise_t c,
+                          lv_color_t color)
 {
     lv_point_t size;
     lv_text_get_size(&size, text, font, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
@@ -357,34 +360,15 @@ static void text_at(lv_layer_t *layer, const char *text, const lv_font_t *font, 
     int32_t x = (int32_t)lroundf(c.x) - size.x / 2, y = (int32_t)lroundf(c.y) - size.y / 2;
     for (int i = 0; i < 2; i++) {
         lv_area_t a = {x + (i ? 0 : 1), y + (i ? 0 : 1), x + size.x + (i ? 0 : 1), y + size.y + (i ? 0 : 1)};
-        d.color = i ? lv_color_white() : lv_color_black();
+        d.color = i ? color : lv_color_black();
         d.opa = i ? LV_OPA_COVER : LV_OPA_70;
         lv_draw_label(layer, &d, &a);
     }
 }
 
-static void draw_wind(lv_layer_t *layer)
+// An arrow pointing in from the rim along bearing b, translucent, outlined.
+static void draw_arrow(lv_layer_t *layer, float b, lv_color_t color, lv_opa_t opa)
 {
-    if (!s_wx.wind_on) return;
-    float b = s_wx.wind_dir;
-    char speed[8], gust[8] = "";
-    snprintf(speed, sizeof(speed), "%.0f", s_wx.wind_mph);
-    if (s_wx.gust_mph - s_wx.wind_mph >= GUST_SHOW_MPH) snprintf(gust, sizeof(gust), "G%.0f", s_wx.gust_mph);
-    if (s_wx.wind_mph < 1) { // calm: a small circle where the arrow would be
-        lv_draw_arc_dsc_t d;
-        lv_draw_arc_dsc_init(&d);
-        lv_point_precise_t c = at_bearing(b, (WIND_TAIL_R + WIND_HEAD_R) / 2.0f);
-        d.center = (lv_point_t){(int32_t)c.x, (int32_t)c.y};
-        d.radius = 20;
-        d.width = 20;
-        d.start_angle = 0;
-        d.end_angle = 360;
-        d.color = WIND_COLOR;
-        d.opa = LV_OPA_50;
-        lv_draw_arc(layer, &d);
-        text_at(layer, "0", &lv_font_montserrat_20, c);
-        return;
-    }
     lv_point_precise_t tail = at_bearing(b, WIND_TAIL_R), head = at_bearing(b, WIND_HEAD_R), tip = at_bearing(b, WIND_TIP_R);
     lv_point_precise_t pts[7] = {
         offset(tail, b, -WIND_SHAFT_W / 2), offset(head, b, -WIND_SHAFT_W / 2), offset(head, b, -WIND_HEAD_W / 2), tip,
@@ -395,46 +379,131 @@ static void draw_wind(lv_layer_t *layer)
     lv_draw_line_dsc_t shaft;
     lv_draw_line_dsc_init(&shaft);
     shaft.p1 = tail;
-    shaft.p2 = at_bearing(b, WIND_HEAD_R);
+    shaft.p2 = head;
     shaft.width = WIND_SHAFT_W;
-    shaft.color = WIND_COLOR;
-    shaft.opa = LV_OPA_50;
+    shaft.color = color;
+    shaft.opa = opa;
     lv_draw_line(layer, &shaft);
-    fill_tri(layer, pts[2], pts[3], pts[4], WIND_COLOR, LV_OPA_50); // the head
-    outline(layer, pts, 7, WIND_COLOR);
-    lv_point_precise_t mid = at_bearing(b, (WIND_TAIL_R + WIND_HEAD_R) / 2.0f + 2);
-    if (gust[0]) {
-        text_at(layer, speed, &lv_font_montserrat_20, (lv_point_precise_t){mid.x, mid.y - 9});
-        text_at(layer, gust, &lv_font_montserrat_14, (lv_point_precise_t){mid.x, mid.y + 11});
-    } else {
-        text_at(layer, speed, &lv_font_montserrat_24, mid);
+    fill_tri(layer, pts[2], pts[3], pts[4], color, opa); // the head
+    outline(layer, pts, 7, color);
+}
+
+// Where an arrow's label goes: on its shaft.
+static lv_point_precise_t arrow_label_at(float b)
+{
+    return at_bearing(b, (WIND_TAIL_R + WIND_HEAD_R) / 2.0f + 2);
+}
+
+typedef struct {
+    char text[12];
+    const lv_font_t *font;
+    lv_color_t color;
+} label_line_t;
+
+// Lines centred, one under the other, on c.
+static void draw_label_lines(lv_layer_t *layer, const label_line_t *l, int n, lv_point_precise_t c)
+{
+    float total = 0;
+    for (int i = 0; i < n; i++) total += lv_font_get_line_height(l[i].font) - 2;
+    float y = c.y - total / 2;
+    for (int i = 0; i < n; i++) {
+        float h = lv_font_get_line_height(l[i].font) - 2;
+        text_at_color(layer, l[i].text, l[i].font, (lv_point_precise_t){c.x, y + h / 2}, l[i].color);
+        y += h;
     }
 }
 
-static void draw_wave(lv_layer_t *layer)
+// The wind's figures: the speed (bigger on its own), and any gust.
+static int wind_lines(label_line_t *l)
 {
-    if (!s_wx.wave_on) return;
-    float b = s_wx.wave_dir;
-    lv_point_precise_t base = at_bearing(b, WAVE_BASE_R), tip = at_bearing(b, WAVE_TIP_R);
-    lv_point_precise_t pts[3] = {offset(base, b, -WAVE_BASE_W / 2), tip, offset(base, b, WAVE_BASE_W / 2)};
-    fill_tri(layer, pts[0], pts[1], pts[2], WAVE_COLOR, LV_OPA_40);
-    outline(layer, pts, 3, WAVE_COLOR);
-    char h[12], t[8] = "";
-    snprintf(h, sizeof(h), "%.1f ft", s_wx.wave_ft);
-    if (s_wx.wave_s > 0) snprintf(t, sizeof(t), "%.0f s", s_wx.wave_s);
-    lv_point_precise_t c = at_bearing(b, WAVE_BASE_R - 26);
-    text_at(layer, h, &lv_font_montserrat_16, (lv_point_precise_t){c.x, c.y - (t[0] ? 8 : 0)});
-    if (t[0]) text_at(layer, t, &lv_font_montserrat_14, (lv_point_precise_t){c.x, c.y + 10});
+    int n = 0;
+    bool gust = s_wx.wind_mph >= 1 && s_wx.gust_mph - s_wx.wind_mph >= GUST_SHOW_MPH;
+    l[n] = (label_line_t){.font = gust ? &lv_font_montserrat_20 : &lv_font_montserrat_24, .color = lv_color_white()};
+    snprintf(l[n++].text, sizeof(l->text), "%.0f", s_wx.wind_mph < 1 ? 0 : s_wx.wind_mph);
+    if (gust) {
+        l[n] = (label_line_t){.font = &lv_font_montserrat_14, .color = lv_color_white()};
+        snprintf(l[n++].text, sizeof(l->text), "G%.0f", s_wx.gust_mph);
+    }
+    return n;
 }
 
-// The icon (and "!") in the room pill_set_icon_room() left after the time.
+// The waves' figures: height, and period if known.
+static int wave_lines(label_line_t *l, lv_color_t color)
+{
+    int n = 0;
+    l[n] = (label_line_t){.font = &lv_font_montserrat_16, .color = color};
+    snprintf(l[n++].text, sizeof(l->text), "%.1f ft", s_wx.wave_ft);
+    if (s_wx.wave_s > 0) {
+        l[n] = (label_line_t){.font = &lv_font_montserrat_14, .color = color};
+        snprintf(l[n++].text, sizeof(l->text), "%.0f s", s_wx.wave_s);
+    }
+    return n;
+}
+
+// Wind and wave arrows, the same shape and at the same distance from the
+// edge. Translucent, so they can overlap; their labels go on top of both, and
+// when the arrows overlap the two labels become one: wind, then waves in blue.
+static void draw_wind_and_waves(lv_layer_t *layer)
+{
+    bool wind = s_wx.wind_on, wave = s_wx.wave_on;
+    if (!wind && !wave) return;
+    bool calm = wind && s_wx.wind_mph < 1;
+    if (wave) draw_arrow(layer, s_wx.wave_dir, WAVE_COLOR, LV_OPA_40);
+    if (calm) { // a small circle where the arrow would be
+        lv_point_precise_t c = arrow_label_at(s_wx.wind_dir);
+        lv_draw_arc_dsc_t d;
+        lv_draw_arc_dsc_init(&d);
+        d.center = (lv_point_t){(int32_t)c.x, (int32_t)c.y};
+        d.start_angle = 0;
+        d.end_angle = 360;
+        d.radius = 23; // the dark rim
+        d.width = 26;
+        d.color = lv_color_black();
+        d.opa = LV_OPA_40;
+        lv_draw_arc(layer, &d);
+        d.radius = 20;
+        d.width = 20;
+        d.color = WIND_COLOR;
+        d.opa = LV_OPA_50;
+        lv_draw_arc(layer, &d);
+    } else if (wind) {
+        draw_arrow(layer, s_wx.wind_dir, WIND_COLOR, LV_OPA_50);
+    }
+
+    label_line_t l[4];
+    int n = 0;
+    bool shared = wind && wave && fabsf(fmodf(s_wx.wind_dir - s_wx.wave_dir + 540, 360) - 180) < WX_OVERLAP_DEG;
+    if (shared) {
+        n = wind_lines(l);
+        n += wave_lines(l + n, WAVE_TEXT_COLOR);
+        // Between the two directions, so it sits on both.
+        float mid = s_wx.wave_dir + (fmodf(s_wx.wind_dir - s_wx.wave_dir + 540, 360) - 180) / 2;
+        draw_label_lines(layer, l, n, arrow_label_at(mid));
+        return;
+    }
+    if (wave) {
+        n = wave_lines(l, lv_color_white());
+        draw_label_lines(layer, l, n, arrow_label_at(s_wx.wave_dir));
+    }
+    if (wind) {
+        n = wind_lines(l);
+        draw_label_lines(layer, l, n, arrow_label_at(s_wx.wind_dir));
+    }
+}
+
+// The icon (and "!") in the room pill_set_icon_room() left after the time:
+// midway between the time and the end of the bubble.
 static void draw_time_icon(lv_layer_t *layer)
 {
     const pill_t *p = &s_pills[PILL_TIME];
     if (!s_wx.icon_on || p->hidden) return;
     float rm = pill_outer_r() - p->width / 2.0f;
-    float end = p->center + p->span / 2 - PILL_PAD_DEG; // where the room ends, in screen degrees
-    float icon_mid = end - px_to_deg((s_wx.alert ? WX_ALERT_PX : 0) + WX_ICON_PX / 2.0f, rm);
+    float edge = p->center + p->span / 2 + px_to_deg(p->width / 2.0f, rm); // the bubble's end (its round cap)
+    float text_end = p->center + p->span / 2 - PILL_PAD_DEG - p->icon_deg;
+    float mid = (text_end + edge) / 2;
+    float group = px_to_deg(WX_ICON_PX + (s_wx.alert ? WX_ALERT_PX : 0), rm);
+    float icon_mid = mid - group / 2 + px_to_deg(WX_ICON_PX / 2.0f, rm);
+    float end = mid + group / 2; // where the "!" ends
     float a = icon_mid * (float)M_PI / 180;
     int32_t cx = (int32_t)lroundf(UI_CENTER + rm * cosf(a)), cy = (int32_t)lroundf(UI_CENTER + rm * sinf(a));
     lv_draw_image_dsc_t d;
@@ -470,7 +539,9 @@ static void draw_net_icon(lv_layer_t *layer)
     if (s_net.kind == NET_ICON_NONE || p->hidden || !p->lead_deg) return;
     float rm = pill_outer_r() - p->width / 2.0f, start, end;
     net_icon_room(&start, &end);
-    float a = (end - px_to_deg(NET_ICON_GAP_PX + NET_ICON_PX / 2.0f, rm)) * (float)M_PI / 180;
+    // Midway between the bubble's end (its round cap) and the start of the time.
+    float edge = start - PILL_PAD_DEG - px_to_deg(p->width / 2.0f, rm);
+    float a = ((edge + end) / 2) * (float)M_PI / 180;
     int32_t cx = (int32_t)lroundf(UI_CENTER + rm * cosf(a)), cy = (int32_t)lroundf(UI_CENTER + rm * sinf(a));
 
     // A quarter-circle fan opening upwards from a point near the bottom.
@@ -1386,8 +1457,7 @@ static void overlay_draw_cb(lv_event_t *e)
     qsort(s_placed, n, sizeof(s_placed[0]), placed_cmp);
     for (int i = 0; i < n; i++) draw_vessel(layer, &s_placed[i], now);
     draw_labels(layer, n);
-    draw_wave(layer);
-    draw_wind(layer);
+    draw_wind_and_waves(layer);
     draw_pills(layer);
     draw_time_icon(layer);
     draw_net_icon(layer);
