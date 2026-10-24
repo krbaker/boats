@@ -16,6 +16,9 @@ typedef enum {
     AIS_CLASS_UNKNOWN = 0,
     AIS_CLASS_A,
     AIS_CLASS_B,
+    AIS_CLASS_ATON,     // aid to navigation: buoy, beacon, light (type 21)
+    AIS_CLASS_SAR,      // search-and-rescue aircraft (type 9)
+    AIS_CLASS_BASE,     // shore base station (type 4): not a target, only its clock is used
 } ais_class_t;
 
 // Bits in ais_report_t.fields marking which values are present.
@@ -29,6 +32,19 @@ typedef enum {
 #define AIS_F_SHIPTYPE  (1u << 7)
 #define AIS_F_DIM       (1u << 8)
 #define AIS_F_DEST      (1u << 9)
+#define AIS_F_ATON      (1u << 10)  // aton_type, aton_flags
+#define AIS_F_ALT       (1u << 11)  // alt_m
+#define AIS_F_UTC       (1u << 12)  // utc
+
+// ais_report_t.aton_flags
+#define AIS_ATON_VIRTUAL    0x01    // no physical mark there: only the AIS signal
+#define AIS_ATON_OFF_POS    0x02    // a floating mark that has drifted off its charted position
+
+// Aid-to-navigation types (ITU-R M.1371 table 74), ais_report_t.aton_type.
+// 9-19 are fixed beacons, 20-30 floating buoys, of the same kinds in order.
+#define AIS_ATON_BEACON_N       9
+#define AIS_ATON_BUOY_N         20
+#define AIS_ATON_LIGHT_VESSEL   31
 
 typedef struct {
     uint32_t mmsi;
@@ -47,6 +63,13 @@ typedef struct {
     char name[21];
     char callsign[8];
     char destination[21];
+    uint8_t aton_type;      // AIS_ATON_*: 0-31
+    uint8_t aton_flags;
+    uint16_t alt_m;         // SAR aircraft altitude, metres (4094 = that or higher)
+    struct {
+        uint16_t year;
+        uint8_t month, day, hour, minute, second;
+    } utc;                  // a base station's clock
 } ais_report_t;
 
 typedef enum {
@@ -63,6 +86,7 @@ typedef struct {
     uint32_t ignored;
     uint32_t bad_checksum;
     uint32_t unsupported;
+    uint32_t by_type[28];   // complete messages by type, 1-27 (decoded or not); [0]: too short to tell
 } ais_stats_t;
 
 #define AIS_MAX_FRAGMENTS   9
@@ -101,6 +125,9 @@ ais_result_t ais_decode_payload(const char *payload, int fill_bits, ais_report_t
 const char *ais_ship_type_str(uint8_t type);
 const char *ais_nav_status_str(uint8_t status);
 const char *ais_class_str(ais_class_t cls);
+const char *ais_aton_type_str(uint8_t type);
+const char *ais_msg_type_str(uint8_t type);   // "Position report (Class A)", ...
+bool ais_msg_type_used(uint8_t type);         // one ais_decode_payload() decodes
 
 #ifdef __cplusplus
 }

@@ -39,6 +39,8 @@ for mode in ["none", "tag", "iso", "epoch", "suffix"]:
     for row in out.stdout.splitlines():
         f = row.split("\t")
         mmsi, mtype = int(f[0]), int(f[1])
+        if mtype == 4:  # the base station in the noise: not a vessel
+            continue
         v = by_mmsi.get(mmsi)
         check(v is not None, f"[{mode}] unknown mmsi {mmsi}")
         if not v:

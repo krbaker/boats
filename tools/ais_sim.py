@@ -123,8 +123,10 @@ def msg_static_b(v, part):
 
 
 def msg_base_station():
-    # Type 4: valid AIS the display should ignore.
-    b = Bits().u(4, 6).u(0, 2).u(3669702, 30).u(2026, 14).u(10, 4).u(3, 5).u(12, 5).u(0, 6).u(0, 6)
+    # Type 4: not a target; the display sets its clock from it when there's no internet.
+    t = time.gmtime()
+    b = Bits().u(4, 6).u(0, 2).u(3669702, 30).u(t.tm_year, 14).u(t.tm_mon, 4).u(t.tm_mday, 5).u(t.tm_hour, 5)
+    b.u(t.tm_min, 6).u(min(t.tm_sec, 59), 6)
     b.u(1, 1).s(0, 28).s(0, 27).u(7, 4).u(0, 10).u(0, 1).u(0, 19)
     return b.armour()
 

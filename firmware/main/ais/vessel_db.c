@@ -9,6 +9,7 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "map_store.h"
+#include "tide.h"
 #include "vessel_cache.h"
 
 static const char *TAG = "vessels";
@@ -164,6 +165,12 @@ static time_t wall_now(void)
 void vessel_db_update(const ais_report_t *r, rx_source_t src)
 {
     if (r->mmsi == 0) return;
+    if (r->cls == AIS_CLASS_BASE) { // not a target: its clock, for when the internet's isn't there
+        if (r->fields & AIS_F_UTC) {
+            clock_set_from_ais(r->utc.year, r->utc.month, r->utc.day, r->utc.hour, r->utc.minute, r->utc.second);
+        }
+        return;
+    }
     xSemaphoreTake(s_lock, portMAX_DELAY);
     vessel_t *v = find(r->mmsi);
     if (!v) {
@@ -192,6 +199,8 @@ void vessel_db_update(const ais_report_t *r, rx_source_t src)
     if (r->fields & AIS_F_NAME) strcpy(v->name, r->name);
     if (r->fields & AIS_F_CALLSIGN) strcpy(v->callsign, r->callsign);
     if (r->fields & AIS_F_DEST) strcpy(v->destination, r->destination);
+    if (r->fields & AIS_F_ATON) { v->aton_type = r->aton_type; v->aton_flags = r->aton_flags; }
+    if (r->fields & AIS_F_ALT) v->alt_m = r->alt_m;
 
     // Position reports that omit heading/COG mean "not available now".
     if (r->fields & AIS_F_POS) {
@@ -205,7 +214,7 @@ void vessel_db_update(const ais_report_t *r, rx_source_t src)
     time_t wall = v->last_heard_wall;
     s_generation++;
     xSemaphoreGive(s_lock);
-    update_cache(r, wall);
+    if (r->cls != AIS_CLASS_ATON) update_cache(r, wall); // marks send their name every few minutes anyway
 }
 
 void vessel_db_expire(void)
@@ -246,7 +255,11 @@ bool vessel_db_get(uint32_t mmsi, vessel_t *out)
 
 int vessel_db_count(void)
 {
-    return s_count;
+    int n = 0;
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    for (int i = 0; i < s_count; i++) n += s_vessels[i].cls != AIS_CLASS_ATON;
+    xSemaphoreGive(s_lock);
+    return n;
 }
 
 void vessel_db_source_counts(int *net_only, int *sdr_only, int *both)

@@ -792,18 +792,24 @@ static void draw_line(lv_layer_t *layer, lv_point_precise_t a, lv_point_precise_
 }
 
 // LVGL's software renderer only dashes horizontal / vertical lines, so dash by hand.
-static void draw_dashed_line(lv_layer_t *layer, lv_point_precise_t a, lv_point_precise_t b, lv_color_t color, int w,
-                             lv_opa_t opa)
+static void draw_dashes(lv_layer_t *layer, lv_point_precise_t a, lv_point_precise_t b, lv_color_t color, int w,
+                        lv_opa_t opa, float dash, float gap)
 {
     float dx = b.x - a.x, dy = b.y - a.y, len = hypotf(dx, dy);
     if (len < 1) return;
     dx /= len;
     dy /= len;
-    for (float t = 0; t < len; t += DASH_PX + DASH_GAP_PX) {
-        float e = fminf(t + DASH_PX, len);
+    for (float t = 0; t < len; t += dash + gap) {
+        float e = fminf(t + dash, len);
         draw_line(layer, (lv_point_precise_t){a.x + dx * t, a.y + dy * t}, (lv_point_precise_t){a.x + dx * e, a.y + dy * e},
                   color, w, opa);
     }
+}
+
+static void draw_dashed_line(lv_layer_t *layer, lv_point_precise_t a, lv_point_precise_t b, lv_color_t color, int w,
+                             lv_opa_t opa)
+{
+    draw_dashes(layer, a, b, color, w, opa, DASH_PX, DASH_GAP_PX);
 }
 
 static void draw_triangle(lv_layer_t *layer, lv_point_precise_t a, lv_point_precise_t b, lv_point_precise_t c,
@@ -822,6 +828,7 @@ static void draw_triangle(lv_layer_t *layer, lv_point_precise_t a, lv_point_prec
 static bool vessel_passes_filter(const vessel_t *v)
 {
     const vessel_filter_t *f = &s_filter;
+    if (v->cls == AIS_CLASS_ATON || v->cls == AIS_CLASS_SAR) return true; // the filters are for vessels
     if (f->min_len_ft) {
         if ((v->fields & AIS_F_DIM) && v->dim_a + v->dim_b > 0) {
             if ((v->dim_a + v->dim_b) * 3.28084f < f->min_len_ft) return false;
@@ -850,6 +857,7 @@ static bool vessel_stale(const vessel_t *v, int64_t now_us)
 static float vessel_priority(const vessel_t *v, int64_t now_us)
 {
     float p;
+    if (v->cls == AIS_CLASS_ATON) return -200000; // marks never take label space from vessels
     if (s_filter.order == ORDER_SPEED) p = (v->fields & AIS_F_SOG) ? v->sog_kn : -1;
     else p = ((v->fields & AIS_F_DIM) && v->dim_a + v->dim_b) ? v->dim_a + v->dim_b : -1;
     if (vessel_stale(v, now_us)) p -= 100000;
@@ -860,6 +868,9 @@ static float vessel_priority(const vessel_t *v, int64_t now_us)
 // under way on top, so a moving vessel is never hidden under a stationary one.
 static float vessel_layer(const vessel_t *v, float prio, int64_t now_us)
 {
+    // Marks at the very bottom, aircraft on top of everything.
+    if (v->cls == AIS_CLASS_ATON) return -1000000.0f + prio;
+    if (v->cls == AIS_CLASS_SAR) return 3000000.0f + prio;
     int tier = vessel_stale(v, now_us) ? 0 : ((v->fields & AIS_F_SOG) && v->sog_kn >= HEADING_MIN_KN) ? 2 : 1;
     return tier * 1000000.0f + prio;
 }
@@ -896,9 +907,27 @@ static void draw_label(lv_layer_t *layer, const char *text, const lv_area_t *bg,
     lv_draw_label(layer, &l, &a);
 }
 
-// Label text for a vessel per the label options; empty if none.
+// Label text for a vessel per the label options; empty if none. Marks only
+// ever show their name; aircraft always show their altitude.
 static void label_text(const vessel_t *v, char *text, size_t cap)
 {
+    if (v->cls == AIS_CLASS_ATON) {
+        strlcpy(text, s_filter.label_name ? v->name : "", cap);
+        return;
+    }
+    if (v->cls == AIS_CLASS_SAR) {
+        char name[24] = "", line2[32] = "";
+        if (s_filter.label_name) {
+            if (v->name[0]) strlcpy(name, v->name, sizeof(name));
+            else snprintf(name, sizeof(name), "SAR %lu", (unsigned long)v->mmsi);
+        }
+        int n = 0;
+        if (v->fields & AIS_F_ALT) n = snprintf(line2, sizeof(line2), "%.0f ft", v->alt_m * 3.28084f);
+        if (s_filter.label_speed && (v->fields & AIS_F_SOG))
+            snprintf(line2 + n, sizeof(line2) - n, "%s%.0f kn", n ? ", " : "", v->sog_kn);
+        snprintf(text, cap, "%s%s%s", name, name[0] && line2[0] ? "\n" : "", line2);
+        return;
+    }
     char name[24] = "";
     if (s_filter.label_name) {
         if (v->name[0]) strlcpy(name, v->name, sizeof(name));
@@ -908,6 +937,304 @@ static void label_text(const vessel_t *v, char *text, size_t cap)
     if (name[0] && speed) snprintf(text, cap, "%s\n%.1f kn", name, v->sog_kn);
     else if (speed) snprintf(text, cap, "%.1f kn", v->sog_kn);
     else strlcpy(text, name, cap);
+}
+
+// Where a target was drawn: for its label, and to find it by touch.
+static void place(placed_t *pl, float x, float y, float extent, lv_opa_t opa)
+{
+    pl->shown = true;
+    pl->x = x;
+    pl->y = y;
+    pl->extent = extent;
+    pl->opa = opa;
+
+    hit_t *h = &s_hits[s_nhits++];
+    h->mmsi = pl->v->mmsi;
+    h->x = (int16_t)x;
+    h->y = (int16_t)y;
+    h->r = (int16_t)fmaxf(extent, HIT_RADIUS_MIN);
+}
+
+// ---------------------------------------------------------------------------
+// Aids to navigation and SAR aircraft
+// ---------------------------------------------------------------------------
+
+// A small icon made of convex shapes. Each is drawn in three passes over the
+// whole icon (white halo, dark outline, fill), so the fills cover the outlines
+// where shapes meet and the icon reads as one piece with one rim. An overlay
+// (a band of colour) is only filled, over what's under it.
+typedef enum { PART_POLY, PART_RECT, PART_CIRCLE } part_kind_t;
+
+typedef struct {
+    part_kind_t kind;       // rectangles and circles are drawn as such (never rotated); p[] outlines them too
+    lv_point_precise_t p[8];
+    int n;
+    float x1, y1, x2, y2;   // PART_RECT / PART_CIRCLE bounds
+    lv_color_t color;
+    bool overlay;
+} part_t;
+
+#define MAX_PARTS 6
+
+static void part_rect(part_t *o, float x1, float y1, float x2, float y2, lv_color_t c, bool overlay)
+{
+    *o = (part_t){.kind = PART_RECT, .p = {{x1, y1}, {x2, y1}, {x2, y2}, {x1, y2}}, .n = 4,
+                  .x1 = x1, .y1 = y1, .x2 = x2, .y2 = y2, .color = c, .overlay = overlay};
+}
+
+// Apex up (or down) at y_apex, base at y_base, w wide there.
+static void part_cone(part_t *o, float y_apex, float y_base, float w, lv_color_t c)
+{
+    *o = (part_t){.p = {{0, y_apex}, {w / 2, y_base}, {-w / 2, y_base}}, .n = 3, .color = c};
+}
+
+static void part_circle(part_t *o, float cx, float cy, float r, lv_color_t c, bool overlay)
+{
+    *o = (part_t){.kind = PART_CIRCLE, .n = 8, .x1 = cx - r, .y1 = cy - r, .x2 = cx + r, .y2 = cy + r, .color = c,
+                  .overlay = overlay};
+    for (int i = 0; i < 8; i++) {
+        float a = i * (float)M_PI / 4 + (float)M_PI / 8;
+        o->p[i] = (lv_point_precise_t){cx + r * cosf(a), cy + r * sinf(a)};
+    }
+}
+
+// A bar from (x1,y1) to (x2,y2), w wide (the arms of the special mark's X).
+static void part_bar(part_t *o, float x1, float y1, float x2, float y2, float w, lv_color_t c)
+{
+    float dx = x2 - x1, dy = y2 - y1, l = hypotf(dx, dy), nx = -dy / l * w / 2, ny = dx / l * w / 2;
+    *o = (part_t){.p = {{x1 + nx, y1 + ny}, {x2 + nx, y2 + ny}, {x2 - nx, y2 - ny}, {x1 - nx, y1 - ny}}, .n = 4, .color = c};
+}
+
+// Move every part, and turn the polygons: (s, c) is the sine and cosine of the
+// direction (rectangles and circles only ever move).
+static void parts_place(part_t *parts, int n, float s, float c, float x, float y)
+{
+    for (int i = 0; i < n; i++) {
+        part_t *q = &parts[i];
+        for (int k = 0; k < q->n; k++) q->p[k] = rot(q->p[k].x, q->p[k].y, s, c, x, y);
+        q->x1 += x;
+        q->x2 += x;
+        q->y1 += y;
+        q->y2 += y;
+    }
+}
+
+// A rectangle or circle part, grown by `grow` px all round.
+static void draw_box(lv_layer_t *layer, const part_t *q, float grow, lv_color_t color, lv_opa_t opa)
+{
+    lv_draw_rect_dsc_t r;
+    lv_draw_rect_dsc_init(&r);
+    r.bg_color = color;
+    r.bg_opa = opa;
+    r.radius = q->kind == PART_CIRCLE ? LV_RADIUS_CIRCLE : (int32_t)grow;
+    lv_area_t a = {(int32_t)lroundf(q->x1 - grow), (int32_t)lroundf(q->y1 - grow), (int32_t)lroundf(q->x2 + grow) - 1,
+                   (int32_t)lroundf(q->y2 + grow) - 1};
+    lv_draw_rect(layer, &r, &a);
+}
+
+#define PART_OUTLINE_PX 1.0f    // the dark rim outside each part...
+#define PART_HALO_PX    3.0f    // ...and the white one outside that
+
+// Virtual marks (no physical mark there) are only a dashed outline in their colour.
+static void draw_parts(lv_layer_t *layer, const part_t *parts, int n, bool outline_only, lv_opa_t opa)
+{
+    lv_color_t halo = lv_color_white(), dark = lv_color_hex(0x101010);
+    lv_opa_t halo_opa = (lv_opa_t)(opa * 85 / 100);
+    if (outline_only) {
+        for (int pass = 0; pass < 2; pass++) {
+            for (int i = 0; i < n; i++) {
+                const part_t *q = &parts[i];
+                if (q->overlay) continue;
+                for (int k = 0; k < q->n; k++) {
+                    lv_point_precise_t a = q->p[k], b = q->p[(k + 1) % q->n];
+                    if (pass == 0) draw_dashes(layer, a, b, halo, 2 + 2 * HALO_PX, halo_opa, 3, 3);
+                    else draw_dashes(layer, a, b, q->color, 2, opa, 3, 3);
+                }
+            }
+        }
+        return;
+    }
+    for (int pass = 0; pass < 3; pass++) {
+        for (int i = 0; i < n; i++) {
+            const part_t *q = &parts[i];
+            if (q->overlay && pass < 2) continue;
+            lv_color_t c = pass == 0 ? halo : pass == 1 ? dark : q->color;
+            lv_opa_t o = pass == 0 ? halo_opa : opa;
+            float grow = pass == 0 ? PART_OUTLINE_PX + PART_HALO_PX : pass == 1 ? PART_OUTLINE_PX : 0;
+            if (q->kind != PART_POLY) {
+                draw_box(layer, q, grow, c, o);
+                continue;
+            }
+            if (pass < 2) {
+                for (int k = 0; k < q->n; k++) draw_line(layer, q->p[k], q->p[(k + 1) % q->n], c, (int)(2 * grow), o);
+            }
+            for (int k = 1; k + 1 < q->n; k++) draw_triangle(layer, q->p[0], q->p[k], q->p[k + 1], c, o);
+            // Paint over the seams where the fan's triangles meet.
+            for (int k = 2; k + 1 < q->n; k++) draw_line(layer, q->p[0], q->p[k], c, 1, o);
+        }
+    }
+}
+
+// Mark colours, IALA region B (the Americas): green to port, red to starboard
+// coming in from sea.
+#define MARK_GREEN      lv_color_hex(0x2E9E4F)
+#define MARK_RED        lv_color_hex(0xD8343A)
+#define MARK_YELLOW     lv_color_hex(0xF2C230)
+#define MARK_BLACK      lv_color_hex(0x1A1A1A)
+#define MARK_MAGENTA    lv_color_hex(0xC0289A)
+#define SAR_COLOR       lv_color_hex(0xFF8A1F)
+
+// The shapes of an aid to navigation of AIS type t, around its position (0, 0),
+// screen up. Buoys (20-30) look like the beacons of the same kind (9-19).
+// Returns how many; 0 for a light (drawn as a star instead).
+static int mark_parts(uint8_t t, part_t *o)
+{
+    const lv_color_t g = MARK_GREEN, r = MARK_RED, y = MARK_YELLOW, k = MARK_BLACK, w = lv_color_white();
+    uint8_t kind = t >= AIS_ATON_BUOY_N && t <= AIS_ATON_BUOY_N + 10 ? t - AIS_ATON_BUOY_N + AIS_ATON_BEACON_N : t;
+    switch (kind) {
+    case 9: // north cardinal: black over yellow, cones both up
+        part_rect(&o[0], -5, -6, 5, 6, k, false);
+        part_rect(&o[1], -5, 0, 5, 6, y, true);
+        part_cone(&o[2], -14, -9, 9, k);
+        part_cone(&o[3], -21, -16, 9, k);
+        return 4;
+    case 10: // east: black-yellow-black, cones base to base
+        part_rect(&o[0], -5, -6, 5, 6, k, false);
+        part_rect(&o[1], -5, -2, 5, 2, y, true);
+        part_cone(&o[2], -9, -14, 9, k);
+        part_cone(&o[3], -21, -16, 9, k);
+        return 4;
+    case 11: // south: yellow over black, cones both down
+        part_rect(&o[0], -5, -6, 5, 6, y, false);
+        part_rect(&o[1], -5, 0, 5, 6, k, true);
+        part_cone(&o[2], -9, -14, 9, k);
+        part_cone(&o[3], -16, -21, 9, k);
+        return 4;
+    case 12: // west: yellow-black-yellow, cones point to point
+        part_rect(&o[0], -5, -6, 5, 6, y, false);
+        part_rect(&o[1], -5, -2, 5, 2, k, true);
+        part_cone(&o[2], -14, -9, 9, k);
+        part_cone(&o[3], -16, -21, 9, k);
+        return 4;
+    case 13: // port hand: green can
+        part_rect(&o[0], -6, -6, 6, 6, g, false);
+        return 1;
+    case 14: // starboard hand: red nun
+        part_cone(&o[0], -8, 6, 14, r);
+        return 1;
+    case 15: // preferred channel, port hand shape: green can, red band
+        part_rect(&o[0], -6, -6, 6, 6, g, false);
+        part_rect(&o[1], -6, -2, 6, 2, r, true);
+        return 2;
+    case 16: { // preferred channel, starboard hand shape: red nun, green band
+        part_cone(&o[0], -8, 6, 14, r);
+        float w1 = 7 * (-1 + 8) / 14.0f, w2 = 7 * (3 + 8) / 14.0f; // the cone's half-width at y = -1 and 3
+        o[1] = (part_t){.p = {{-w1, -1}, {w1, -1}, {w2, 3}, {-w2, 3}}, .n = 4, .color = g, .overlay = true};
+        return 2;
+    }
+    case 17: // isolated danger: black, red band, two black balls
+        part_rect(&o[0], -5, -6, 5, 6, k, false);
+        part_rect(&o[1], -5, -2, 5, 2, r, true);
+        part_circle(&o[2], 0, -11, 3, k, false);
+        part_circle(&o[3], 0, -18.5f, 3, k, false);
+        return 4;
+    case 18: // safe water: red and white, a red ball
+        part_circle(&o[0], 0, 0, 7, r, false);
+        o[1] = (part_t){.n = 7, .color = w, .overlay = true};
+        for (int i = 0; i < 7; i++) {
+            float a = -(float)M_PI / 2 + i * (float)M_PI / 6;
+            o[1].p[i] = (lv_point_precise_t){7 * cosf(a), 7 * sinf(a)};
+        }
+        part_circle(&o[2], 0, -12, 3, r, false);
+        return 3;
+    case 19: // special: yellow, an X
+        part_rect(&o[0], -6, -6, 6, 6, y, false);
+        part_bar(&o[1], -4.5f, -18, 4.5f, -10, 2.5f, y);
+        part_bar(&o[2], 4.5f, -18, -4.5f, -10, 2.5f, y);
+        return 3;
+    case 2: // RACON: a magenta ring
+        part_circle(&o[0], 0, 0, 8, MARK_MAGENTA, false);
+        part_circle(&o[1], 0, 0, 4.5f, w, true);
+        return 2;
+    case 3: // fixed structure
+        part_rect(&o[0], -6, -6, 6, 6, k, false);
+        part_rect(&o[1], -2, -2, 2, 2, w, true);
+        return 2;
+    case 5: case 6: case 7: case 8: // lights
+        return 0;
+    default: // anything else, or unknown: the chart symbol for an AIS aid, a diamond with a dot
+        o[0] = (part_t){.p = {{0, -8}, {8, 0}, {0, 8}, {-8, 0}}, .n = 4, .color = MARK_MAGENTA};
+        part_circle(&o[1], 0, 0, 2.2f, w, true);
+        return 2;
+    }
+}
+
+// A light: a magenta star of eight rays.
+static void draw_light(lv_layer_t *layer, float x, float y, bool virt, lv_opa_t opa)
+{
+    lv_opa_t halo_opa = (lv_opa_t)(opa * 85 / 100);
+    for (int pass = 0; pass < 2; pass++) {
+        for (int i = 0; i < 8; i++) {
+            float a = i * (float)M_PI / 4, l = i & 1 ? 6.5f : 9.5f;
+            lv_point_precise_t c = {x, y}, e = {x + l * cosf(a), y + l * sinf(a)};
+            if (pass == 0) draw_line(layer, c, e, lv_color_white(), 2 + 2 * HALO_PX, halo_opa);
+            else if (virt) draw_dashes(layer, c, e, MARK_MAGENTA, 2, opa, 3, 2);
+            else draw_line(layer, c, e, MARK_MAGENTA, 2, opa);
+        }
+    }
+}
+
+static void draw_aton(lv_layer_t *layer, placed_t *pl, float x, float y, lv_opa_t opa)
+{
+    const vessel_t *v = pl->v;
+    bool virt = v->aton_flags & AIS_ATON_VIRTUAL;
+    part_t parts[MAX_PARTS];
+    int n = mark_parts(v->aton_type, parts);
+    if (n) {
+        parts_place(parts, n, 0, 1, x, y);
+        draw_parts(layer, parts, n, virt, opa);
+    } else {
+        draw_light(layer, x, y, virt, opa);
+    }
+    float extent = 10;
+    if (v->aton_flags & AIS_ATON_OFF_POS) { // drifted off its station: a red ring
+        lv_draw_arc_dsc_t a;
+        lv_draw_arc_dsc_init(&a);
+        a.center = (lv_point_t){(int32_t)x, (int32_t)(y - 4)};
+        a.radius = 16;
+        a.width = 3;
+        a.start_angle = 0;
+        a.end_angle = 360;
+        a.color = MARK_RED;
+        a.opa = opa;
+        lv_draw_arc(layer, &a);
+        extent = 16;
+    }
+    place(pl, x, y, extent, opa);
+}
+
+// An aeroplane pointing along its course, with a course vector like a vessel's.
+static void draw_aircraft(lv_layer_t *layer, placed_t *pl, float x, float y, lv_opa_t opa)
+{
+    const vessel_t *v = pl->v;
+    lv_color_t color = SAR_COLOR;
+    bool moving = (v->fields & AIS_F_SOG) && v->sog_kn >= HEADING_MIN_KN;
+    if ((v->fields & AIS_F_COG) && moving) {
+        float vlen = fminf(v->sog_kn * 1852.0f * VECTOR_MINUTES / 60.0f / s_view.m_per_px, 160);
+        float s = sinf(v->cog_deg * (float)M_PI / 180), c = cosf(v->cog_deg * (float)M_PI / 180);
+        lv_point_precise_t a = {x, y}, b = {x + s * vlen, y - c * vlen};
+        draw_dashed_line(layer, a, b, lv_color_white(), 2 + 2 * HALO_PX, (lv_opa_t)(opa * 85 / 100));
+        draw_dashed_line(layer, a, b, color, 2, opa);
+    }
+    part_t parts[3] = {
+        {.p = {{0, -14}, {2.5f, -10}, {2.5f, 10}, {-2.5f, 10}, {-2.5f, -10}}, .n = 5, .color = color}, // fuselage
+        {.p = {{-2, -4}, {2, -4}, {13, 1}, {13, 3.5f}, {-13, 3.5f}, {-13, 1}}, .n = 6, .color = color}, // wings
+        {.p = {{-1.5f, 6}, {1.5f, 6}, {6, 10}, {6, 12}, {-6, 12}, {-6, 10}}, .n = 6, .color = color},  // tailplane
+    };
+    float dir = (v->fields & AIS_F_COG) ? v->cog_deg : 0;
+    parts_place(parts, 3, sinf(dir * (float)M_PI / 180), cosf(dir * (float)M_PI / 180), x, y);
+    draw_parts(layer, parts, 3, false, opa);
+    place(pl, x, y, 14, opa);
 }
 
 static void draw_vessel(lv_layer_t *layer, placed_t *pl, int64_t now_us)
@@ -921,6 +1248,14 @@ static void draw_vessel(lv_layer_t *layer, placed_t *pl, int64_t now_us)
 
     bool stale = vessel_stale(v, now_us);
     lv_opa_t opa = stale ? LV_OPA_50 : LV_OPA_COVER;
+    if (v->cls == AIS_CLASS_ATON) {
+        draw_aton(layer, pl, x, y, opa);
+        return;
+    }
+    if (v->cls == AIS_CLASS_SAR) {
+        draw_aircraft(layer, pl, x, y, opa);
+        return;
+    }
     lv_color_t color = ui_ship_color(v->ship_type);
     lv_color_t outline = lv_color_hex(0x101010);
     // A light rim outside the dark outline: light-dark-colour reads against
@@ -1003,17 +1338,7 @@ static void draw_vessel(lv_layer_t *layer, placed_t *pl, int64_t now_us)
         extent = d / 2 + HALO_PX;
     }
 
-    pl->shown = true;
-    pl->x = x;
-    pl->y = y;
-    pl->extent = extent;
-    pl->opa = opa;
-
-    hit_t *h = &s_hits[s_nhits++];
-    h->mmsi = v->mmsi;
-    h->x = (int16_t)x;
-    h->y = (int16_t)y;
-    h->r = (int16_t)fmaxf(extent, HIT_RADIUS_MIN);
+    place(pl, x, y, extent, opa);
 }
 
 static void draw_labels(lv_layer_t *layer, int n)
@@ -1186,7 +1511,9 @@ static void update_border_text(void)
     sdr_get_status(&ss);
     bool sdr_live = ss.state == SDR_READY || ss.state == SDR_CAPTURING;
     if (ns.state == NMEA_STATE_CONNECTED || sdr_live) {
-        snprintf(buf, sizeof(buf), "%d vessel%s", s_nvessels, s_nvessels == 1 ? "" : "s");
+        int n = 0;
+        for (int i = 0; i < s_nvessels; i++) n += s_vessels[i].cls != AIS_CLASS_ATON; // not the marks
+        snprintf(buf, sizeof(buf), "%d vessel%s", n, n == 1 ? "" : "s");
     } else if ((ns.state == NMEA_STATE_NOT_CONFIGURED || ns.state == NMEA_STATE_OFF) && ss.state != SDR_TESTING) {
         strcpy(buf, "#f5b13f AIS not set#");
     } else {

@@ -778,6 +778,12 @@ async function pollStatus() {
     html += row("AIS feed", esc(a.state) + (a.error && a.state !== "connected" ? ` (${esc(a.error)})` : "") +
       (a.last_rx_s >= 0 ? `, data ${ago(a.last_rx_s)}` : ""), a.state === "connected" ? "ok" : a.state === "off" ? "" : "bad");
     html += row("Messages", `${a.reports} decoded, ${a.unsupported} unsupported, ${a.ignored} ignored, ${a.bad_checksum} bad checksum`);
+    if (a.msg_types && a.msg_types.length) {
+      // Types the display doesn't use are greyed; counts are network / SDR.
+      html += row("Message types", a.msg_types.map(t =>
+        `<span style="${t.used ? "" : "opacity:.55"}">${t.type} ${esc(t.name)}: ${t.network} / ${t.sdr}</span>`).join("<br>") +
+        `<div class="hint">network / SDR, since start-up; greyed types aren't used</div>`);
+    }
     html += row("Vessels", s.vessels);
     html += row("Remembered vessels", cacheStatus(s.vessel_cache), s.vessel_cache.state === "error" ? "bad" : s.vessel_cache.state === "no card" ? "warn" : "");
     let tide = esc(t.state);

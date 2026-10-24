@@ -6,6 +6,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "ais.h"
 #include "ais_demod.h"
 #include "map_store.h"
 
@@ -33,6 +34,7 @@ typedef struct {
     float cpu_pct;              // time in the demodulator, % of one core
     uint64_t dropped_bytes;     // samples the decoder fell too far behind to take
     ais_demod_stats_t demod;
+    ais_stats_t parser;         // what the decoded sentences were (message types)
     // Gain
     int16_t gain;               // applied now, tenths of a dB (SDR_GAIN_AUTO: tuner AGC)
     bool gain_best;             // chosen by the "best fixed gain" sweep

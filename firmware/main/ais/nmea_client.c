@@ -233,7 +233,7 @@ void nmea_client_start(void)
     s_lock = xSemaphoreCreateMutex();
     s_events = settings_subscribe();
     ais_parser_init(&s_parser);
-    xTaskCreatePinnedToCore(nmea_task, "nmea", 6144, NULL, 5, NULL, 1);
+    xTaskCreatePinnedToCore(nmea_task, "nmea", 7168, NULL, 5, NULL, 1);
 }
 
 void nmea_client_get_status(nmea_status_t *out)

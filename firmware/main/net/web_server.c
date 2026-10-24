@@ -311,6 +311,21 @@ static esp_err_t status_get(httpd_req_t *req)
     cJSON_AddNumberToObject(aj, "bad_checksum", n.stats.bad_checksum);
     cJSON_AddNumberToObject(aj, "unsupported", n.stats.unsupported);
     cJSON_AddNumberToObject(aj, "last_rx_s", n.last_rx_us ? (now_us - n.last_rx_us) / 1000000 : -1);
+    // Every message type heard since start-up, by source.
+    sdr_status_t sdr;
+    sdr_get_status(&sdr);
+    cJSON *types = cJSON_AddArrayToObject(aj, "msg_types");
+    for (int t = 0; t < 28; t++) {
+        uint32_t net = n.stats.by_type[t], radio = sdr.parser.by_type[t];
+        if (!net && !radio) continue;
+        cJSON *tj = cJSON_CreateObject();
+        cJSON_AddNumberToObject(tj, "type", t);
+        cJSON_AddStringToObject(tj, "name", ais_msg_type_str(t));
+        cJSON_AddBoolToObject(tj, "used", ais_msg_type_used(t));
+        cJSON_AddNumberToObject(tj, "network", net);
+        cJSON_AddNumberToObject(tj, "sdr", radio);
+        cJSON_AddItemToArray(types, tj);
+    }
     cJSON_AddNumberToObject(o, "vessels", vessel_db_count());
 
     vc_stats_t vc;
@@ -457,7 +472,14 @@ static esp_err_t vessels_get(httpd_req_t *req)
         if (v->fields & AIS_F_SOG) cJSON_AddNumberToObject(o, "sog", v->sog_kn);
         if (v->fields & AIS_F_COG) cJSON_AddNumberToObject(o, "cog", v->cog_deg);
         if (v->fields & AIS_F_HEADING) cJSON_AddNumberToObject(o, "heading", v->heading);
-        cJSON_AddStringToObject(o, "type", ais_ship_type_str(v->ship_type));
+        if (v->cls == AIS_CLASS_ATON) {
+            cJSON_AddStringToObject(o, "type", ais_aton_type_str(v->aton_type));
+            cJSON_AddBoolToObject(o, "virtual", v->aton_flags & AIS_ATON_VIRTUAL);
+            cJSON_AddBoolToObject(o, "off_position", v->aton_flags & AIS_ATON_OFF_POS);
+        } else {
+            cJSON_AddStringToObject(o, "type", v->cls == AIS_CLASS_SAR ? "SAR aircraft" : ais_ship_type_str(v->ship_type));
+        }
+        if (v->fields & AIS_F_ALT) cJSON_AddNumberToObject(o, "alt_m", v->alt_m);
         cJSON_AddNumberToObject(o, "age_s", (now - v->last_heard_us) / 1000000);
         cJSON_AddNumberToObject(o, "msgs_network", v->msgs[RX_NET]);
         cJSON_AddNumberToObject(o, "msgs_sdr", v->msgs[RX_SDR]);

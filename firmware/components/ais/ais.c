@@ -151,6 +151,7 @@ ais_result_t ais_parse_line(ais_parser_t *p, const char *line, uint32_t now_ms, 
     } else {
         p->stats.unsupported++;
     }
+    p->stats.by_type[out->msg_type <= 27 ? out->msg_type : 0]++;
     return r;
 }
 
@@ -272,13 +273,11 @@ static void set_str_field(ais_report_t *r, uint32_t flag, char *dst, size_t cap,
 
 ais_result_t ais_decode_payload(const char *payload, int fill_bits, ais_report_t *out)
 {
-    static bitbuf_t b; // decoder is only ever used from one task
-    if (!unarmour(payload, fill_bits, &b) || b.nbits < 38) {
-        return AIS_RESULT_UNSUPPORTED;
-    }
-
+    bitbuf_t b; // on the stack: the network feed and the SDR decode in different tasks
     memset(out, 0, sizeof(*out));
-    out->msg_type = (uint8_t)get_u(&b, 0, 6);
+    if (!unarmour(payload, fill_bits, &b)) return AIS_RESULT_UNSUPPORTED;
+    if (b.nbits >= 6) out->msg_type = (uint8_t)get_u(&b, 0, 6);
+    if (b.nbits < 38) return AIS_RESULT_UNSUPPORTED;
     out->mmsi = get_u(&b, 8, 30);
 
     switch (out->msg_type) {
@@ -337,6 +336,55 @@ ais_result_t ais_decode_payload(const char *payload, int fill_bits, ais_report_t
         } else {
             return AIS_RESULT_UNSUPPORTED;
         }
+        return AIS_RESULT_REPORT;
+    }
+
+    case 4: { // base station report: only its clock is used
+        if (b.nbits < 168) return AIS_RESULT_UNSUPPORTED;
+        out->cls = AIS_CLASS_BASE;
+        uint32_t y = get_u(&b, 38, 14), mo = get_u(&b, 52, 4), d = get_u(&b, 56, 5);
+        uint32_t h = get_u(&b, 61, 5), mi = get_u(&b, 66, 6), s = get_u(&b, 72, 6);
+        if (y >= 2000 && y <= 9999 && mo >= 1 && mo <= 12 && d >= 1 && d <= 31 && h <= 23 && mi <= 59 && s <= 59) {
+            out->utc.year = (uint16_t)y;
+            out->utc.month = (uint8_t)mo;
+            out->utc.day = (uint8_t)d;
+            out->utc.hour = (uint8_t)h;
+            out->utc.minute = (uint8_t)mi;
+            out->utc.second = (uint8_t)s;
+            out->fields |= AIS_F_UTC;
+        }
+        set_pos(out, get_s(&b, 79, 28), get_s(&b, 107, 27), 600000.0);
+        return AIS_RESULT_REPORT;
+    }
+
+    case 9: { // SAR aircraft: speed in whole knots, not tenths
+        if (b.nbits < 128) return AIS_RESULT_UNSUPPORTED;
+        out->cls = AIS_CLASS_SAR;
+        uint32_t alt = get_u(&b, 38, 12), sog = get_u(&b, 50, 10);
+        if (alt < 4095) {
+            out->alt_m = (uint16_t)alt;
+            out->fields |= AIS_F_ALT;
+        }
+        if (sog < 1023) {
+            out->sog_kn = (float)sog;
+            out->fields |= AIS_F_SOG;
+        }
+        set_pos(out, get_s(&b, 61, 28), get_s(&b, 89, 27), 600000.0);
+        set_cog(out, get_u(&b, 116, 12));
+        return AIS_RESULT_REPORT;
+    }
+
+    case 21: { // aid to navigation
+        if (b.nbits < 272) return AIS_RESULT_UNSUPPORTED;
+        out->cls = AIS_CLASS_ATON;
+        out->aton_type = (uint8_t)get_u(&b, 38, 5);
+        set_str_field(out, AIS_F_NAME, out->name, sizeof(out->name), &b, 43, 20); // (the name extension doesn't fit)
+        set_pos(out, get_s(&b, 164, 28), get_s(&b, 192, 27), 600000.0);
+        set_dims(out, &b, 219);
+        // Off position only means something with a valid time stamp (second 0-59).
+        if (get_u(&b, 253, 6) <= 59 && get_u(&b, 259, 1)) out->aton_flags |= AIS_ATON_OFF_POS;
+        if (get_u(&b, 269, 1)) out->aton_flags |= AIS_ATON_VIRTUAL;
+        out->fields |= AIS_F_ATON;
         return AIS_RESULT_REPORT;
     }
 
@@ -411,6 +459,50 @@ const char *ais_class_str(ais_class_t cls)
     switch (cls) {
     case AIS_CLASS_A: return "A";
     case AIS_CLASS_B: return "B";
+    case AIS_CLASS_ATON: return "Aid to navigation";
+    case AIS_CLASS_SAR: return "SAR aircraft";
+    case AIS_CLASS_BASE: return "Base station";
     default: return "?";
     }
+}
+
+const char *ais_aton_type_str(uint8_t type)
+{
+    static const char *const names[32] = {
+        "Aid to navigation", "Reference point", "RACON", "Fixed structure", "Aid to navigation",
+        "Light", "Sector light", "Leading light (front)", "Leading light (rear)",
+        "North cardinal beacon", "East cardinal beacon", "South cardinal beacon", "West cardinal beacon",
+        "Port hand beacon", "Starboard hand beacon", "Preferred channel beacon (port hand)",
+        "Preferred channel beacon (starboard hand)", "Isolated danger beacon", "Safe water beacon",
+        "Special mark beacon",
+        "North cardinal buoy", "East cardinal buoy", "South cardinal buoy", "West cardinal buoy",
+        "Port hand buoy", "Starboard hand buoy", "Preferred channel buoy (port hand)",
+        "Preferred channel buoy (starboard hand)", "Isolated danger buoy", "Safe water buoy", "Special mark buoy",
+        "Light vessel / LANBY / rig",
+    };
+    return type < 32 ? names[type] : "Aid to navigation";
+}
+
+bool ais_msg_type_used(uint8_t type)
+{
+    switch (type) {
+    case 1: case 2: case 3: case 4: case 5: case 9: case 18: case 19: case 21: case 24: case 27: return true;
+    default: return false;
+    }
+}
+
+const char *ais_msg_type_str(uint8_t type)
+{
+    static const char *const names[28] = {
+        "Too short to tell", "Position report (Class A)", "Position report (Class A, assigned)",
+        "Position report (Class A, interrogated)", "Base station report", "Static and voyage data (Class A)",
+        "Binary addressed message", "Binary acknowledge", "Binary broadcast message", "SAR aircraft position",
+        "UTC/date inquiry", "UTC/date response", "Addressed safety message", "Safety acknowledge",
+        "Safety broadcast message", "Interrogation", "Assignment mode command", "DGNSS broadcast",
+        "Position report (Class B)", "Extended position report (Class B)", "Data link management",
+        "Aid-to-navigation report", "Channel management", "Group assignment command",
+        "Static data report (Class B)", "Single slot binary message", "Multiple slot binary message",
+        "Long-range position report",
+    };
+    return type < 28 ? names[type] : "Unknown";
 }

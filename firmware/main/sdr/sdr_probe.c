@@ -939,7 +939,7 @@ void sdr_probe_start(void)
     }
     ais_demod_init(s_demod, on_sentence, NULL);
     s_events = settings_subscribe();
-    xTaskCreatePinnedToCore(decode_task, "sdr_decode", 6144, NULL, 3, &s_dec_task, 1);
+    xTaskCreatePinnedToCore(decode_task, "sdr_decode", 7168, NULL, 3, &s_dec_task, 1);
     xTaskCreatePinnedToCore(probe_task, "sdr_probe", 8192, NULL, 4, &s_probe_task, 1);
 }
 
@@ -970,6 +970,7 @@ void sdr_get_status(sdr_status_t *out)
     out->sweep_step = s_sweep_step;
     out->sweep_steps = NGAINS;
     out->dropped_bytes = s_dec_ring.dropped;
+    out->parser = s_parser.stats; // counters only: a torn copy is off by one at most
     if (s_demod) ais_demod_get_stats(s_demod, &out->demod);
 }
 

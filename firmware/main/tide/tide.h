@@ -50,3 +50,7 @@ int tide_curve(tide_sample_t *out, int max);
 bool tide_level(time_t t, float *height_ft);
 
 bool clock_is_set(void);
+
+// A base station's UTC time (AIS type 4): sets the clock only while it hasn't
+// been set from the internet (NTP).
+void clock_set_from_ais(int year, int month, int day, int hour, int minute, int second);

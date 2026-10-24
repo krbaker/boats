@@ -10,6 +10,8 @@
 #include "rx_stats.h"
 #include "vessel_cache.h"
 
+// Vessels, SAR aircraft and aids to navigation (base stations only set the
+// clock: see clock_set_from_ais).
 #define VESSEL_MAX          500
 #define VESSEL_EXPIRY_S     (10 * 60)
 
@@ -27,6 +29,9 @@ typedef struct {
     char name[21];
     char callsign[8];
     char destination[21];
+    uint8_t aton_type;      // aids to navigation (cls AIS_CLASS_ATON): AIS_ATON_*
+    uint8_t aton_flags;
+    uint16_t alt_m;         // SAR aircraft (cls AIS_CLASS_SAR): altitude, AIS_F_ALT
     int64_t last_heard_us;  // esp_timer_get_time() of the last message
     time_t last_heard_wall; // wall clock of the last message (0 if clock not set)
     uint32_t msgs[RX_NSRC]; // messages from each source (network, SDR)
@@ -45,6 +50,7 @@ int vessel_db_snapshot(vessel_t *out, int max);
 // Copy a single vessel. Returns false if it isn't (or is no longer) known.
 bool vessel_db_get(uint32_t mmsi, vessel_t *out);
 
+// Vessels and aircraft (not aids to navigation).
 int vessel_db_count(void);
 
 // How many vessels have been heard only on the network feed, only by the

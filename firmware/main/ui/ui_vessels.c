@@ -63,6 +63,7 @@ static void refresh_list(void)
     s_nrows = 0;
     for (int i = 0; i < n; i++) {
         const vessel_t *v = &s_vessels[i];
+        if (v->cls == AIS_CLASS_ATON) continue; // marks are on the map only
         float d = (v->fields & AIS_F_POS) ? geo_distance_nm(cfg.center_lat, cfg.center_lon, v->lat, v->lon) : INFINITY;
         s_rows[s_nrows++] = (row_t){.mmsi = v->mmsi, .idx = i, .dist_nm = d};
     }

@@ -66,14 +66,27 @@ static void refresh(void)
 
     if (v.name[0]) lv_label_set_text(s_title, v.name);
     else lv_label_set_text_fmt(s_title, "MMSI %lu", (unsigned long)v.mmsi);
-    lv_obj_set_style_bg_color(s_swatch, ui_ship_color(v.ship_type), 0);
+    bool aton = v.cls == AIS_CLASS_ATON, sar = v.cls == AIS_CLASS_SAR;
+    lv_obj_set_style_bg_color(s_swatch, aton ? lv_color_hex(0xC0289A) : sar ? lv_color_hex(0xFF8A1F)
+                                                                           : ui_ship_color(v.ship_type), 0);
 
     const char *na = "-";
     set_row(ROW_MMSI, "%lu", (unsigned long)v.mmsi);
     set_row(ROW_CALLSIGN, "%s", v.callsign[0] ? v.callsign : na);
     set_row(ROW_CLASS, "%s", v.cls == AIS_CLASS_UNKNOWN ? na : ais_class_str(v.cls));
-    set_row(ROW_TYPE, "%s", (v.fields & AIS_F_SHIPTYPE) ? ais_ship_type_str(v.ship_type) : na);
-    set_row(ROW_STATUS, "%s", (v.fields & AIS_F_NAVSTAT) ? ais_nav_status_str(v.nav_status) : na);
+    // Marks: what kind, and whether it's a real one on its station. Aircraft: the altitude.
+    if (aton) {
+        set_row(ROW_TYPE, "%s", ais_aton_type_str(v.aton_type));
+        set_row(ROW_STATUS, "%s%s", v.aton_flags & AIS_ATON_VIRTUAL ? "Virtual (AIS only)" : "On station",
+                v.aton_flags & AIS_ATON_OFF_POS ? ", #f2545b OFF POSITION#" : "");
+    } else if (sar) {
+        set_row(ROW_TYPE, "SAR aircraft");
+        if (v.fields & AIS_F_ALT) set_row(ROW_STATUS, "Altitude %.0f ft%s", v.alt_m * 3.28084f, v.alt_m >= 4094 ? "+" : "");
+        else set_row(ROW_STATUS, "%s", na);
+    } else {
+        set_row(ROW_TYPE, "%s", (v.fields & AIS_F_SHIPTYPE) ? ais_ship_type_str(v.ship_type) : na);
+        set_row(ROW_STATUS, "%s", (v.fields & AIS_F_NAVSTAT) ? ais_nav_status_str(v.nav_status) : na);
+    }
     if (v.fields & AIS_F_COG) set_row(ROW_COURSE, "%.1f" DEG, v.cog_deg);
     else set_row(ROW_COURSE, "%s", na);
     if (v.fields & AIS_F_HEADING) set_row(ROW_HEADING, "%u" DEG, v.heading);

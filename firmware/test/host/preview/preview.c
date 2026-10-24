@@ -305,10 +305,75 @@ static const fake_t k_fleet[] = {
     {"PILOT 2", -1.55f, 0.55f, 14.0f, 315, 312, 18, 5, 50, 8},
     {"KITTIWAKE", 1.10f, -0.20f, 7.5f, 200, -1, 10, 3, 37, 12},
 };
-#define FLEET_N (int)(sizeof(k_fleet) / sizeof(k_fleet[0]))
+// Aids to navigation, one of each look in two rows, and a SAR aircraft.
+typedef struct {
+    const char *name;
+    float dn, de;
+    uint8_t type, flags;
+} fake_mark_t;
+
+static const fake_mark_t k_marks[] = {
+    {"N CARD", 0.80f, -0.95f, 20, 0},
+    {"E CARD", 0.80f, -0.76f, 21, 0},
+    {"S CARD", 0.80f, -0.57f, 22, 0},
+    {"W CARD", 0.80f, -0.38f, 23, 0},
+    {"PORT", 0.80f, -0.19f, 24, 0},
+    {"STBD", 0.80f, 0.00f, 25, 0},
+    {"PREF P", 0.58f, -0.95f, 26, 0},
+    {"PREF S", 0.58f, -0.76f, 27, 0},
+    {"ISO DGR", 0.58f, -0.57f, 28, 0},
+    {"SAFE WTR", 0.58f, -0.38f, 29, 0},
+    {"SPECIAL", 0.58f, -0.19f, 30, 0},
+    {"LIGHT", 0.58f, 0.00f, 5, 0},
+    {"RACON", 0.36f, -0.95f, 2, 0},
+    {"STRUCT", 0.36f, -0.76f, 3, 0},
+    {"AtoN", 0.36f, -0.57f, 0, 0},
+    {"VIRTUAL", 0.36f, -0.38f, 24, AIS_ATON_VIRTUAL},
+    {"OFF POS", 0.36f, -0.19f, 25, AIS_ATON_OFF_POS},
+};
+#define MARKS_N (int)(sizeof(k_marks) / sizeof(k_marks[0]))
+#define VESSELS_N (int)(sizeof(k_fleet) / sizeof(k_fleet[0]))
+#define FLEET_N (VESSELS_N + MARKS_N + 1)
+
+static void make_mark(int i, vessel_t *v)
+{
+    const fake_mark_t *m = &k_marks[i];
+    memset(v, 0, sizeof(*v));
+    v->mmsi = 993660000 + i;
+    strcpy(v->name, m->name);
+    v->cls = AIS_CLASS_ATON;
+    v->lat = CENTER_LAT + m->dn / 60.0;
+    v->lon = CENTER_LON + m->de / 60.0 / cos(CENTER_LAT * M_PI / 180);
+    v->fields = AIS_F_POS | AIS_F_NAME | AIS_F_ATON;
+    v->aton_type = m->type;
+    v->aton_flags = m->flags;
+    v->last_heard_us = esp_timer_get_time() - 60 * 1000000LL;
+}
+
+static void make_aircraft(vessel_t *v)
+{
+    memset(v, 0, sizeof(*v));
+    v->mmsi = 111366101;
+    v->cls = AIS_CLASS_SAR;
+    v->lat = CENTER_LAT - 0.05 / 60.0;
+    v->lon = CENTER_LON + 0.95 / 60.0 / cos(CENTER_LAT * M_PI / 180);
+    v->fields = AIS_F_POS | AIS_F_SOG | AIS_F_COG | AIS_F_ALT;
+    v->sog_kn = 120;
+    v->cog_deg = 250;
+    v->alt_m = 300;
+    v->last_heard_us = esp_timer_get_time() - 5 * 1000000LL;
+}
 
 static void make_vessel(int i, vessel_t *v)
 {
+    if (i >= VESSELS_N + MARKS_N) {
+        make_aircraft(v);
+        return;
+    }
+    if (i >= VESSELS_N) {
+        make_mark(i - VESSELS_N, v);
+        return;
+    }
     const fake_t *f = &k_fleet[i];
     memset(v, 0, sizeof(*v));
     v->mmsi = 366000100 + i * 7;

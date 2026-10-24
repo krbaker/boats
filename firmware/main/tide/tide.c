@@ -1,6 +1,7 @@
 #include "tide.h"
 
 #include <stdlib.h>
+#include <sys/time.h>
 #include <string.h>
 
 #include "cJSON.h"
@@ -30,9 +31,17 @@ static tide_status_t s_status;
 static SemaphoreHandle_t s_lock;
 static EventGroupHandle_t s_settings_ev;
 
+static volatile bool s_ntp_synced;
+
 bool clock_is_set(void)
 {
     return time(NULL) > 1700000000;
+}
+
+static void on_ntp_sync(struct timeval *tv)
+{
+    if (!s_ntp_synced) ESP_LOGI(TAG, "clock set from the internet");
+    s_ntp_synced = true;
 }
 
 static void apply_tz(void)
@@ -53,6 +62,22 @@ static long days_from_civil(int y, unsigned m, unsigned d)
     unsigned doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
     unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
     return era * 146097 + (long)doe - 719468;
+}
+
+void clock_set_from_ais(int year, int month, int day, int hour, int minute, int second)
+{
+    if (s_ntp_synced) return;
+    time_t t = (time_t)((int64_t)days_from_civil(year, month, day) * 86400 + hour * 3600 + minute * 60 + second);
+    if (t < 1700000000) return; // a station with a broken clock (see clock_is_set)
+    time_t now = time(NULL);
+    if (now - t < 2 && t - now < 2) return; // the station's time is to the second: keep within that
+    bool first = !clock_is_set();
+    struct timeval tv = {.tv_sec = t};
+    settimeofday(&tv, NULL);
+    if (first) {
+        ESP_LOGI(TAG, "clock set from an AIS base station: %04d-%02d-%02d %02d:%02d:%02d UTC", year, month, day, hour,
+                 minute, second);
+    }
 }
 
 // "2024-10-03 04:12" in UTC -> time_t
@@ -259,6 +284,7 @@ void tide_start(void)
     apply_tz();
 
     esp_sntp_config_t sntp = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
+    sntp.sync_cb = on_ntp_sync;
     esp_netif_sntp_init(&sntp);
 
     xTaskCreate(tide_task, "tide", 8192, NULL, 3, NULL);
