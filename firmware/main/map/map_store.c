@@ -63,7 +63,7 @@ static void adopt_new_chart(void)
     settings_set(&cfg);
 }
 
-esp_err_t map_store_init(void)
+esp_err_t map_store_mount(void)
 {
     // The card stays mounted for good: it shares the SDMMC host with the
     // Wi-Fi co-processor, and unmounting would shut that host down.
@@ -73,6 +73,12 @@ esp_err_t map_store_init(void)
         return err;
     }
     s_card_ok = true;
+    return ESP_OK;
+}
+
+esp_err_t map_store_init(void)
+{
+    if (!s_card_ok) return ESP_FAIL; // map_store_mount() found no card
     uint64_t total, free_bytes;
     map_store_usage(&total, &free_bytes);
     ESP_LOGI(TAG, "microSD: %u MB free of %u MB", (unsigned)(free_bytes >> 20), (unsigned)(total >> 20));

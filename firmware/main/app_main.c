@@ -50,6 +50,7 @@ void app_main(void)
     log_buf_init();
     ESP_LOGI(TAG, "AIS display starting");
     log_last_reset();
+    map_store_mount(); // the settings are on the card
     ESP_ERROR_CHECK(settings_init());
     map_store_init();
     vessel_db_init();

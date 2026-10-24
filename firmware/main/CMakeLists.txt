@@ -2,6 +2,7 @@ idf_component_register(
     SRCS
         "app_main.c"
         "config/settings.c"
+        "config/settings_json.c"
         "net/wifi_mgr.c"
         "net/web_server.c"
         "net/log_buf.c"

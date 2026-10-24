@@ -546,6 +546,10 @@ void wifi_mgr_start(void)
         ap_on();
     }
 
+    // Credentials from the card's config.json: tested like ones from the web page.
+    if (settings_take_card_wifi(ssid, pass)) wifi_mgr_set_credentials(ssid, pass);
+    memset(pass, 0, sizeof(pass));
+
     xTaskCreate(wifi_task, "wifi_mgr", 4096, NULL, 4, NULL);
     xTaskCreate(dns_task, "dns", 4096, NULL, 3, NULL);
     xTaskCreate(probe_task, "net_probe", 6144, NULL, 3, NULL);

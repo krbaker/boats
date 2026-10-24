@@ -80,6 +80,7 @@ static int run(const char *expect, const char *path, size_t chunk)
 int main(int argc, char **argv)
 {
     int failures = 0;
+    map_store_mount();
     map_store_init();
     static const size_t chunks[] = {1, 7, 30, 4096, 1 << 22};
     for (int i = 1; i + 1 < argc; i += 2) {

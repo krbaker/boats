@@ -38,6 +38,9 @@ typedef struct {
 
 // Mount the microSD card. If the chart set on it is new (copied on by hand),
 // its centre becomes the configured position.
+// Mount the card: first, before settings_init() reads its config.json.
+esp_err_t map_store_mount(void);
+// Then, once settings are loaded: adopt a newly copied chart.
 esp_err_t map_store_init(void);
 bool map_store_card_ok(void);
 

@@ -29,6 +29,7 @@
 #include "rx_stats.h"
 #include "sdr_probe.h"
 #include "settings.h"
+#include "settings_json.h"
 #include "tide.h"
 #include "vessel_db.h"
 #include "weather.h"
@@ -85,124 +86,14 @@ static esp_err_t config_get(httpd_req_t *req)
 {
     settings_t cfg;
     settings_get(&cfg);
-    char ssid[33], pass[65];
+    char ssid[33], pass[65], secret[48];
     settings_get_wifi(ssid, pass);
-
-    cJSON *o = cJSON_CreateObject();
-    cJSON_AddStringToObject(o, "ais_host", cfg.ais_host);
-    cJSON_AddNumberToObject(o, "ais_port", cfg.ais_port);
-    cJSON_AddStringToObject(o, "tide_station", cfg.tide_station);
-    cJSON_AddStringToObject(o, "tz_name", cfg.tz_name);
-    cJSON_AddStringToObject(o, "tz_posix", cfg.tz_posix);
-    cJSON_AddNumberToObject(o, "center_lat", cfg.center_lat);
-    cJSON_AddNumberToObject(o, "center_lon", cfg.center_lon);
-    cJSON_AddNumberToObject(o, "brightness", cfg.brightness);
-    cJSON_AddStringToObject(o, "wifi_ssid", ssid);
-    cJSON_AddBoolToObject(o, "net_enabled", cfg.net_enabled);
-    cJSON_AddBoolToObject(o, "sdr_enabled", cfg.sdr_enabled);
-    cJSON_AddNumberToObject(o, "sdr_gain", cfg.sdr_gain);  // tenths of a dB, -1 tuner AGC, -2 best fixed
-    cJSON_AddNumberToObject(o, "sdr_ppm", cfg.sdr_ppm_tenths / 10.0);
-    cJSON_AddBoolToObject(o, "sdr_bias_tee", cfg.sdr_bias_tee);
-    cJSON_AddStringToObject(o, "wx_zone", cfg.wx_zone);
-    cJSON_AddStringToObject(o, "wx_buoy", cfg.wx_buoy);
-    cJSON_AddStringToObject(o, "wx_obs", cfg.wx_obs);
-    cJSON_AddStringToObject(o, "wl_key", cfg.wl_key);
-    cJSON_AddNumberToObject(o, "wl_station", cfg.wl_station);
-    cJSON_AddNumberToObject(o, "wl_tx", cfg.wl_tx);
-    char secret[48];
     settings_get_wl_secret(secret);
+
+    cJSON *o = settings_to_json(&cfg);
+    cJSON_AddStringToObject(o, "wifi_ssid", ssid);
     cJSON_AddBoolToObject(o, "wl_secret_set", secret[0] != '\0'); // the secret itself is never sent
-    cJSON *fa = cJSON_AddArrayToObject(o, "retransmit");
-    for (int i = 0; i < FWD_DEST_MAX; i++) {
-        cJSON *d = cJSON_CreateObject();
-        cJSON_AddBoolToObject(d, "enabled", cfg.fwd[i].enabled);
-        cJSON_AddStringToObject(d, "proto", cfg.fwd[i].proto == FWD_TCP ? "tcp" : "udp");
-        cJSON_AddStringToObject(d, "host", cfg.fwd[i].host);
-        cJSON_AddNumberToObject(d, "port", cfg.fwd[i].port);
-        cJSON_AddItemToArray(fa, d);
-    }
     return send_json(req, o);
-}
-
-static bool get_str_field(cJSON *root, const char *key, char *dst, size_t cap, const char **err)
-{
-    cJSON *v = cJSON_GetObjectItem(root, key);
-    if (!v) return true;
-    if (!cJSON_IsString(v) || strlen(v->valuestring) >= cap) {
-        *err = key;
-        return false;
-    }
-    strcpy(dst, v->valuestring);
-    return true;
-}
-
-// A host name or IPv4 address: letters, digits, dots and hyphens.
-static bool valid_host(const char *h)
-{
-    for (; *h; h++) {
-        if (!isalnum((unsigned char)*h) && *h != '.' && *h != '-') return false;
-    }
-    return true;
-}
-
-// Letters and digits only, shorter than cap (empty is fine).
-static bool alnum_field(const char *s, size_t cap)
-{
-    if (strlen(s) >= cap) return false;
-    for (; *s; s++) {
-        if (!isalnum((unsigned char)*s)) return false;
-    }
-    return true;
-}
-
-// A NOAA marine zone: two letters, Z, three digits ("PZZ135", "ANZ535"), or empty.
-static bool valid_zone(const char *z)
-{
-    if (!z[0]) return true;
-    return strlen(z) == 6 && isupper((unsigned char)z[0]) && isupper((unsigned char)z[1]) && z[2] == 'Z' &&
-           isdigit((unsigned char)z[3]) && isdigit((unsigned char)z[4]) && isdigit((unsigned char)z[5]);
-}
-
-// One retransmit destination from the config page. On a bad value, writes
-// why into msg and returns false.
-static bool parse_fwd(cJSON *o, fwd_dest_t *d, int n, char *msg, size_t cap)
-{
-    if (!cJSON_IsObject(o)) {
-        snprintf(msg, cap, "invalid retransmit destination %d", n);
-        return false;
-    }
-    cJSON *v;
-    if ((v = cJSON_GetObjectItem(o, "enabled"))) {
-        if (!cJSON_IsBool(v)) goto bad;
-        d->enabled = cJSON_IsTrue(v);
-    }
-    if ((v = cJSON_GetObjectItem(o, "proto"))) {
-        if (cJSON_IsString(v) && strcmp(v->valuestring, "udp") == 0) d->proto = FWD_UDP;
-        else if (cJSON_IsString(v) && strcmp(v->valuestring, "tcp") == 0) d->proto = FWD_TCP;
-        else goto bad;
-    }
-    if ((v = cJSON_GetObjectItem(o, "host"))) {
-        if (!cJSON_IsString(v) || strlen(v->valuestring) >= sizeof(d->host) || !valid_host(v->valuestring)) {
-            snprintf(msg, cap, "destination %d: enter an IP address or host name", n);
-            return false;
-        }
-        strcpy(d->host, v->valuestring);
-    }
-    if ((v = cJSON_GetObjectItem(o, "port"))) {
-        if (!cJSON_IsNumber(v) || v->valueint < 0 || v->valueint > 65535) {
-            snprintf(msg, cap, "destination %d: the port must be 1-65535", n);
-            return false;
-        }
-        d->port = v->valueint;
-    }
-    if (d->enabled && (!d->host[0] || !d->port)) {
-        snprintf(msg, cap, "destination %d: enter an address and port before turning it on", n);
-        return false;
-    }
-    return true;
-bad:
-    snprintf(msg, cap, "invalid retransmit destination %d", n);
-    return false;
 }
 
 static esp_err_t config_post(httpd_req_t *req)
@@ -212,87 +103,19 @@ static esp_err_t config_post(httpd_req_t *req)
 
     settings_t cfg;
     settings_get(&cfg);
-    const char *bad = NULL;
-    get_str_field(root, "ais_host", cfg.ais_host, sizeof(cfg.ais_host), &bad);
-    get_str_field(root, "tide_station", cfg.tide_station, sizeof(cfg.tide_station), &bad);
-    get_str_field(root, "tz_name", cfg.tz_name, sizeof(cfg.tz_name), &bad);
-    get_str_field(root, "tz_posix", cfg.tz_posix, sizeof(cfg.tz_posix), &bad);
-
-    cJSON *v;
-    if ((v = cJSON_GetObjectItem(root, "ais_port"))) {
-        if (!cJSON_IsNumber(v) || v->valueint < 0 || v->valueint > 65535) bad = "ais_port";
-        else cfg.ais_port = v->valueint;
-    }
-    if ((v = cJSON_GetObjectItem(root, "center_lat"))) {
-        if (!cJSON_IsNumber(v) || fabs(v->valuedouble) > 90) bad = "center_lat";
-        else cfg.center_lat = v->valuedouble;
-    }
-    if ((v = cJSON_GetObjectItem(root, "center_lon"))) {
-        if (!cJSON_IsNumber(v) || fabs(v->valuedouble) > 180) bad = "center_lon";
-        else cfg.center_lon = v->valuedouble;
-    }
-    if ((v = cJSON_GetObjectItem(root, "brightness"))) {
-        if (!cJSON_IsNumber(v) || v->valueint < 5 || v->valueint > 100) bad = "brightness";
-        else cfg.brightness = v->valueint;
-    }
-    if ((v = cJSON_GetObjectItem(root, "net_enabled"))) {
-        if (!cJSON_IsBool(v)) bad = "net_enabled";
-        else cfg.net_enabled = cJSON_IsTrue(v);
-    }
-    if ((v = cJSON_GetObjectItem(root, "sdr_enabled"))) {
-        if (!cJSON_IsBool(v)) bad = "sdr_enabled";
-        else cfg.sdr_enabled = cJSON_IsTrue(v);
-    }
-    if ((v = cJSON_GetObjectItem(root, "sdr_bias_tee"))) {
-        if (!cJSON_IsBool(v)) bad = "sdr_bias_tee";
-        else cfg.sdr_bias_tee = cJSON_IsTrue(v);
-    }
-    if ((v = cJSON_GetObjectItem(root, "sdr_gain"))) {
-        if (!cJSON_IsNumber(v) || v->valueint < SDR_GAIN_BEST || v->valueint > 500) bad = "sdr_gain";
-        else cfg.sdr_gain = v->valueint;
-    }
-    if ((v = cJSON_GetObjectItem(root, "sdr_ppm"))) {
-        if (!cJSON_IsNumber(v) || fabs(v->valuedouble) > 200) bad = "sdr_ppm";
-        else cfg.sdr_ppm_tenths = (int16_t)lround(v->valuedouble * 10);
-    }
-    for (const char *c = cfg.tide_station; *c; c++) {
-        if (*c < '0' || *c > '9') bad = "tide_station";
-    }
-    get_str_field(root, "wx_zone", cfg.wx_zone, sizeof(cfg.wx_zone), &bad);
-    if (!valid_zone(cfg.wx_zone)) bad = "wx_zone";
-    get_str_field(root, "wx_buoy", cfg.wx_buoy, sizeof(cfg.wx_buoy), &bad);
-    if (!alnum_field(cfg.wx_buoy, sizeof(cfg.wx_buoy))) bad = "wx_buoy";
-    get_str_field(root, "wx_obs", cfg.wx_obs, sizeof(cfg.wx_obs), &bad);
-    if (!alnum_field(cfg.wx_obs, sizeof(cfg.wx_obs))) bad = "wx_obs";
-    get_str_field(root, "wl_key", cfg.wl_key, sizeof(cfg.wl_key), &bad);
-    if (!alnum_field(cfg.wl_key, sizeof(cfg.wl_key))) bad = "wl_key";
-    if ((v = cJSON_GetObjectItem(root, "wl_station"))) {
-        if (!cJSON_IsNumber(v) || v->valuedouble < 0 || v->valuedouble > 4294967295.0) bad = "wl_station";
-        else cfg.wl_station = (uint32_t)v->valuedouble;
-    }
-    if ((v = cJSON_GetObjectItem(root, "wl_tx"))) {
-        if (!cJSON_IsNumber(v) || v->valueint < 0 || v->valueint > 255) bad = "wl_tx";
-        else cfg.wl_tx = v->valueint;
-    }
+    char msg[80];
+    bool ok = settings_from_json(root, &cfg, msg, sizeof(msg));
     // A new secret, if one was typed; empty keeps the saved one.
+    const char *bad = NULL;
     char secret[48] = "";
-    get_str_field(root, "wl_secret", secret, sizeof(secret), &bad);
-    if (!alnum_field(secret, sizeof(secret))) bad = "wl_secret";
-
-    char msg[80] = "";
-    if ((v = cJSON_GetObjectItem(root, "retransmit"))) {
-        if (!cJSON_IsArray(v) || cJSON_GetArraySize(v) > FWD_DEST_MAX) {
-            bad = "retransmit";
-        } else {
-            for (int i = 0; i < cJSON_GetArraySize(v) && !msg[0]; i++) {
-                parse_fwd(cJSON_GetArrayItem(v, i), &cfg.fwd[i], i + 1, msg, sizeof(msg));
-            }
-        }
+    settings_json_str(root, "wl_secret", secret, sizeof(secret), &bad);
+    if (ok && (bad || !settings_alnum(secret, sizeof(secret)))) {
+        ok = false;
+        strcpy(msg, "invalid value for wl_secret");
     }
     cJSON_Delete(root);
 
-    if (bad) snprintf(msg, sizeof(msg), "invalid value for %s", bad);
-    if (msg[0]) return send_error(req, "400 Bad Request", msg);
+    if (!ok) return send_error(req, "400 Bad Request", msg);
     if (secret[0]) settings_set_wl_secret(secret);
     settings_set(&cfg);
     return config_get(req);
@@ -307,11 +130,11 @@ static esp_err_t weatherlink_stations_post(httpd_req_t *req)
     if (!root) return send_error(req, "400 Bad Request", "invalid JSON");
     char key[48] = "", secret[48] = "";
     const char *bad = NULL;
-    get_str_field(root, "api_key", key, sizeof(key), &bad);
-    get_str_field(root, "api_secret", secret, sizeof(secret), &bad);
+    settings_json_str(root, "api_key", key, sizeof(key), &bad);
+    settings_json_str(root, "api_secret", secret, sizeof(secret), &bad);
     cJSON_Delete(root);
     if (!secret[0]) settings_get_wl_secret(secret);
-    if (bad || !key[0] || !secret[0] || !alnum_field(key, sizeof(key)) || !alnum_field(secret, sizeof(secret))) {
+    if (bad || !key[0] || !secret[0] || !settings_alnum(key, sizeof(key)) || !settings_alnum(secret, sizeof(secret))) {
         return send_error(req, "400 Bad Request", "enter the WeatherLink API key and secret");
     }
 

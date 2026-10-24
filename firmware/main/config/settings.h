@@ -1,4 +1,5 @@
-// Persistent user settings (NVS-backed).
+// Persistent user settings: on the microSD card (config.json), with a copy in
+// flash (NVS) for when there's no card. See settings.c.
 
 #pragma once
 
@@ -94,6 +95,10 @@ EventGroupHandle_t settings_subscribe(void);
 // Wi-Fi station credentials live separately (managed by wifi_mgr).
 bool settings_get_wifi(char ssid[33], char pass[65]);
 esp_err_t settings_set_wifi(const char *ssid, const char *pass);
+
+// Wi-Fi credentials the card's config.json gave at start-up (once; false if
+// none), to be tested before they're saved.
+bool settings_take_card_wifi(char ssid[33], char pass[65]);
 
 // The WeatherLink API secret lives apart from settings_t, like the Wi-Fi
 // password, so it's never copied around or sent back to the web page.
