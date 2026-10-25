@@ -6,6 +6,7 @@
 
 #include "cJSON.h"
 #include "esp_crt_bundle.h"
+#include "esp_heap_caps.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
 #include "esp_netif_sntp.h"
@@ -13,6 +14,7 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 
+#include "https_lock.h"
 #include "settings.h"
 #include "wifi_mgr.h"
 
@@ -103,8 +105,14 @@ static char *http_get(const char *url, char *err, size_t errlen)
         .timeout_ms = 15000,
         .user_agent = "ais-display/1.0",
     };
+    https_lock();
     esp_http_client_handle_t c = esp_http_client_init(&cfg);
     char *buf = NULL;
+    if (!c) {
+        https_unlock();
+        snprintf(err, errlen, "out of memory");
+        return NULL;
+    }
     if (esp_http_client_open(c, 0) != ESP_OK) {
         snprintf(err, errlen, "connection failed");
         goto out;
@@ -115,7 +123,11 @@ static char *http_get(const char *url, char *err, size_t errlen)
         snprintf(err, errlen, "HTTP %d", status);
         goto out;
     }
-    buf = malloc(RESP_MAX);
+    buf = heap_caps_malloc(RESP_MAX, MALLOC_CAP_SPIRAM);
+    if (!buf) {
+        snprintf(err, errlen, "out of memory");
+        goto out;
+    }
     int total = 0;
     for (;;) {
         int n = esp_http_client_read(c, buf + total, RESP_MAX - 1 - total);
@@ -126,6 +138,7 @@ static char *http_get(const char *url, char *err, size_t errlen)
     buf[total] = '\0';
 out:
     esp_http_client_cleanup(c);
+    https_unlock();
     return buf;
 }
 

@@ -7,8 +7,11 @@
 #include <string.h>
 
 #include "esp_crt_bundle.h"
+#include "esp_heap_caps.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
+
+#include "https_lock.h"
 
 static const char *TAG = "weatherlink";
 
@@ -25,7 +28,13 @@ char *weatherlink_get(const char *path, const char *key, const char *secret, cha
         .timeout_ms = 15000,
         .user_agent = "ais-display/1.0",
     };
+    https_lock();
     esp_http_client_handle_t c = esp_http_client_init(&cfg);
+    if (!c) {
+        https_unlock();
+        snprintf(err, errlen, "out of memory");
+        return NULL;
+    }
     esp_http_client_set_header(c, "X-Api-Secret", secret);
     char *buf = NULL;
     if (esp_http_client_open(c, 0) != ESP_OK) {
@@ -34,7 +43,7 @@ char *weatherlink_get(const char *path, const char *key, const char *secret, cha
     }
     esp_http_client_fetch_headers(c);
     int status = esp_http_client_get_status_code(c);
-    buf = malloc(RESP_MAX);
+    buf = heap_caps_malloc(RESP_MAX, MALLOC_CAP_SPIRAM);
     if (!buf) {
         snprintf(err, errlen, "out of memory");
         goto out;
@@ -57,6 +66,7 @@ char *weatherlink_get(const char *path, const char *key, const char *secret, cha
     }
 out:
     esp_http_client_cleanup(c);
+    https_unlock();
     return buf;
 }
 

@@ -93,3 +93,9 @@ CONFIG_FATFS_MAX_LFN=255
 # joined to it can reach the internet (and sign in to a captive portal).
 CONFIG_LWIP_IP_FORWARD=y
 CONFIG_LWIP_IPV4_NAPT=y
+
+# TLS (HTTPS) buffers in PSRAM, and only while a connection needs them: internal
+# RAM is what the SDIO link to the Wi-Fi co-processor needs for its DMA buffers,
+# and running it out there drops packets and wedges the link.
+CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
+CONFIG_MBEDTLS_DYNAMIC_BUFFER=y

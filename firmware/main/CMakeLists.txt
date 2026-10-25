@@ -7,6 +7,7 @@ idf_component_register(
         "net/web_server.c"
         "net/log_buf.c"
         "net/log_save.c"
+        "net/https_lock.c"
         "net/cp_update.c"
         "net/fw_update.c"
         "net/ais_fwd.c"

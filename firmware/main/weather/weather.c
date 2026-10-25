@@ -20,6 +20,7 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 
+#include "https_lock.h"
 #include "settings.h"
 #include "tide.h"
 #include "weatherlink.h"
@@ -107,8 +108,10 @@ static char *http_get(const char *url, int *status, char *err, size_t errlen)
         .user_agent = USER_AGENT,
     };
     *status = 0;
+    https_lock();
     esp_http_client_handle_t c = esp_http_client_init(&cfg);
     if (!c) {
+        https_unlock();
         snprintf(err, errlen, "out of memory");
         return NULL;
     }
@@ -138,6 +141,7 @@ static char *http_get(const char *url, int *status, char *err, size_t errlen)
     buf[total] = '\0';
 out:
     esp_http_client_cleanup(c);
+    https_unlock();
     return buf;
 }
 

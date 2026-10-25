@@ -9,6 +9,7 @@
 
 #include "ais_fwd.h"
 #include "fw_update.h"
+#include "https_lock.h"
 #include "log_buf.h"
 
 #include "map_tiles.h"
@@ -52,6 +53,7 @@ void app_main(void)
     log_last_reset();
     map_store_mount(); // the settings are on the card
     ESP_ERROR_CHECK(settings_init());
+    https_lock_init(); // before the weather and tide tasks fetch
     map_store_init();
     vessel_db_init();
 
