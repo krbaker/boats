@@ -114,7 +114,7 @@ static void test_strings(void)
 
 // Build payloads bit by bit, for the message types there's no handy real sentence for.
 typedef struct {
-    uint8_t bit[512];
+    uint8_t bit[1024];
     int n;
 } bits_t;
 
@@ -244,6 +244,103 @@ static void test_type14_safety(void)
     CHECK(ais_msg_type_used(14));
 }
 
+static void put_s(bits_t *b, int32_t v, int len) { put(b, (uint32_t)v & ((1u << len) - 1), len); }
+
+static void test_type8_met_imo(void)
+{
+    bits_t b = {0};
+    put(&b, 8, 6); put(&b, 0, 2); put(&b, 3669999, 30); put(&b, 0, 2); put(&b, 1, 10); put(&b, 31, 6);
+    put_s(&b, (int32_t)lround(-122.4 * 60000), 25);
+    put_s(&b, (int32_t)lround(47.6 * 60000), 24);
+    put(&b, 1, 1);
+    put(&b, 25, 5); put(&b, 14, 5); put(&b, 30, 6);   // 25th, 14:30 UTC
+    put(&b, 14, 7); put(&b, 22, 7);                   // wind 14 kn, gust 22
+    put(&b, 315, 9); put(&b, 320, 9);
+    put_s(&b, -25, 11);                               // -2.5 C
+    put(&b, 80, 7);                                   // 80 %
+    put_s(&b, 501, 10);                               // dew point: not available
+    put(&b, 1013 - 799, 9); put(&b, 2, 2);            // 1013 hPa, rising
+    put(&b, 0, 1); put(&b, 52, 7);                    // 5.2 nm
+    put(&b, 1000 + 231, 12); put(&b, 1, 2);           // 2.31 m, falling
+    put(&b, 12, 8); put(&b, 45, 9);                   // current 1.2 kn to 045
+    put(&b, 255, 8); put(&b, 360, 9); put(&b, 31, 5); // current 2: none
+    put(&b, 255, 8); put(&b, 360, 9); put(&b, 31, 5); // current 3: none
+    put(&b, 12, 8); put(&b, 8, 6); put(&b, 225, 9);   // waves 1.2 m, 8 s, from 225
+    put(&b, 255, 8); put(&b, 63, 6); put(&b, 360, 9); // swell: none
+    put(&b, 4, 4);                                    // Beaufort 4
+    put_s(&b, 112, 10);                               // water 11.2 C
+    put(&b, 7, 3); put(&b, 305, 9); put(&b, 3, 2); put(&b, 0, 10);
+    char pl[80];
+    int fill;
+    armour(&b, pl, &fill);
+    ais_report_t r;
+    CHECK(ais_decode_payload(pl, fill, &r) == AIS_RESULT_REPORT);
+    CHECK(r.msg_type == 8 && r.mmsi == 3669999 && r.nmet == 1);
+    const ais_met_t *m = &r.met[0];
+    CHECK(m->site == AIS_MET_SITE_IMO);
+    CHECK((m->fields & AIS_MET_POS) && fabs(m->lat - 47.6) < 1e-4 && fabs(m->lon + 122.4) < 1e-4);
+    CHECK((m->fields & AIS_MET_TIME) && m->day == 25 && m->hour == 14 && m->minute == 30);
+    CHECK((m->fields & AIS_MET_WIND) && m->wind_kn == 14 && m->wind_dir == 315);
+    CHECK((m->fields & AIS_MET_GUST) && m->gust_kn == 22);
+    CHECK((m->fields & AIS_MET_AIR_TEMP) && fabs(m->air_c + 2.5) < 1e-4);
+    CHECK((m->fields & AIS_MET_HUMIDITY) && m->humidity == 80);
+    CHECK(!(m->fields & AIS_MET_DEW));
+    CHECK((m->fields & AIS_MET_PRESSURE) && m->pressure_hpa == 1013 && m->pressure_trend == AIS_TREND_RISING);
+    CHECK((m->fields & AIS_MET_VIS) && fabs(m->vis_nm - 5.2) < 1e-4);
+    CHECK((m->fields & AIS_MET_WATER_LEVEL) && fabs(m->water_m - 2.31) < 1e-4 && m->water_trend == AIS_TREND_FALLING);
+    CHECK((m->fields & AIS_MET_CURRENT) && fabs(m->current_kn - 1.2) < 1e-4 && m->current_dir == 45);
+    CHECK((m->fields & AIS_MET_WAVES) && fabs(m->wave_m - 1.2) < 1e-4 && m->wave_s == 8 && m->wave_dir == 225);
+    CHECK(!(m->fields & AIS_MET_SWELL));
+    CHECK((m->fields & AIS_MET_SEA_STATE) && m->sea_state == 4);
+    CHECK((m->fields & AIS_MET_WATER_TEMP) && fabs(m->water_c - 11.2) < 1e-4);
+    CHECK((m->fields & AIS_MET_SALINITY) && fabs(m->salinity - 30.5) < 1e-4);
+}
+
+// One US sensor report: the 27-bit header, then 85 bits of its own.
+static void us_report(bits_t *b, int type, int site)
+{
+    put(b, type, 4); put(b, 25, 5); put(b, 14, 5); put(b, 30, 6); put(b, site, 7);
+}
+
+static void pad_to(bits_t *b, int n) { while (b->n < n) b->bit[b->n++] = 0; }
+
+static void test_type8_met_us(void)
+{
+    bits_t b = {0};
+    put(&b, 8, 6); put(&b, 0, 2); put(&b, 3669998, 30); put(&b, 0, 2); put(&b, 367, 10); put(&b, 33, 6);
+    int start = b.n;
+    us_report(&b, 0, 5);                              // site 5's location
+    put(&b, 0, 6); put_s(&b, (int32_t)lround(-122.3 * 600000), 28); put_s(&b, (int32_t)lround(47.5 * 600000), 27);
+    pad_to(&b, start + 112);
+    us_report(&b, 1, 5);                              // its name
+    put_str(&b, "ALKI POINT", 14);
+    pad_to(&b, start + 224);
+    us_report(&b, 2, 5);                              // wind 9 kn from 200, gust 15
+    put(&b, 9, 7); put(&b, 15, 7); put(&b, 200, 9); put(&b, 360, 9);
+    pad_to(&b, start + 336);
+    us_report(&b, 3, 5);                              // water level 1.85 m, rising
+    put(&b, 0, 1); put_s(&b, 185, 16); put(&b, 2, 2);
+    pad_to(&b, start + 448);
+    us_report(&b, 2, 9);                              // another site's wind
+    put(&b, 20, 7); put(&b, 127, 7); put(&b, 90, 9); put(&b, 360, 9);
+    pad_to(&b, start + 560);
+    char pl[120];
+    int fill;
+    armour(&b, pl, &fill);
+    ais_report_t r;
+    CHECK(ais_decode_payload(pl, fill, &r) == AIS_RESULT_REPORT);
+    CHECK(r.msg_type == 8 && r.nmet == 2);
+    const ais_met_t *m = &r.met[0];
+    CHECK(m->site == 5);
+    CHECK((m->fields & AIS_MET_POS) && fabs(m->lat - 47.5) < 1e-5 && fabs(m->lon + 122.3) < 1e-5);
+    CHECK((m->fields & AIS_MET_NAME) && strcmp(m->name, "ALKI POINT") == 0);
+    CHECK((m->fields & AIS_MET_WIND) && m->wind_kn == 9 && m->wind_dir == 200);
+    CHECK((m->fields & AIS_MET_GUST) && m->gust_kn == 15 && m->gust_dir == 360);
+    CHECK((m->fields & AIS_MET_WATER_LEVEL) && fabs(m->water_m - 1.85) < 1e-4 && m->water_trend == AIS_TREND_RISING);
+    CHECK(r.met[1].site == 9 && (r.met[1].fields & AIS_MET_WIND) && r.met[1].wind_kn == 20);
+    CHECK(!(r.met[1].fields & AIS_MET_GUST));
+}
+
 static void test_type_counts(void)
 {
     ais_parser_t p;
@@ -252,7 +349,7 @@ static void test_type_counts(void)
     ais_parse_line(&p, "!AIVDM,1,1,,A,15RTgt0PAso;90TKcjM8h6g208CQ,0*4A", 0, &r);
     ais_parse_line(&p, "!AIVDM,1,1,,A,15RTgt0PAso;90TKcjM8h6g208CQ,0*4A", 0, &r);
     CHECK(p.stats.by_type[1] == 2);
-    CHECK(ais_msg_type_used(21) && ais_msg_type_used(4) && !ais_msg_type_used(8));
+    CHECK(ais_msg_type_used(21) && ais_msg_type_used(4) && !ais_msg_type_used(10));
     CHECK(strcmp(ais_msg_type_str(21), "Aid-to-navigation report") == 0);
 }
 
@@ -262,6 +359,8 @@ int main(void)
     test_type21_aton();
     test_type4_base();
     test_type14_safety();
+    test_type8_met_imo();
+    test_type8_met_us();
     test_type_counts();
     test_type1();
     test_type5_multipart();

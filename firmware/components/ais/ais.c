@@ -271,6 +271,239 @@ static void set_str_field(ais_report_t *r, uint32_t flag, char *dst, size_t cap,
     }
 }
 
+// ---------------------------------------------------------------------------
+// Type 8 weather and water: IMO289 met/hydro (DAC 1 FI 31) and the US
+// environmental message (DAC 367 FI 33). Values outside their physical range
+// are taken as "not available".
+// ---------------------------------------------------------------------------
+
+static uint8_t met_trend(uint32_t raw)
+{
+    return raw == 0 ? AIS_TREND_STEADY : raw == 1 ? AIS_TREND_FALLING : raw == 2 ? AIS_TREND_RISING : AIS_TREND_UNKNOWN;
+}
+
+static void met_wind(ais_met_t *m, uint32_t speed, uint32_t gust, uint32_t dir, uint32_t gust_dir)
+{
+    if (speed < 127 && dir < 360) {
+        m->wind_kn = (float)speed;
+        m->wind_dir = (uint16_t)dir;
+        m->fields |= AIS_MET_WIND;
+    }
+    if (gust < 127) {
+        m->gust_kn = (float)gust;
+        m->gust_dir = gust_dir < 360 ? (uint16_t)gust_dir : 360;
+        m->fields |= AIS_MET_GUST;
+    }
+}
+
+static void met_pressure(ais_met_t *m, uint32_t raw, uint32_t trend)
+{
+    if (raw <= 402) { // 0 is 799 hPa or less, 402 is 1201 or more
+        m->pressure_hpa = (uint16_t)(raw + 799);
+        m->pressure_trend = met_trend(trend);
+        m->fields |= AIS_MET_PRESSURE;
+    }
+}
+
+static void met_waves(ais_met_t *m, bool swell, uint32_t h, uint32_t period, uint32_t dir)
+{
+    if (h > 251) return;
+    float *mh = swell ? &m->swell_m : &m->wave_m;
+    uint8_t *ms = swell ? &m->swell_s : &m->wave_s;
+    uint16_t *md = swell ? &m->swell_dir : &m->wave_dir;
+    *mh = h / 10.0f;
+    *ms = period <= 60 ? (uint8_t)period : 0;
+    *md = dir < 360 ? (uint16_t)dir : 360;
+    m->fields |= swell ? AIS_MET_SWELL : AIS_MET_WAVES;
+}
+
+static void met_water_temp(ais_met_t *m, float c)
+{
+    if (c >= -10.0f && c <= 50.0f) {
+        m->water_c = c;
+        m->fields |= AIS_MET_WATER_TEMP;
+    }
+}
+
+static void met_salinity(ais_met_t *m, uint32_t raw)
+{
+    if (raw <= 501) {
+        m->salinity = raw / 10.0f;
+        m->fields |= AIS_MET_SALINITY;
+    }
+}
+
+static void met_time(ais_met_t *m, uint32_t day, uint32_t hour, uint32_t minute)
+{
+    if (day >= 1 && day <= 31 && hour < 24 && minute < 60) {
+        m->day = (uint8_t)day;
+        m->hour = (uint8_t)hour;
+        m->minute = (uint8_t)minute;
+        m->fields |= AIS_MET_TIME;
+    }
+}
+
+static bool met_pos(ais_met_t *m, int32_t lon_raw, int32_t lat_raw, double div)
+{
+    double lon = lon_raw / div, lat = lat_raw / div;
+    if (lon < -180 || lon > 180 || lat < -90 || lat > 90 || (lon == 0 && lat == 0)) return false;
+    m->lon = lon;
+    m->lat = lat;
+    m->fields |= AIS_MET_POS;
+    return true;
+}
+
+// IMO289 meteorological and hydrological data: one station, 360 bits.
+static void met_imo(const bitbuf_t *b, ais_report_t *out)
+{
+    if (b->nbits < 350) return;
+    ais_met_t *m = &out->met[out->nmet++];
+    memset(m, 0, sizeof(*m));
+    m->site = AIS_MET_SITE_IMO;
+    met_pos(m, get_s(b, 56, 25), get_s(b, 81, 24), 60000.0); // 1/1000 minute
+    met_time(m, get_u(b, 106, 5), get_u(b, 111, 5), get_u(b, 116, 6));
+    met_wind(m, get_u(b, 122, 7), get_u(b, 129, 7), get_u(b, 136, 9), get_u(b, 145, 9));
+    int32_t t = get_s(b, 154, 11);
+    if (t >= -600 && t <= 600) {
+        m->air_c = t / 10.0f;
+        m->fields |= AIS_MET_AIR_TEMP;
+    }
+    uint32_t rh = get_u(b, 165, 7);
+    if (rh <= 100) {
+        m->humidity = (uint8_t)rh;
+        m->fields |= AIS_MET_HUMIDITY;
+    }
+    int32_t dew = get_s(b, 172, 10);
+    if (dew >= -200 && dew <= 500) {
+        m->dew_c = dew / 10.0f;
+        m->fields |= AIS_MET_DEW;
+    }
+    met_pressure(m, get_u(b, 182, 9), get_u(b, 191, 2));
+    uint32_t vis = get_u(b, 194, 7);
+    if (vis < 127) {
+        m->vis_nm = vis / 10.0f;
+        m->fields |= AIS_MET_VIS;
+    }
+    uint32_t wl = get_u(b, 201, 12); // cm, from 10 m below the datum
+    if (wl <= 4000) {
+        m->water_m = (wl - 1000) / 100.0f;
+        m->water_trend = met_trend(get_u(b, 213, 2));
+        m->fields |= AIS_MET_WATER_LEVEL;
+    }
+    uint32_t cs = get_u(b, 215, 8), cd = get_u(b, 223, 9);
+    if (cs <= 251) {
+        m->current_kn = cs / 10.0f;
+        m->current_dir = cd < 360 ? (uint16_t)cd : 360;
+        m->fields |= AIS_MET_CURRENT;
+    }
+    met_waves(m, false, get_u(b, 276, 8), get_u(b, 284, 6), get_u(b, 290, 9));
+    met_waves(m, true, get_u(b, 299, 8), get_u(b, 307, 6), get_u(b, 313, 9));
+    uint32_t sea = get_u(b, 322, 4);
+    if (sea <= 12) {
+        m->sea_state = (uint8_t)sea;
+        m->fields |= AIS_MET_SEA_STATE;
+    }
+    int32_t wt = get_s(b, 326, 10);
+    if (wt != 501) met_water_temp(m, wt / 10.0f);
+    met_salinity(m, get_u(b, 339, 9));
+}
+
+// The US environmental message: up to 8 sensor reports of 112 bits, each for
+// a site (0-127) of the sending station. Its location and name come in
+// reports of their own.
+#define US_REPORT_BITS 112
+
+static ais_met_t *met_site(ais_report_t *out, uint8_t site)
+{
+    for (int i = 0; i < out->nmet; i++) {
+        if (out->met[i].site == site) return &out->met[i];
+    }
+    if (out->nmet == AIS_MET_SITES) return NULL;
+    ais_met_t *m = &out->met[out->nmet++];
+    memset(m, 0, sizeof(*m));
+    m->site = site;
+    return m;
+}
+
+static void met_us(const bitbuf_t *b, ais_report_t *out)
+{
+    int n = (b->nbits - 56) / US_REPORT_BITS;
+    for (int i = 0; i < n; i++) {
+        int o = 56 + i * US_REPORT_BITS, p = o + 27; // p: the report's own fields
+        uint32_t type = get_u(b, o, 4);
+        ais_met_t *m = met_site(out, (uint8_t)get_u(b, o + 20, 7));
+        if (!m) break;
+        if (type != 0 && type != 1) met_time(m, get_u(b, o + 4, 5), get_u(b, o + 9, 5), get_u(b, o + 14, 6));
+        switch (type) {
+        case 0: // site location
+            met_pos(m, get_s(b, p + 6, 28), get_s(b, p + 34, 27), 600000.0);
+            break;
+        case 1: // station name
+            get_str(b, p, 14, m->name, sizeof(m->name));
+            if (m->name[0]) m->fields |= AIS_MET_NAME;
+            break;
+        case 2: // wind
+            met_wind(m, get_u(b, p, 7), get_u(b, p + 7, 7), get_u(b, p + 14, 9), get_u(b, p + 23, 9));
+            break;
+        case 3: { // water level, cm
+            int32_t cm = get_s(b, p + 1, 16);
+            if (cm > -32768 && cm < 32767) {
+                m->water_m = cm / 100.0f;
+                m->water_trend = met_trend(get_u(b, p + 17, 2));
+                m->fields |= AIS_MET_WATER_LEVEL;
+            }
+            break;
+        }
+        case 4: { // current, the first (shallowest) of three
+            uint32_t cs = get_u(b, p, 8), cd = get_u(b, p + 8, 9);
+            if (cs <= 251) {
+                m->current_kn = cs / 10.0f;
+                m->current_dir = cd < 360 ? (uint16_t)cd : 360;
+                m->fields |= AIS_MET_CURRENT;
+            }
+            break;
+        }
+        case 7: { // sea state
+            met_waves(m, true, get_u(b, p, 8), get_u(b, p + 8, 6), get_u(b, p + 14, 9));
+            uint32_t sea = get_u(b, p + 23, 4);
+            if (sea <= 12) {
+                m->sea_state = (uint8_t)sea;
+                m->fields |= AIS_MET_SEA_STATE;
+            }
+            met_water_temp(m, get_u(b, p + 30, 10) / 10.0f - 10.0f);
+            met_waves(m, false, get_u(b, p + 50, 8), get_u(b, p + 58, 6), get_u(b, p + 64, 9));
+            met_salinity(m, get_u(b, p + 76, 9));
+            break;
+        }
+        case 8: // salinity
+            met_water_temp(m, get_u(b, p, 10) / 10.0f - 10.0f);
+            met_salinity(m, get_u(b, p + 36, 9));
+            break;
+        case 9: { // weather
+            int32_t t = get_s(b, p, 11);
+            if (t >= -600 && t <= 600) {
+                m->air_c = t / 10.0f;
+                m->fields |= AIS_MET_AIR_TEMP;
+            }
+            uint32_t vis = get_u(b, p + 16, 8);
+            if (vis <= 250) {
+                m->vis_nm = vis / 10.0f;
+                m->fields |= AIS_MET_VIS;
+            }
+            uint32_t dew = get_u(b, p + 24, 10); // 0.1 degree from -20
+            if (dew <= 700) {
+                m->dew_c = dew / 10.0f - 20.0f;
+                m->fields |= AIS_MET_DEW;
+            }
+            met_pressure(m, get_u(b, p + 37, 9), get_u(b, p + 46, 2));
+            break;
+        }
+        default: // currents in 3D, horizontal flow, air gap, ...: not shown
+            break;
+        }
+    }
+}
+
 ais_result_t ais_decode_payload(const char *payload, int fill_bits, ais_report_t *out)
 {
     bitbuf_t b; // on the stack: the network feed and the SDR decode in different tasks
@@ -389,6 +622,18 @@ ais_result_t ais_decode_payload(const char *payload, int fill_bits, ais_report_t
         return AIS_RESULT_REPORT;
     }
 
+    case 8: { // binary broadcast: only weather and water stations are decoded
+        if (b.nbits < 56) return AIS_RESULT_UNSUPPORTED;
+        uint32_t dac = get_u(&b, 40, 10), fi = get_u(&b, 50, 6);
+        if (dac == 1 && fi == 31) met_imo(&b, out);
+        else if (dac == 367 && fi == 33) met_us(&b, out);
+        for (int i = 0; i < out->nmet; i++) {
+            if (out->met[i].fields) return AIS_RESULT_REPORT;
+        }
+        out->nmet = 0;
+        return AIS_RESULT_UNSUPPORTED;
+    }
+
     case 14: // safety broadcast: text after 2 spare bits, to the end of the message
         if (b.nbits < 46) return AIS_RESULT_UNSUPPORTED;
         set_str_field(out, AIS_F_TEXT, out->text, sizeof(out->text), &b, 40, (b.nbits - 40) / 6);
@@ -492,8 +737,9 @@ const char *ais_aton_type_str(uint8_t type)
 bool ais_msg_type_used(uint8_t type)
 {
     switch (type) {
-    case 1: case 2: case 3: case 4: case 5: case 9: case 11: case 14: case 18: case 19: case 21: case 24: case 27:
-        return true;
+    case 1: case 2: case 3: case 4: case 5: case 8: case 9: case 11: case 14: case 18: case 19: case 21: case 24:
+    case 27:
+        return true; // (of type 8, only weather and water stations)
     default: return false;
     }
 }

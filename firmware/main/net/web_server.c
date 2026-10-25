@@ -495,7 +495,8 @@ static esp_err_t vessels_get(httpd_req_t *req)
             cJSON_AddBoolToObject(o, "virtual", v->aton_flags & AIS_ATON_VIRTUAL);
             cJSON_AddBoolToObject(o, "off_position", v->aton_flags & AIS_ATON_OFF_POS);
         } else {
-            cJSON_AddStringToObject(o, "type", v->cls == AIS_CLASS_SAR ? "SAR aircraft" : ais_ship_type_str(v->ship_type));
+            cJSON_AddStringToObject(o, "type", v->cls == AIS_CLASS_SAR ? "SAR aircraft"
+                                               : vessel_is_aircraft(v) ? "Aircraft" : ais_ship_type_str(v->ship_type));
         }
         if (v->fields & AIS_F_ALT) cJSON_AddNumberToObject(o, "alt_m", v->alt_m);
         cJSON_AddNumberToObject(o, "age_s", (now - v->last_heard_us) / 1000000);

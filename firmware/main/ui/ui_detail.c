@@ -66,7 +66,7 @@ static void refresh(void)
 
     if (v.name[0]) lv_label_set_text(s_title, v.name);
     else lv_label_set_text_fmt(s_title, "MMSI %lu", (unsigned long)v.mmsi);
-    bool aton = v.cls == AIS_CLASS_ATON, sar = v.cls == AIS_CLASS_SAR;
+    bool aton = v.cls == AIS_CLASS_ATON, sar = vessel_is_aircraft(&v);
     lv_obj_set_style_bg_color(s_swatch, aton ? lv_color_hex(0xC0289A) : sar ? lv_color_hex(0xFF8A1F)
                                                                            : ui_ship_color(v.ship_type), 0);
 
@@ -80,7 +80,7 @@ static void refresh(void)
         set_row(ROW_STATUS, "%s%s", v.aton_flags & AIS_ATON_VIRTUAL ? "Virtual (AIS only)" : "On station",
                 v.aton_flags & AIS_ATON_OFF_POS ? ", #f2545b OFF POSITION#" : "");
     } else if (sar) {
-        set_row(ROW_TYPE, "SAR aircraft");
+        set_row(ROW_TYPE, v.cls == AIS_CLASS_SAR ? "SAR aircraft" : "Aircraft");
         if (v.fields & AIS_F_ALT) set_row(ROW_STATUS, "Altitude %.0f ft%s", v.alt_m * 3.28084f, v.alt_m >= 4094 ? "+" : "");
         else set_row(ROW_STATUS, "%s", na);
     } else {

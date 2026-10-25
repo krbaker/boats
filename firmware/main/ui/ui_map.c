@@ -12,6 +12,7 @@
 
 #include "geo.h"
 #include "map_tiles.h"
+#include "met_db.h"
 #include "nmea_client.h"
 #include "sdr_probe.h"
 #include "settings.h"
@@ -72,6 +73,7 @@ static const float k_default_radii[] = {0.5f, 1.0f, 2.0f, 4.0f, 10.0f};
 typedef struct {
     uint32_t mmsi;
     int16_t x, y, r;
+    int16_t met;            // a weather station: its index in s_met; -1 for a target
 } hit_t;
 
 // Where a vessel ended up on screen, for placing its label afterwards.
@@ -132,6 +134,8 @@ static pill_t s_pills[PILL_COUNT];
 
 static vessel_t *s_vessels;
 static int s_nvessels;
+static met_station_t s_met[MET_MAX];   // weather stations heard over AIS
+static int s_nmet;
 static hit_t *s_hits;
 static int s_nhits;
 static placed_t *s_placed;
@@ -902,7 +906,7 @@ static bool beacon_active(const vessel_t *v);
 static bool vessel_passes_filter(const vessel_t *v)
 {
     const vessel_filter_t *f = &s_filter;
-    if (v->cls == AIS_CLASS_ATON || v->cls == AIS_CLASS_SAR || is_beacon(v->mmsi)) return true; // the filters are for vessels
+    if (v->cls == AIS_CLASS_ATON || vessel_is_aircraft(v) || is_beacon(v->mmsi)) return true; // the filters are for vessels
     if (f->min_len_ft) {
         if ((v->fields & AIS_F_DIM) && v->dim_a + v->dim_b > 0) {
             if ((v->dim_a + v->dim_b) * 3.28084f < f->min_len_ft) return false;
@@ -946,7 +950,7 @@ static float vessel_layer(const vessel_t *v, float prio, int64_t now_us)
     // Marks at the very bottom; aircraft, then beacons, on top of everything.
     if (is_beacon(v->mmsi)) return 4000000.0f + prio;
     if (v->cls == AIS_CLASS_ATON) return -1000000.0f + prio;
-    if (v->cls == AIS_CLASS_SAR) return 3000000.0f + prio;
+    if (vessel_is_aircraft(v)) return 3000000.0f + prio;
     int tier = vessel_stale(v, now_us) ? 0 : ((v->fields & AIS_F_SOG) && v->sog_kn >= HEADING_MIN_KN) ? 2 : 1;
     return tier * 1000000.0f + prio;
 }
@@ -996,11 +1000,11 @@ static void label_text(const vessel_t *v, char *text, size_t cap)
         strlcpy(text, s_filter.label_name ? v->name : "", cap);
         return;
     }
-    if (v->cls == AIS_CLASS_SAR) {
+    if (vessel_is_aircraft(v)) {
         char name[24] = "", line2[32] = "";
         if (s_filter.label_name) {
             if (v->name[0]) strlcpy(name, v->name, sizeof(name));
-            else snprintf(name, sizeof(name), "SAR %lu", (unsigned long)v->mmsi);
+            else snprintf(name, sizeof(name), "%s %lu", v->cls == AIS_CLASS_SAR ? "SAR" : "Aircraft", (unsigned long)v->mmsi);
         }
         int n = 0;
         if (v->fields & AIS_F_ALT) n = snprintf(line2, sizeof(line2), "%.0f ft", v->alt_m * 3.28084f);
@@ -1030,6 +1034,7 @@ static void place(placed_t *pl, float x, float y, float extent, lv_opa_t opa)
     pl->opa = opa;
 
     hit_t *h = &s_hits[s_nhits++];
+    h->met = -1;
     h->mmsi = pl->v->mmsi;
     h->x = (int16_t)x;
     h->y = (int16_t)y;
@@ -1400,7 +1405,7 @@ static void draw_vessel(lv_layer_t *layer, placed_t *pl, int64_t now_us)
         draw_aton(layer, pl, x, y, opa);
         return;
     }
-    if (v->cls == AIS_CLASS_SAR) {
+    if (vessel_is_aircraft(v)) {
         draw_aircraft(layer, pl, x, y, opa);
         return;
     }
@@ -1516,6 +1521,103 @@ static void draw_labels(lv_layer_t *layer, int n)
     }
 }
 
+// ---------------------------------------------------------------------------
+// Weather stations heard over AIS: a station circle and a wind barb
+// ---------------------------------------------------------------------------
+
+#define BARB_STAFF_PX   36      // the staff, from the circle's edge out towards where the wind comes from
+#define BARB_FULL_PX    15      // a 10 kn barb (5 kn: half), 50 kn: a pennant
+#define BARB_STEP_PX    6
+#define STATION_R       6
+
+// Each line twice: dark and wider under, light over, to read on any background.
+static void barb_line(lv_layer_t *layer, lv_point_precise_t a, lv_point_precise_t b, lv_opa_t opa, int pass)
+{
+    draw_line(layer, a, b, pass ? lv_color_white() : lv_color_hex(0x101010), pass ? 2 : 5, opa);
+}
+
+static void draw_barb(lv_layer_t *layer, float x, float y, const ais_met_t *m, lv_opa_t opa)
+{
+    // Speeds to the nearest 5 kn, as barbs are drawn; under 2.5 kn is calm: a ring round the station.
+    int kn = (int)lroundf(m->wind_kn / 5.0f) * 5;
+    float d = m->wind_dir * (float)M_PI / 180;
+    lv_point_precise_t u = {sinf(d), -cosf(d)};                  // out from the station, into the wind
+    float side = m->lat < 0 ? -1.0f : 1.0f;                     // barbs on the right in the north, left in the south
+    lv_point_precise_t r = {cosf(d) * side, sinf(d) * side};
+    for (int pass = 0; pass < 2; pass++) {
+        if (kn == 0) {
+            lv_draw_arc_dsc_t a;
+            lv_draw_arc_dsc_init(&a);
+            a.center = (lv_point_t){(int32_t)x, (int32_t)y};
+            a.radius = STATION_R + 6 + (pass ? 0 : 2);
+            a.width = pass ? 2 : 5;
+            a.start_angle = 0;
+            a.end_angle = 360;
+            a.color = pass ? lv_color_white() : lv_color_hex(0x101010);
+            a.opa = opa;
+            lv_draw_arc(layer, &a);
+            continue;
+        }
+        float len = STATION_R + BARB_STAFF_PX;
+        lv_point_precise_t base = {x + u.x * STATION_R, y + u.y * STATION_R}, tip = {x + u.x * len, y + u.y * len};
+        barb_line(layer, base, tip, opa, pass);
+        // Feathers from the far end inwards: pennants (50), barbs (10), a half (5).
+        float at = len;
+        int left = kn;
+        // A feather leaves the staff at `at` and slants out at 70°, away from the station.
+        #define FEATHER(l) (lv_point_precise_t){x + u.x * at + (r.x * 0.94f + u.x * 0.34f) * (l), \
+                                                 y + u.y * at + (r.y * 0.94f + u.y * 0.34f) * (l)}
+        while (left >= 50) {
+            lv_point_precise_t p0 = {x + u.x * at, y + u.y * at}, p1 = {x + u.x * (at - 8), y + u.y * (at - 8)};
+            lv_point_precise_t tipf = FEATHER(BARB_FULL_PX);
+            if (pass) draw_triangle(layer, p0, tipf, p1, lv_color_white(), opa);
+            barb_line(layer, p0, tipf, opa, pass);
+            barb_line(layer, tipf, p1, opa, pass);
+            at -= 8 + BARB_STEP_PX / 2;
+            left -= 50;
+        }
+        for (; left >= 10; left -= 10, at -= BARB_STEP_PX) {
+            barb_line(layer, (lv_point_precise_t){x + u.x * at, y + u.y * at}, FEATHER(BARB_FULL_PX), opa, pass);
+        }
+        if (left >= 5) {
+            if (at > len - 1) at -= BARB_STEP_PX; // a lone half barb sits a step in from the end
+            barb_line(layer, (lv_point_precise_t){x + u.x * at, y + u.y * at}, FEATHER(BARB_FULL_PX / 2.0f), opa, pass);
+        }
+        #undef FEATHER
+    }
+}
+
+static void draw_met_stations(lv_layer_t *layer, int64_t now)
+{
+    for (int i = 0; i < s_nmet; i++) {
+        const ais_met_t *m = &s_met[i].m;
+        if (!(m->fields & AIS_MET_POS)) continue;
+        float x, y;
+        geo_project(&s_view.bbox, UI_SIZE, UI_SIZE, m->lat, m->lon, &x, &y);
+        float dx = x - UI_CENTER, dy = y - UI_CENTER;
+        if (dx * dx + dy * dy > (float)(UI_CENTER + 40) * (UI_CENTER + 40)) continue;
+        lv_opa_t opa = now - s_met[i].last_us > (int64_t)MET_STALE_S * 1000000 ? LV_OPA_50 : LV_OPA_COVER;
+        if (m->fields & AIS_MET_WIND) draw_barb(layer, x, y, m, opa);
+        // The station: an open circle (filled dark, so it shows on light water too).
+        lv_draw_rect_dsc_t c;
+        lv_draw_rect_dsc_init(&c);
+        c.radius = LV_RADIUS_CIRCLE;
+        c.bg_color = UI_COLOR_BG;
+        c.bg_opa = opa;
+        c.border_color = lv_color_white();
+        c.border_width = 2;
+        c.border_opa = opa;
+        c.outline_color = lv_color_hex(0x101010);
+        c.outline_width = 1;
+        c.outline_opa = opa;
+        lv_area_t a = {(int32_t)x - STATION_R, (int32_t)y - STATION_R, (int32_t)x + STATION_R, (int32_t)y + STATION_R};
+        lv_draw_rect(layer, &c, &a);
+
+        hit_t *h = &s_hits[s_nhits++];
+        *h = (hit_t){.mmsi = s_met[i].mmsi, .x = (int16_t)x, .y = (int16_t)y, .r = HIT_RADIUS_MIN, .met = (int16_t)i};
+    }
+}
+
 static void overlay_draw_cb(lv_event_t *e)
 {
     lv_layer_t *layer = lv_event_get_layer(e);
@@ -1530,7 +1632,8 @@ static void overlay_draw_cb(lv_event_t *e)
         float prio = vessel_priority(v, now);
         s_placed[n++] = (placed_t){.v = v, .prio = prio, .layer = vessel_layer(v, prio, now), .labelled = pass};
     }
-    // Bottom layer first.
+    // Bottom layer first: the weather stations, then the targets.
+    draw_met_stations(layer, now);
     qsort(s_placed, n, sizeof(s_placed[0]), placed_cmp);
     for (int i = 0; i < n; i++) draw_vessel(layer, &s_placed[i], now);
     draw_labels(layer, n);
@@ -1604,7 +1707,9 @@ static void overlay_click_cb(lv_event_t *e)
             best_d2 = d2;
         }
     }
-    if (best >= 0) ui_show_detail(s_hits[best].mmsi);
+    if (best < 0) return;
+    if (s_hits[best].met >= 0) ui_met_open(&s_met[s_hits[best].met]);
+    else ui_show_detail(s_hits[best].mmsi);
 }
 
 // ---------------------------------------------------------------------------
@@ -1700,6 +1805,7 @@ static void refresh_timer_cb(lv_timer_t *t)
     if (bits & SETTINGS_EV_CENTER) view_go_home();
 
     s_nvessels = vessel_db_snapshot(s_vessels, VESSEL_MAX);
+    s_nmet = met_db_snapshot(s_met, MET_MAX);
     update_distress();
     if (lv_screen_active() == s_scr) lv_obj_invalidate(s_overlay);
     update_border_text();
@@ -1715,7 +1821,7 @@ static void zoom_out(void) { set_zoom(s_zoom + 1); }
 lv_obj_t *ui_map_create(void)
 {
     s_vessels = heap_caps_malloc(VESSEL_MAX * sizeof(vessel_t), MALLOC_CAP_SPIRAM);
-    s_hits = heap_caps_malloc(VESSEL_MAX * sizeof(hit_t), MALLOC_CAP_SPIRAM);
+    s_hits = heap_caps_malloc((VESSEL_MAX + MET_MAX) * sizeof(hit_t), MALLOC_CAP_SPIRAM);
     s_placed = heap_caps_malloc(VESSEL_MAX * sizeof(placed_t), MALLOC_CAP_SPIRAM);
     s_label_order = heap_caps_malloc(VESSEL_MAX * sizeof(placed_t *), MALLOC_CAP_SPIRAM);
     s_label_areas = heap_caps_malloc(VESSEL_MAX * sizeof(lv_area_t), MALLOC_CAP_SPIRAM);
@@ -1806,6 +1912,7 @@ void ui_map_set_filter(const vessel_filter_t *f)
 void ui_map_on_show(void)
 {
     s_nvessels = vessel_db_snapshot(s_vessels, VESSEL_MAX);
+    s_nmet = met_db_snapshot(s_met, MET_MAX);
     update_distress();
     lv_obj_invalidate(s_overlay);
 }

@@ -10,6 +10,7 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "map_store.h"
+#include "met_db.h"
 #include "tide.h"
 #include "vessel_cache.h"
 
@@ -128,6 +129,7 @@ void vessel_db_init(void)
     s_vessels = heap_caps_calloc(VESSEL_MAX, sizeof(vessel_t), MALLOC_CAP_SPIRAM);
     assert(s_vessels);
     s_lock = xSemaphoreCreateMutex();
+    met_db_init();
     xTaskCreate(cache_task, "vessel_cache", 4096, NULL, 2, NULL);
 }
 
@@ -222,6 +224,10 @@ uint32_t vessel_db_safety_generation(void)
 void vessel_db_update(const ais_report_t *r, rx_source_t src)
 {
     if (r->mmsi == 0) return;
+    if (r->nmet) { // weather and water stations (type 8): kept apart, not targets
+        for (int i = 0; i < r->nmet; i++) met_db_update(r->mmsi, &r->met[i]);
+        return;
+    }
     if (r->fields & AIS_F_TEXT) { // a safety broadcast: kept apart, not a target's report
         add_safety_msg(r->mmsi, r->text, ais_safety_kind(r->mmsi, r->text));
         return;

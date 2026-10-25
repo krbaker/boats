@@ -47,6 +47,55 @@ typedef enum {
 #define AIS_ATON_BUOY_N         20
 #define AIS_ATON_LIGHT_VESSEL   31
 
+// Weather and water readings from a station (type 8: the international
+// meteorological/hydrological message, DAC 1 FI 31, or the US environmental
+// message, DAC 367 FI 33). Bits in ais_met_t.fields mark what's there.
+#define AIS_MET_POS         (1u << 0)
+#define AIS_MET_NAME        (1u << 1)
+#define AIS_MET_TIME        (1u << 2)   // day, hour, minute
+#define AIS_MET_WIND        (1u << 3)   // wind_kn, wind_dir
+#define AIS_MET_GUST        (1u << 4)   // gust_kn (gust_dir if < 360)
+#define AIS_MET_AIR_TEMP    (1u << 5)
+#define AIS_MET_DEW         (1u << 6)
+#define AIS_MET_HUMIDITY    (1u << 7)
+#define AIS_MET_PRESSURE    (1u << 8)   // pressure_hpa, pressure_trend
+#define AIS_MET_VIS         (1u << 9)
+#define AIS_MET_WATER_LEVEL (1u << 10)  // water_m, water_trend
+#define AIS_MET_CURRENT     (1u << 11)
+#define AIS_MET_WAVES       (1u << 12)  // wave_m (wave_s, wave_dir if known)
+#define AIS_MET_SWELL       (1u << 13)
+#define AIS_MET_WATER_TEMP  (1u << 14)
+#define AIS_MET_SALINITY    (1u << 15)
+#define AIS_MET_SEA_STATE   (1u << 16)
+
+#define AIS_MET_SITE_IMO    0xff        // the international message: one station, no site number
+#define AIS_MET_SITES       4           // sites one message can carry (the US message's reports, merged)
+
+typedef enum { AIS_TREND_STEADY, AIS_TREND_FALLING, AIS_TREND_RISING, AIS_TREND_UNKNOWN } ais_trend_t;
+
+typedef struct {
+    uint8_t site;           // the US message's site id (0-127), or AIS_MET_SITE_IMO
+    uint32_t fields;        // AIS_MET_*
+    double lat, lon;
+    char name[15];
+    uint8_t day, hour, minute;  // UTC of the reading
+    float wind_kn, gust_kn;
+    uint16_t wind_dir, gust_dir;    // degrees true, where it blows from; gust_dir 360 = not given
+    float air_c, dew_c;
+    uint8_t humidity;       // %
+    uint16_t pressure_hpa;
+    uint8_t pressure_trend, water_trend;    // ais_trend_t
+    float vis_nm;
+    float water_m;          // above the station's datum
+    float current_kn;
+    uint16_t current_dir;   // degrees true, where it flows to (360 = not given)
+    float wave_m, swell_m;
+    uint8_t wave_s, swell_s;        // period; 0 = not given
+    uint16_t wave_dir, swell_dir;   // 360 = not given
+    float water_c, salinity;        // salinity in parts per thousand
+    uint8_t sea_state;      // Beaufort 0-12
+} ais_met_t;
+
 typedef struct {
     uint32_t mmsi;
     uint8_t msg_type;
@@ -72,6 +121,8 @@ typedef struct {
         uint8_t month, day, hour, minute, second;
     } utc;                  // a base station's clock
     char text[162];         // safety broadcast (type 14): up to 161 characters
+    uint8_t nmet;           // type 8 weather stations: how many of met[] are filled
+    ais_met_t met[AIS_MET_SITES];
 } ais_report_t;
 
 // What a safety broadcast is (ais_safety_kind).

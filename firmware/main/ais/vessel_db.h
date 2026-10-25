@@ -54,6 +54,14 @@ bool vessel_db_get(uint32_t mmsi, vessel_t *out);
 // Vessels and aircraft (not aids to navigation).
 int vessel_db_count(void);
 
+// An aircraft: one sending SAR aircraft reports (type 9), or with an aircraft
+// MMSI (111 + country code + 3 digits) whatever it sends. Only type 9 senders
+// are treated as SAR.
+static inline bool vessel_is_aircraft(const vessel_t *v)
+{
+    return v->cls == AIS_CLASS_SAR || v->mmsi / 1000000 == 111;
+}
+
 // Safety broadcasts (AIS type 14), the latest SAFETY_MSG_MAX. A repeat of the
 // same text from the same sender (beacons send theirs every minute) is the
 // same entry, counted.

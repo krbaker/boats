@@ -408,6 +408,60 @@ int vessel_db_safety_msgs(safety_msg_t *out, int max)
 }
 uint32_t vessel_db_safety_generation(void) { return 1; }
 
+// Weather stations heard over AIS: calm, 15 kn, and 65 kn (a pennant), near the centre.
+static met_station_t k_met[3];
+static int met_stations(void)
+{
+    static const struct { const char *name; float dn, de, kn, gust; int dir; } k[] = {
+        {"ALKI POINT", 0.10f, -0.20f, 15, 22, 315}, {"", -0.12f, -0.25f, 1, 0, 0}, {"STORM BUOY", 0.18f, 0.20f, 65, 80, 200},
+    };
+    for (int i = 0; i < 3; i++) {
+        met_station_t *st = &k_met[i];
+        memset(st, 0, sizeof(*st));
+        st->mmsi = 3669990 + i;
+        st->m.site = i == 1 ? AIS_MET_SITE_IMO : 5 + i;
+        st->m.lat = CENTER_LAT + k[i].dn / 60.0;
+        st->m.lon = CENTER_LON + k[i].de / 60.0 / cos(CENTER_LAT * M_PI / 180);
+        st->m.wind_kn = k[i].kn;
+        st->m.gust_kn = k[i].gust;
+        st->m.wind_dir = (uint16_t)k[i].dir;
+        st->m.fields = AIS_MET_POS | AIS_MET_WIND | AIS_MET_GUST | AIS_MET_TIME;
+        if (k[i].name[0]) {
+            strcpy(st->m.name, k[i].name);
+            st->m.fields |= AIS_MET_NAME;
+        }
+        time_t now = time(NULL);
+        struct tm tm;
+        gmtime_r(&now, &tm);
+        st->m.day = tm.tm_mday, st->m.hour = tm.tm_hour, st->m.minute = tm.tm_min;
+        if (i == 0) {
+            st->m.air_c = 11.5f, st->m.humidity = 82, st->m.pressure_hpa = 1012, st->m.pressure_trend = AIS_TREND_FALLING;
+            st->m.water_m = 2.31f, st->m.water_trend = AIS_TREND_RISING, st->m.water_c = 10.8f, st->m.vis_nm = 6.5f;
+            st->m.fields |= AIS_MET_AIR_TEMP | AIS_MET_HUMIDITY | AIS_MET_PRESSURE | AIS_MET_WATER_LEVEL |
+                            AIS_MET_WATER_TEMP | AIS_MET_VIS;
+        }
+        st->last_us = esp_timer_get_time() - 120 * 1000000LL;
+    }
+    return 3;
+}
+int met_db_snapshot(met_station_t *out, int max)
+{
+    int n = met_stations();
+    memcpy(out, k_met, n * sizeof(*out));
+    return n;
+}
+bool met_db_get(uint32_t mmsi, uint8_t site, double lat, double lon, met_station_t *out)
+{
+    met_stations();
+    for (int i = 0; i < 3; i++) {
+        if (k_met[i].mmsi == mmsi) {
+            *out = k_met[i];
+            return true;
+        }
+    }
+    return false;
+}
+
 static void make_vessel(int i, vessel_t *v)
 {
     if (i == VESSELS_N + MARKS_N + 1) {
@@ -722,5 +776,13 @@ int main(int argc, char **argv)
     ui_safety_init();
     run_ms(1200);
     snap("safety_popup");
+    // Weather stations, and one's readings.
+    lv_obj_clean(lv_layer_top());
+    run_ms(1100);
+    snap("map_met");
+    met_stations();
+    ui_met_open(&k_met[0]);
+    run_ms(1100);
+    snap("met_popup");
     return 0;
 }
