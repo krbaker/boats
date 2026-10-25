@@ -18,7 +18,7 @@ typedef enum {
     AIS_CLASS_B,
     AIS_CLASS_ATON,     // aid to navigation: buoy, beacon, light (type 21)
     AIS_CLASS_SAR,      // search-and-rescue aircraft (type 9)
-    AIS_CLASS_BASE,     // shore base station (type 4): not a target, only its clock is used
+    AIS_CLASS_BASE,     // a station's clock (type 4 base station, type 11 UTC response): not a target
 } ais_class_t;
 
 // Bits in ais_report_t.fields marking which values are present.

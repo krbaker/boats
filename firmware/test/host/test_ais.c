@@ -217,6 +217,12 @@ static void test_type4_base(void)
     CHECK(r.fields & AIS_F_UTC);
     CHECK(r.utc.year == 2007 && r.utc.month == 5 && r.utc.day == 14);
     CHECK(r.utc.hour == 19 && r.utc.minute == 57 && r.utc.second == 39);
+
+    // Type 11, a UTC/date response, has the same layout: the same payload with ';' (11) for '4'.
+    CHECK(ais_decode_payload(";03OviQuMGCqWrRO9>E6fE700@GO", 0, &r) == AIS_RESULT_REPORT);
+    CHECK(r.msg_type == 11 && r.mmsi == 3669702 && r.cls == AIS_CLASS_BASE);
+    CHECK((r.fields & AIS_F_UTC) && r.utc.year == 2007 && r.utc.second == 39);
+    CHECK(ais_msg_type_used(11));
 }
 
 static void test_type_counts(void)

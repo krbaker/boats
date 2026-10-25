@@ -165,7 +165,7 @@ static time_t wall_now(void)
 void vessel_db_update(const ais_report_t *r, rx_source_t src)
 {
     if (r->mmsi == 0) return;
-    if (r->cls == AIS_CLASS_BASE) { // not a target: its clock, for when the internet's isn't there
+    if (r->cls == AIS_CLASS_BASE) { // a clock (types 4, 11), not a target: for when the internet's isn't there
         if (r->fields & AIS_F_UTC) {
             clock_set_from_ais(r->utc.year, r->utc.month, r->utc.day, r->utc.hour, r->utc.minute, r->utc.second);
         }

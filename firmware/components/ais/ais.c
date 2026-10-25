@@ -339,7 +339,8 @@ ais_result_t ais_decode_payload(const char *payload, int fill_bits, ais_report_t
         return AIS_RESULT_REPORT;
     }
 
-    case 4: { // base station report: only its clock is used
+    case 4:    // base station report: only its clock is used
+    case 11: { // UTC/date response (from any station): the same layout, likewise
         if (b.nbits < 168) return AIS_RESULT_UNSUPPORTED;
         out->cls = AIS_CLASS_BASE;
         uint32_t y = get_u(&b, 38, 14), mo = get_u(&b, 52, 4), d = get_u(&b, 56, 5);
@@ -486,7 +487,7 @@ const char *ais_aton_type_str(uint8_t type)
 bool ais_msg_type_used(uint8_t type)
 {
     switch (type) {
-    case 1: case 2: case 3: case 4: case 5: case 9: case 18: case 19: case 21: case 24: case 27: return true;
+    case 1: case 2: case 3: case 4: case 5: case 9: case 11: case 18: case 19: case 21: case 24: case 27: return true;
     default: return false;
     }
 }
