@@ -166,13 +166,13 @@ static time_t wall_now(void)
     return now > 1600000000 ? now : 0; // treat an unset clock as unknown
 }
 
-static void add_safety_msg(const ais_report_t *r)
+static void add_safety_msg(uint32_t mmsi, const char *text, ais_safety_t kind)
 {
     int64_t now = esp_timer_get_time();
     xSemaphoreTake(s_lock, portMAX_DELAY);
     safety_msg_t *m = NULL;
     for (int i = 0; i < s_nsafety && !m; i++) {
-        if (s_safety[i].mmsi == r->mmsi && strcmp(s_safety[i].text, r->text) == 0) m = &s_safety[i];
+        if (s_safety[i].mmsi == mmsi && strcmp(s_safety[i].text, text) == 0) m = &s_safety[i];
     }
     bool is_new = !m;
     if (!m) {
@@ -184,15 +184,15 @@ static void add_safety_msg(const ais_report_t *r)
                 if (s_safety[i].last_us < m->last_us) m = &s_safety[i];
             }
         }
-        *m = (safety_msg_t){.mmsi = r->mmsi, .kind = ais_safety_kind(r->mmsi, r->text), .first_us = now};
-        strcpy(m->text, r->text);
+        *m = (safety_msg_t){.mmsi = mmsi, .kind = kind, .first_us = now};
+        strlcpy(m->text, text, sizeof(m->text));
     }
     m->count++;
     m->last_us = now;
     m->last_wall = wall_now();
     s_safety_gen++;
     xSemaphoreGive(s_lock);
-    if (is_new) ESP_LOGW(TAG, "safety message from %lu: %s", (unsigned long)r->mmsi, r->text);
+    if (is_new) ESP_LOGW(TAG, "safety message from %lu: %s", (unsigned long)mmsi, text);
 }
 
 static int by_newest_safety(const void *a, const void *b)
@@ -223,7 +223,7 @@ void vessel_db_update(const ais_report_t *r, rx_source_t src)
 {
     if (r->mmsi == 0) return;
     if (r->fields & AIS_F_TEXT) { // a safety broadcast: kept apart, not a target's report
-        add_safety_msg(r);
+        add_safety_msg(r->mmsi, r->text, ais_safety_kind(r->mmsi, r->text));
         return;
     }
     if (r->cls == AIS_CLASS_BASE) { // a clock (types 4, 11), not a target: for when the internet's isn't there
@@ -276,6 +276,15 @@ void vessel_db_update(const ais_report_t *r, rx_source_t src)
     s_generation++;
     xSemaphoreGive(s_lock);
     if (r->cls != AIS_CLASS_ATON) update_cache(r, wall); // marks send their name every few minutes anyway
+
+    // An AIS-SART (MMSI 970...) is a distress beacon: its position reports alone
+    // are a distress message, unless it says it's testing (navigational status
+    // 15, which SARTs use for test transmissions).
+    if (r->mmsi / 1000000 == 970 && (r->fields & AIS_F_POS)) {
+        bool test = (r->fields & AIS_F_NAVSTAT) && r->nav_status == 15;
+        add_safety_msg(r->mmsi, test ? "AIS-SART in test mode" : "AIS-SART detected",
+                       test ? AIS_SAFETY_TEST : AIS_SAFETY_DISTRESS);
+    }
 }
 
 void vessel_db_expire(void)

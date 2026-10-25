@@ -26,10 +26,13 @@ static int s_ndismissed;
 static uint32_t s_gen;
 static safety_msg_t s_msgs[SAFETY_MSG_MAX];
 
-// A message's identity: its sender and text.
+// A message's identity: its sender and text. An AIS-SART's is the beacon and
+// whether it's in distress, so its position reports ("AIS-SART detected") and
+// its own "SART ACTIVE" are one popup, closed once.
 uint32_t ui_safety_msg_id(const safety_msg_t *m)
 {
     uint32_t h = 2166136261u ^ m->mmsi;
+    if (m->mmsi / 1000000 == 970) return (h * 16777619u ^ (uint32_t)m->kind) | 1;
     for (const char *p = m->text; *p; p++) h = (h ^ (unsigned char)*p) * 16777619u;
     return h | 1; // never 0: that means "no popup"
 }
