@@ -5,7 +5,6 @@
 #include <string.h>
 
 #include "ais_fwd.h"
-#include "log_save.h"
 #include "nmea_client.h"
 #include "sdr_probe.h"
 #include "tide.h"
@@ -14,15 +13,12 @@
 #include "wifi_mgr.h"
 
 #define CONFIRM_TIMEOUT_MS 4000
-#define SAVE_RESULT_MS     5000    // how long the save button shows how it went
 #define TABS_W             540     // the tab box; its corners just fit inside the round screen
 #define TABS_H             560
 #define TABS_Y             (-16)   // offset of its centre from the screen's
 
 static lv_obj_t *s_scr, *s_tabs, *s_info, *s_ap_box, *s_ap_ssid, *s_ap_pass, *s_ap_url, *s_ap_btn, *s_ap_lbl;
-static lv_obj_t *s_pass_cap, *s_pass_btn, *s_save_btn, *s_save_lbl;
-static bool s_saving;            // a save started here hasn't finished
-static uint32_t s_saved_at;      // lv_tick it finished, 0 = not showing a result
+static lv_obj_t *s_pass_cap, *s_pass_btn;
 static uint32_t s_pass_confirm_since; // 0 = not awaiting confirmation of a new AP password
 
 static void back_cb(lv_event_t *e)
@@ -55,33 +51,6 @@ static void ap_cb(lv_event_t *e)
     wifi_mgr_status_t w;
     wifi_mgr_get_status(&w);
     wifi_mgr_ap(!w.ap_active);
-}
-
-static void refresh(void);
-
-// The log to the microSD card, in the background.
-static void save_cb(lv_event_t *e)
-{
-    if (s_saving) return;
-    s_saving = true;
-    s_saved_at = 0;
-    log_save_start();
-    refresh();
-}
-
-static void refresh_save_btn(void)
-{
-    char msg[64], bl[80] = "Save logs";
-    log_save_state_t st = log_save_state(msg, sizeof(msg));
-    if (s_saving && st != LOG_SAVE_BUSY) {
-        s_saving = false;
-        s_saved_at = lv_tick_get() | 1;
-    }
-    if (s_saved_at && lv_tick_elaps(s_saved_at) > SAVE_RESULT_MS) s_saved_at = 0;
-    if (s_saving) strcpy(bl, "Saving...");
-    else if (s_saved_at && st == LOG_SAVE_OK) strcpy(bl, "#3ccf7a Saved to card#");
-    else if (s_saved_at) snprintf(bl, sizeof(bl), "#f2545b %s#", msg);
-    if (strcmp(lv_label_get_text(s_save_lbl), bl) != 0) lv_label_set_text(s_save_lbl, bl);
 }
 
 static const char *net_text(const wifi_mgr_status_t *w)
@@ -132,7 +101,6 @@ static void refresh(void)
     if (strcmp(lv_label_get_text(s_ap_lbl), bl) != 0) lv_label_set_text(s_ap_lbl, bl);
     if (w.ap_active && !w.ap_left_s) lv_obj_add_state(s_ap_btn, LV_STATE_DISABLED);
     else lv_obj_remove_state(s_ap_btn, LV_STATE_DISABLED);
-    refresh_save_btn();
 
     len += snprintf(buf + len, sizeof(buf) - len, "\nAIS: %s%s%s", nmea_state_str(n.state),
                     n.host[0] ? " to " : "", n.host);
@@ -209,7 +177,7 @@ lv_obj_t *ui_netinfo_create(void)
     lv_obj_set_style_bg_color(bar, UI_COLOR_PANEL, 0);
     lv_obj_set_style_text_font(bar, &lv_font_montserrat_20, 0);
 
-    // Network: what it's connected to, the access point, saving the log.
+    // Network: what it's connected to, and the access point.
     lv_obj_t *tab = lv_tabview_add_tab(s_tabs, "Network");
     lv_obj_set_flex_flow(tab, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(tab, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
@@ -252,23 +220,11 @@ lv_obj_t *ui_netinfo_create(void)
     lv_label_set_recolor(s_info, true);
     lv_obj_set_style_text_line_space(s_info, 6, 0);
 
-    // Side by side: the access point and saving the log.
-    row = lv_obj_create(tab);
-    lv_obj_remove_style_all(row);
-    lv_obj_set_size(row, lv_pct(100), LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    s_ap_btn = ui_round_button(row, "", 240, 64);
+    s_ap_btn = ui_round_button(tab, "", 320, 64);
     s_ap_lbl = lv_obj_get_child(s_ap_btn, 0);
-    lv_obj_set_style_text_font(s_ap_lbl, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_font(s_ap_lbl, &lv_font_montserrat_20, 0);
     lv_obj_set_style_opa(s_ap_btn, LV_OPA_50, LV_STATE_DISABLED);
     lv_obj_add_event_cb(s_ap_btn, ap_cb, LV_EVENT_CLICKED, NULL);
-
-    s_save_btn = ui_round_button(row, "Save logs", 240, 64);
-    s_save_lbl = lv_obj_get_child(s_save_btn, 0);
-    lv_obj_set_style_text_font(s_save_lbl, &lv_font_montserrat_16, 0);
-    lv_label_set_recolor(s_save_lbl, true);
-    lv_obj_add_event_cb(s_save_btn, save_cb, LV_EVENT_CLICKED, NULL);
 
     ui_settings_build(s_tabs);
     // Each tab as wide as its name needs (equal widths cut "Retransmit" short).

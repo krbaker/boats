@@ -10,6 +10,7 @@
 #include "esp_system.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "log_save.h"
 #include "sdr_probe.h"
 #include "settings.h"
 #include "ui.h"
@@ -17,6 +18,7 @@
 
 #define CONFIRM_MS      4000    // a second tap must come within this
 #define PPM_SAVE_MS     1000    // the frequency correction is saved once the taps stop
+#define SAVE_RESULT_MS  5000    // how long Save logs shows how it went
 #define CAP_STEP_S      10
 #define CAP_MAX_S       600
 
@@ -52,12 +54,14 @@ static const char *const k_zones[][2] = {
 static lv_obj_t *s_net_sw, *s_net_note, *s_sdr_sw, *s_gain_dd, *s_ppm_lbl, *s_bias_sw, *s_bias_note;
 static lv_obj_t *s_fwd_sw[FWD_DEST_MAX], *s_fwd_dd[FWD_DEST_MAX], *s_fwd_name[FWD_DEST_MAX], *s_fwd_note[FWD_DEST_MAX];
 static lv_obj_t *s_bright_slider, *s_bright_lbl, *s_tz_dd;
-static lv_obj_t *s_restart_lbl, *s_forget_lbl, *s_cap_lbl, *s_cap_btn, *s_cap_note;
+static lv_obj_t *s_save_lbl, *s_restart_lbl, *s_forget_lbl, *s_cap_lbl, *s_cap_btn, *s_cap_note;
 static uint32_t s_bias_confirm, s_restart_confirm, s_forget_confirm; // lv_tick of the first tap, 0 = none
 static uint32_t s_fwd_refused[FWD_DEST_MAX];                         // lv_tick a switch-on was refused
 static int16_t s_ppm;                                                 // shown; saved after PPM_SAVE_MS
 static uint32_t s_ppm_changed;                                        // 0 = nothing to save
 static int s_cap_seconds = 60;
+static bool s_saving;            // a log save started here hasn't finished
+static uint32_t s_saved_at;      // lv_tick it finished, 0 = not showing a result
 static char s_cap_error[96];
 
 // ---------------------------------------------------------------------------
@@ -370,6 +374,16 @@ static void build_display(lv_obj_t *tab)
 // System
 // ---------------------------------------------------------------------------
 
+// The log to the microSD card, in the background.
+static void save_cb(lv_event_t *e)
+{
+    if (s_saving) return;
+    s_saving = true;
+    s_saved_at = 0;
+    log_save_start();
+    lv_label_set_text(s_save_lbl, "Saving...");
+}
+
 static void restart_task(void *arg)
 {
     vTaskDelay(pdMS_TO_TICKS(300)); // let the button redraw
@@ -408,6 +422,7 @@ static void build_system(lv_obj_t *tab)
 {
     column_tab(tab);
     lv_obj_set_flex_align(tab, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    s_save_lbl = lv_obj_get_child(button(tab, "Save logs", 320, save_cb, NULL, false), 0);
     s_restart_lbl = lv_obj_get_child(button(tab, "", 320, restart_cb, NULL, false), 0);
     s_forget_lbl = lv_obj_get_child(button(tab, "", 320, forget_cb, NULL, false), 0);
 
@@ -511,6 +526,19 @@ void ui_settings_refresh(void)
     if (strcmp(lv_label_get_text(s_restart_lbl), "Restarting...") != 0)
         set_text(s_restart_lbl, s_restart_confirm ? "#f2545b Tap again to restart#" : "Restart display");
     set_text(s_forget_lbl, s_forget_confirm ? "#f2545b Tap again to forget all#" : "Forget all vessels");
+
+    char msg[64];
+    log_save_state_t ls = log_save_state(msg, sizeof(msg));
+    if (s_saving && ls != LOG_SAVE_BUSY) {
+        s_saving = false;
+        s_saved_at = lv_tick_get() | 1;
+    }
+    if (s_saved_at && lv_tick_elaps(s_saved_at) > SAVE_RESULT_MS) s_saved_at = 0;
+    if (s_saving) strcpy(buf, "Saving...");
+    else if (s_saved_at && ls == LOG_SAVE_OK) strcpy(buf, "#3ccf7a Saved to card#");
+    else if (s_saved_at) snprintf(buf, sizeof(buf), "#f2545b %s#", msg);
+    else strcpy(buf, "Save logs");
+    set_text(s_save_lbl, buf);
 
     sdr_status_t r;
     sdr_get_status(&r);
