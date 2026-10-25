@@ -18,11 +18,17 @@
 
 static const char *TAG = "tide";
 
-#define MAX_EVENTS      32
-#define MAX_SAMPLES     128     // half-hourly curve: 56 h = 112 samples
-#define REFRESH_S       (6 * 3600)
+// Predictions don't change, so they're fetched every 72 h, each time far enough
+// ahead to last until the next fetch. The windows start at midnight UTC of the
+// day they're asked from, up to 24 h before that.
+#define REFRESH_S       (72 * 3600)
 #define RETRY_S         300
-#define RESP_MAX        16384
+#define EVENTS_RANGE_H  144     // from 12 h before the fetch: past its 72 h, plus a day of highs and lows ahead
+#define CURVE_RANGE_H   132     // from 7 h before: past its 72 h, plus the graph's 24 h ahead
+#define CURVE_PAST_S    (7 * 3600)  // tide_curve() hands out the curve from this far back (the graph shows 6 h)
+#define MAX_EVENTS      32      // 144 h is about 24
+#define MAX_SAMPLES     280     // half-hourly: 132 h is 265
+#define RESP_MAX        24576
 
 static tide_event_t s_events[MAX_EVENTS];
 static tide_sample_t s_samples[MAX_SAMPLES];
@@ -150,9 +156,9 @@ static bool fetch_predictions(const char *station)
     char url[320], err[64] = "";
     snprintf(url, sizeof(url),
              "https://api.tidesandcurrents.noaa.gov/api/prod/datagetter?product=predictions&application=ais_display"
-             "&begin_date=%04d%02d%02d&range=72&datum=MLLW&station=%s&time_zone=gmt&units=english&interval=hilo"
+             "&begin_date=%04d%02d%02d&range=%d&datum=MLLW&station=%s&time_zone=gmt&units=english&interval=hilo"
              "&format=json",
-             utc.tm_year + 1900, utc.tm_mon + 1, utc.tm_mday, station);
+             utc.tm_year + 1900, utc.tm_mon + 1, utc.tm_mday, EVENTS_RANGE_H, station);
 
     char *body = http_get(url, err, sizeof(err));
     cJSON *root = body ? cJSON_Parse(body) : NULL;
@@ -198,18 +204,18 @@ static bool fetch_predictions(const char *station)
     return n > 0;
 }
 
-// Half-hourly predictions from 7 h ago for 56 h, for the tide graph.
+// Half-hourly predictions from 7 h ago for CURVE_RANGE_H, for the tide graph.
 static void fetch_curve(const char *station)
 {
-    time_t from = time(NULL) - 7 * 3600;
+    time_t from = time(NULL) - CURVE_PAST_S;
     struct tm utc;
     gmtime_r(&from, &utc);
     char url[320], err[64] = "";
     snprintf(url, sizeof(url),
              "https://api.tidesandcurrents.noaa.gov/api/prod/datagetter?product=predictions&application=ais_display"
-             "&begin_date=%04d%02d%02d&range=56&datum=MLLW&station=%s&time_zone=gmt&units=english&interval=30"
+             "&begin_date=%04d%02d%02d&range=%d&datum=MLLW&station=%s&time_zone=gmt&units=english&interval=30"
              "&format=json",
-             utc.tm_year + 1900, utc.tm_mon + 1, utc.tm_mday, station);
+             utc.tm_year + 1900, utc.tm_mon + 1, utc.tm_mday, CURVE_RANGE_H, station);
 
     char *body = http_get(url, err, sizeof(err));
     cJSON *root = body ? cJSON_Parse(body) : NULL;
@@ -323,9 +329,13 @@ int tide_events(tide_event_t *out, int max)
 
 int tide_curve(tide_sample_t *out, int max)
 {
+    // From just before the graph's window: the curve reaches days back and ahead.
+    time_t from = time(NULL) - CURVE_PAST_S;
     xSemaphoreTake(s_lock, portMAX_DELAY);
-    int n = s_nsamples < max ? s_nsamples : max;
-    memcpy(out, s_samples, n * sizeof(out[0]));
+    int first = 0;
+    while (first < s_nsamples && s_samples[first].t < from) first++;
+    int n = s_nsamples - first < max ? s_nsamples - first : max;
+    memcpy(out, s_samples + first, n * sizeof(out[0]));
     xSemaphoreGive(s_lock);
     return n;
 }
