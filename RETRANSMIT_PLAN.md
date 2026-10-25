@@ -1,6 +1,6 @@
 # Plan: retransmit what the dongle receives
 
-Send the AIS sentences the RTL-SDR dongle decodes on to **up to three destinations**, for example online sharing services or chart software on the boat. For each destination you pick **UDP or TCP**, enter an **IP address (or host name) and port**, and turn it on.
+Send the AIS sentences the RTL-SDR dongle decodes on to **up to five destinations**, for example online sharing services or chart software on the boat. For each destination you pick **UDP or TCP**, enter an **IP address (or host name) and port**, and turn it on.
 
 Only the dongle's sentences are sent. The network (TCP) feed is never retransmitted: it's another station's data, and sending it on would duplicate it on the sharing services, or loop it back to its source.
 
@@ -52,11 +52,11 @@ Three sets of these, saved in NVS like the rest (`fwd1_*` to `fwd3_*`):
 | `host` | IP address or host name, up to 63 characters | empty |
 | `port` | 1–65535 | empty |
 
-The web page gets a "Retransmit" section, after the RTL-SDR one, with three rows: on/off, UDP/TCP, address, port. Under each row is its status line. A row can't be turned on without a host and port.
+The web page gets a "Retransmit" section, after the RTL-SDR one, with five rows: on/off, UDP/TCP, address, port. Under each row is its status line. A row can't be turned on without a host and port.
 
 ## Status
 
-- **Data:** in `/api/status`, a `retransmit` array of three entries, each with `state`, `sent`, `sent_per_min`, `dropped`, the last error and, for TCP, how long it's been connected.
+- **Data:** in `/api/status`, a `retransmit` array of five entries, each with `state`, `sent`, `sent_per_min`, `dropped`, the last error and, for TCP, how long it's been connected.
 - **States:** `off`, `not configured`, `waiting for network`, `connecting` (TCP), `sending`, `error`.
 - **Where it shows:** on the web page, and on the display's Network screen as one line, "sending to N of M", plus the first problem if a destination isn't sending. The screen is round and already full, so one line per destination was too much.
 

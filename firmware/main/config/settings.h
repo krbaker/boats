@@ -25,7 +25,7 @@ typedef struct {
 } vessel_filter_t;
 
 // Where the dongle's sentences are retransmitted to (RETRANSMIT_PLAN.md).
-#define FWD_DEST_MAX 3
+#define FWD_DEST_MAX 5
 typedef enum { FWD_UDP, FWD_TCP } fwd_proto_t;
 
 typedef struct {

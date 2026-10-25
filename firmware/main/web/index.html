@@ -197,7 +197,7 @@
 
   <section>
     <h2>Retransmit</h2>
-    <div class="hint">Sends what the dongle decodes on to up to three places, as standard <code>!AIVDM</code>
+    <div class="hint">Sends what the dongle decodes on to up to five places, as standard <code>!AIVDM</code>
       sentences: AIS sharing services (MarineTraffic, AIS Friends, aiscatcher.org each give your station an address
       and port when you register it), or chart software such as OpenCPN. The network feed isn't sent on. TCP connects
       to the address; UDP sends each sentence as a datagram.</div>
@@ -348,7 +348,7 @@ function saveSdr() {
   saveConfig(["sdr_enabled", "sdr_gain", "sdr_ppm", "sdr_bias_tee"], "sdr_cfg_msg");
 }
 
-const FWD_N = 3;
+const FWD_N = 5; // FWD_DEST_MAX
 function buildFwdRows() {
   let html = "";
   for (let i = 0; i < FWD_N; i++) {
