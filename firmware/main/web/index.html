@@ -61,6 +61,22 @@
   </section>
 
   <section>
+    <h2>Aircraft (ADS-B)</h2>
+    <label class="check"><input id="adsb_enabled" type="checkbox"> Show aircraft from a dump1090 receiver</label>
+    <div class="row">
+      <div><label for="adsb_url">aircraft.json address</label>
+        <input id="adsb_url" placeholder="http://192.168.1.60:8080/data/aircraft.json" autocapitalize="off" spellcheck="false"></div>
+      <div style="flex:0 1 120px"><label for="adsb_range_nm">Range (nm)</label><input id="adsb_range_nm" type="number" min="1" max="250"></div>
+    </div>
+    <div class="hint">Where the receiver's web page gets its aircraft from: dump1090 (<code>--net-http-port 8080</code>)
+      serves <code>http://&lt;address&gt;:8080/data/aircraft.json</code>, dump1090-fa
+      <code>http://&lt;address&gt;/skyaware/data/aircraft.json</code>, readsb with tar1090
+      <code>http://&lt;address&gt;/tar1090/data/aircraft.json</code>. Aircraft within the range of the position show on the map.</div>
+    <button onclick="saveConfig(['adsb_enabled','adsb_url','adsb_range_nm'], 'adsb_msg')">Save</button>
+    <div class="msg" id="adsb_msg"></div>
+  </section>
+
+  <section>
     <h2>Map</h2>
     <label for="map_file">Chart set (<code>map_set.zip</code> from the map builder)</label>
     <input id="map_file" type="file" accept=".zip,application/zip">
@@ -294,7 +310,7 @@ function fillGains() {
 
 function showConfig(c) {
   cfg = c;
-  for (const k of ["net_enabled", "sdr_enabled", "sdr_bias_tee"]) {
+  for (const k of ["net_enabled", "sdr_enabled", "sdr_bias_tee", "adsb_enabled"]) {
     if (k in c && document.activeElement !== $(k)) $(k).checked = c[k];
   }
   if ("sdr_gain" in c && document.activeElement !== $("sdr_gain")) $("sdr_gain").value = String(c.sdr_gain);
@@ -302,7 +318,7 @@ function showConfig(c) {
   if (c.retransmit) showFwd(c.retransmit);
   if ("wl_key" in c) showWlChoice(c);
   for (const k of ["ais_host", "ais_port", "tide_station", "center_lat", "center_lon", "brightness", "tz_posix",
-                   "wx_zone", "wx_buoy", "wx_obs", "wl_key"]) {
+                   "wx_zone", "wx_buoy", "wx_obs", "wl_key", "adsb_url", "adsb_range_nm"]) {
     if (document.activeElement !== $(k)) $(k).value = c[k] ?? "";
   }
   if (c.ais_port === 0) $("ais_port").value = "";
@@ -319,7 +335,7 @@ function fieldValue(k) {
   const v = $(k).value.trim();
   if (k === "sdr_gain") return parseInt(v, 10);
   if (k === "sdr_ppm") return v === "" ? 0 : parseFloat(v);
-  if (["ais_port", "brightness"].includes(k)) return v === "" ? 0 : parseInt(v, 10);
+  if (["ais_port", "brightness", "adsb_range_nm"].includes(k)) return v === "" ? 0 : parseInt(v, 10);
   if (["center_lat", "center_lon"].includes(k)) return parseFloat(v);
   return v;
 }
@@ -789,6 +805,12 @@ async function pollStatus() {
         `<div class="hint">network / SDR, since start-up; greyed types aren't used</div>`);
     }
     html += row("Vessels", s.vessels);
+    const ad = s.adsb;
+    if (ad && ad.state !== "off") {
+      html += row("Aircraft", ad.state === "connected" ? `${ad.shown} within range, ${ad.heard} heard` :
+        esc(ad.state) + (ad.error ? ` (${esc(ad.error)})` : "") + (ad.last_ok_s >= 0 ? `, last data ${ago(ad.last_ok_s)}` : ""),
+        ad.state === "connected" ? "ok" : ad.state === "error" ? "bad" : "warn");
+    }
     if (s.safety && s.safety.length) {
       const who = m => (m.name ? `${esc(m.name)} (${m.mmsi})` : `MMSI ${m.mmsi}`);
       html += row("Safety messages", s.safety.map(m =>

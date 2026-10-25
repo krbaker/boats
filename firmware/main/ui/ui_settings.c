@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "adsb.h"
 #include "ais_fwd.h"
 #include "bsp/esp-bsp.h"
 #include "esp_system.h"
@@ -17,7 +18,7 @@
 #include "vessel_db.h"
 
 #define CONFIRM_MS      4000    // a second tap must come within this
-#define PPM_SAVE_MS     1000    // the frequency correction is saved once the taps stop
+#define PPM_SAVE_MS     1000    // the frequency correction (and aircraft range) is saved once the taps stop
 #define SAVE_RESULT_MS  5000    // how long Save logs shows how it went
 #define CAP_STEP_S      10
 #define CAP_MAX_S       600
@@ -51,9 +52,17 @@ static const char *const k_zones[][2] = {
 };
 #define NZONES (int)(sizeof(k_zones) / sizeof(k_zones[0]))
 
+// Aircraft range steps, nm.
+static const uint8_t k_ranges[] = {1, 2, 3, 5, 10, 15, 20, 25, 30, 40, 50, 75, 100, 150, 200, 250};
+#define NRANGES (int)(sizeof(k_ranges) / sizeof(k_ranges[0]))
+
 static lv_obj_t *s_net_sw, *s_net_note, *s_sdr_sw, *s_gain_dd, *s_ppm_lbl, *s_bias_sw, *s_bias_note;
 static lv_obj_t *s_fwd_sw[FWD_DEST_MAX], *s_fwd_dd[FWD_DEST_MAX], *s_fwd_name[FWD_DEST_MAX], *s_fwd_note[FWD_DEST_MAX];
 static lv_obj_t *s_bright_slider, *s_bright_lbl, *s_tz_dd;
+static lv_obj_t *s_adsb_sw, *s_adsb_src, *s_adsb_range_lbl, *s_adsb_note;
+static uint32_t s_adsb_refused;                                      // lv_tick a switch-on was refused
+static uint8_t s_range;                                               // shown; saved after PPM_SAVE_MS
+static uint32_t s_range_changed;                                      // 0 = nothing to save
 static lv_obj_t *s_save_lbl, *s_restart_lbl, *s_forget_lbl, *s_cap_lbl, *s_cap_btn, *s_cap_note;
 static uint32_t s_bias_confirm, s_restart_confirm, s_forget_confirm; // lv_tick of the first tap, 0 = none
 static uint32_t s_fwd_refused[FWD_DEST_MAX];                         // lv_tick a switch-on was refused
@@ -371,6 +380,57 @@ static void build_display(lv_obj_t *tab)
 }
 
 // ---------------------------------------------------------------------------
+// ADS-B
+// ---------------------------------------------------------------------------
+
+static void set_adsb(settings_t *c, intptr_t v) { c->adsb_enabled = v; }
+static void set_range(settings_t *c, intptr_t v) { c->adsb_range_nm = (uint8_t)v; }
+
+static void adsb_sw_cb(lv_event_t *e)
+{
+    lv_obj_t *sw = lv_event_get_target(e);
+    bool on = lv_obj_has_state(sw, LV_STATE_CHECKED);
+    settings_t cfg;
+    settings_get(&cfg);
+    if (on && !cfg.adsb_url[0]) { // the address is typed on the web page
+        set_checked(sw, false);
+        s_adsb_refused = lv_tick_get() | 1;
+        return;
+    }
+    change(set_adsb, on);
+}
+
+static void range_step_cb(lv_event_t *e)
+{
+    int step = (int)(intptr_t)lv_event_get_user_data(e), i = 0;
+    while (i < NRANGES - 1 && k_ranges[i] < s_range) i++; // the step at or above the range shown
+    if (step < 0 && i > 0) i--;
+    else if (step > 0 && k_ranges[i] <= s_range && i < NRANGES - 1) i++;
+    s_range = k_ranges[i];
+    s_range_changed = lv_tick_get() | 1;
+    lv_label_set_text_fmt(s_adsb_range_lbl, "%u nm", s_range);
+}
+
+static void build_adsb(lv_obj_t *tab)
+{
+    column_tab(tab);
+    s_adsb_sw = switch_row(tab, "Show aircraft", adsb_sw_cb, NULL);
+    s_adsb_src = note(tab);
+
+    lv_obj_t *r = row(tab);
+    text(r, "Range", UI_COLOR_TEXT);
+    lv_obj_t *step = row(r);
+    lv_obj_set_width(step, LV_SIZE_CONTENT);
+    button(step, LV_SYMBOL_MINUS, 56, range_step_cb, (void *)(intptr_t)-1, true);
+    s_adsb_range_lbl = text(step, "", UI_COLOR_TEXT);
+    lv_obj_set_width(s_adsb_range_lbl, 110);
+    lv_obj_set_style_text_align(s_adsb_range_lbl, LV_TEXT_ALIGN_CENTER, 0);
+    button(step, LV_SYMBOL_PLUS, 56, range_step_cb, (void *)(intptr_t)1, true);
+
+    s_adsb_note = note(tab);
+}
+
+// ---------------------------------------------------------------------------
 // System
 // ---------------------------------------------------------------------------
 
@@ -448,6 +508,7 @@ void ui_settings_build(lv_obj_t *tabs)
     build_fwd(lv_tabview_add_tab(tabs, "Retransmit"));
     build_display(lv_tabview_add_tab(tabs, "Display"));
     build_system(lv_tabview_add_tab(tabs, "System"));
+    build_adsb(lv_tabview_add_tab(tabs, "ADS-B"));
 }
 
 // Show the saved settings and how things are going (each second, and when the
@@ -519,6 +580,32 @@ void ui_settings_refresh(void)
         }
         if (lv_dropdown_get_selected(s_tz_dd) != (uint32_t)z) lv_dropdown_set_selected(s_tz_dd, z);
     }
+
+    // ADS-B
+    set_checked(s_adsb_sw, cfg.adsb_enabled);
+    if (s_adsb_refused && lv_tick_elaps(s_adsb_refused) < CONFIRM_MS) {
+        strcpy(buf, "#f2545b Enter the dump1090 address on the web page first#");
+    } else {
+        s_adsb_refused = 0;
+        if (cfg.adsb_url[0]) snprintf(buf, sizeof(buf), "From %s (set on the web page)", cfg.adsb_url);
+        else strcpy(buf, "No dump1090 address set: enter one on the web page");
+    }
+    set_text(s_adsb_src, buf);
+    if (s_range_changed && lv_tick_elaps(s_range_changed) > PPM_SAVE_MS) {
+        s_range_changed = 0;
+        change(set_range, s_range);
+    } else if (!s_range_changed) {
+        s_range = cfg.adsb_range_nm;
+    }
+    snprintf(buf, sizeof(buf), "%u nm", s_range);
+    set_text(s_adsb_range_lbl, buf);
+    adsb_status_t as;
+    adsb_get_status(&as);
+    if (as.state == ADSB_OK) snprintf(buf, sizeof(buf), "#3ccf7a Connected:# %d aircraft within range, %d heard", as.shown, as.heard);
+    else if (as.state == ADSB_ERROR) snprintf(buf, sizeof(buf), "#f2545b %s#", as.error);
+    else if (as.state == ADSB_CONNECTING) strcpy(buf, "Connecting...");
+    else strcpy(buf, "Shows aircraft from a dump1090 ADS-B receiver on the map");
+    set_text(s_adsb_note, buf);
 
     // System
     if (s_restart_confirm && lv_tick_elaps(s_restart_confirm) > CONFIRM_MS) s_restart_confirm = 0;

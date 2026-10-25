@@ -61,6 +61,10 @@ typedef struct {
     char wl_key[48];         // WeatherLink v2 API key (the secret is kept apart: settings_get_wl_secret)
     uint32_t wl_station;     // WeatherLink station id
     uint8_t wl_tx;           // that station's outdoor sensor suite (transmitter id)
+    // Aircraft from a dump1090 receiver (ADS-B)
+    bool adsb_enabled;
+    char adsb_url[128];      // its aircraft.json, e.g. "http://192.168.1.60:8080/data/aircraft.json"
+    uint8_t adsb_range_nm;   // shown within this distance of the position
 } settings_t;
 
 #define SDR_GAIN_AUTO       (-1)  // the tuner's own AGC
@@ -76,6 +80,10 @@ typedef struct {
 #define SETTINGS_EV_SDR     BIT6
 #define SETTINGS_EV_FWD     BIT7  // a retransmit destination changed
 #define SETTINGS_EV_WEATHER BIT8  // a weather source changed (including the WeatherLink secret)
+#define SETTINGS_EV_ADSB    BIT9  // the dump1090 source, or its range
+
+#define ADSB_RANGE_DEFAULT_NM 10
+#define ADSB_RANGE_MAX_NM     250
 
 esp_err_t settings_init(void);
 

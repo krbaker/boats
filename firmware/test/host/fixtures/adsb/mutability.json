@@ -1,0 +1,7 @@
+{ "now" : 1500000000.0,
+  "messages" : 5,
+  "aircraft" : [
+    {"hex":"a12345","squawk":"7500","flight":"DAL1    ","lat":47.45,"lon":-122.31,"nucp":7,"seen_pos":1.2,"altitude":3200,"vert_rate":1600,"track":160,"speed":180,"category":"A3","mlat":[],"tisb":[],"messages":50,"seen":0.3,"rssi":-10.0},
+    {"hex":"a54321","altitude":"ground","speed":12,"lat":47.44,"lon":-122.30,"seen_pos":0.5,"seen":0.5}
+  ]
+}

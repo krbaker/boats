@@ -1,4 +1,4 @@
-// Display UI: map, vessel detail and network screens.
+// Display UI: map, vessel and aircraft detail, and network screens.
 
 #pragma once
 
@@ -37,6 +37,7 @@ void ui_updating_end(void);
 void ui_show_map(void);
 void ui_show_detail(uint32_t mmsi);
 void ui_show_netinfo(void);
+void ui_show_aircraft(uint32_t id);    // an ADS-B aircraft, by adsb_id()
 
 // Screens
 lv_obj_t *ui_map_create(void);
@@ -46,6 +47,8 @@ lv_obj_t *ui_detail_create(void);
 void ui_detail_set_vessel(uint32_t mmsi);
 lv_obj_t *ui_netinfo_create(void);
 void ui_netinfo_on_show(void);
+lv_obj_t *ui_aircraft_detail_create(void);
+void ui_aircraft_detail_set(uint32_t id);
 
 // Overlays on the map screen
 lv_obj_t *ui_vessels_create(lv_obj_t *parent);
@@ -54,6 +57,8 @@ lv_obj_t *ui_tide_create(lv_obj_t *parent);
 void ui_tide_open(void);
 lv_obj_t *ui_weather_create(lv_obj_t *parent);
 void ui_weather_open(void);
+lv_obj_t *ui_aircraft_create(lv_obj_t *parent);    // the ADS-B aircraft list
+void ui_aircraft_open(void);
 
 // AIS safety broadcasts (ui_safety.c): popups over any screen, and helpers
 // for listing them.

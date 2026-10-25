@@ -6,6 +6,7 @@
 #include <string.h>
 #include <time.h>
 
+#include "adsb.h"
 #include "bsp/esp-bsp.h"
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
@@ -71,14 +72,16 @@
 static const float k_default_radii[] = {0.5f, 1.0f, 2.0f, 4.0f, 10.0f};
 
 typedef struct {
-    uint32_t mmsi;
+    uint32_t mmsi;          // for an ADS-B aircraft, its adsb id
     int16_t x, y, r;
     int16_t met;            // a weather station: its index in s_met; -1 for a target
+    bool aircraft;          // an ADS-B aircraft
 } hit_t;
 
 // Where a vessel ended up on screen, for placing its label afterwards.
 typedef struct {
     const vessel_t *v;
+    const adsb_target_t *ac;    // instead of v: an ADS-B aircraft
     float prio;             // label priority
     float layer;            // drawing order: higher on top
     float x, y, extent;
@@ -136,6 +139,8 @@ static vessel_t *s_vessels;
 static int s_nvessels;
 static met_station_t s_met[MET_MAX];   // weather stations heard over AIS
 static int s_nmet;
+static adsb_target_t *s_ac;             // aircraft from dump1090, within range
+static int s_nac;
 static hit_t *s_hits;
 static int s_nhits;
 static placed_t *s_placed;
@@ -220,11 +225,11 @@ static float text_deg(lv_obj_t *lbl, const char *text, const pill_t *p)
 static void pill_layout(pill_t *p)
 {
     if (p->text2[0]) {
-        // Text, icon, second text, in reading order (which runs backwards in
-        // screen angles along the bottom of the screen).
+        // Any lead icon, text, icon, second text, in reading order (which runs
+        // backwards in screen angles along the bottom of the screen).
         float t1 = text_deg(p->lbl, p->text, p), t2 = text_deg(p->lbl2, p->text2, p);
-        p->span = fmaxf(p->min_span, t1 + p->mid_deg + t2 + 2 * PILL_PAD_DEG);
-        float start = p->center - p->dir * (p->span / 2 - PILL_PAD_DEG);
+        p->span = fmaxf(p->min_span, p->lead_deg + t1 + p->mid_deg + t2 + 2 * PILL_PAD_DEG);
+        float start = p->center - p->dir * (p->span / 2 - PILL_PAD_DEG - p->lead_deg);
         lv_arclabel_set_angle_start(p->lbl, start + p->dir * t1 / 2 - 60);
         p->mid_angle = start + p->dir * (t1 + p->mid_deg / 2);
         lv_arclabel_set_angle_start(p->lbl2, start + p->dir * (t1 + p->mid_deg + t2 / 2) - 60);
@@ -1035,7 +1040,8 @@ static void place(placed_t *pl, float x, float y, float extent, lv_opa_t opa)
 
     hit_t *h = &s_hits[s_nhits++];
     h->met = -1;
-    h->mmsi = pl->v->mmsi;
+    h->aircraft = pl->ac != NULL;
+    h->mmsi = pl->ac ? pl->ac->id : pl->v->mmsi;
     h->x = (int16_t)x;
     h->y = (int16_t)y;
     h->r = (int16_t)fmaxf(extent, HIT_RADIUS_MIN);
@@ -1323,6 +1329,266 @@ static void draw_aircraft(lv_layer_t *layer, placed_t *pl, float x, float y, lv_
     place(pl, x, y, 14, opa);
 }
 
+// ---------------------------------------------------------------------------
+// ADS-B aircraft (from dump1090): an icon for each kind, from its emitter category
+// ---------------------------------------------------------------------------
+
+#define ADSB_COLOR          lv_color_hex(0x6D8BB0)  // slate blue (orange stays for AIS SAR aircraft)
+#define ADSB_EMERG_COLOR    lv_color_hex(0xE0242B)  // squawking 7500 / 7600 / 7700
+#define ADSB_VECTOR_MINUTES 1       // aircraft are fast: a short track vector, so a busy sky doesn't bury the vessels
+#define ADSB_VECTOR_MAX_PX  60
+
+static void part_poly(part_t *o, const lv_point_precise_t *p, int n, lv_color_t c)
+{
+    *o = (part_t){.n = n, .color = c};
+    memcpy(o->p, p, n * sizeof(p[0]));
+}
+
+#define POLY(o, c, ...)                                                                 \
+    do {                                                                                \
+        const lv_point_precise_t pts_[] = {__VA_ARGS__};                                \
+        part_poly(o, pts_, sizeof(pts_) / sizeof(pts_[0]), c);                          \
+    } while (0)
+
+// A fuselage from the nose (y0) to the tail (y1), w wide, with a pointed nose.
+static void part_fuselage(part_t *o, float y0, float y1, float w, lv_color_t c)
+{
+    POLY(o, c, {0, y0}, {w / 2, y0 + w}, {w / 2, y1}, {-w / 2, y1}, {-w / 2, y0 + w});
+}
+
+// Both wings (or tailplanes) as one shape: the leading edge from the root at
+// (±root, y0) back to the tips at (±span, y0 + sweep), chord deep at the tips.
+static void part_wings(part_t *o, float root, float y0, float span, float sweep, float chord, lv_color_t c)
+{
+    POLY(o, c, {-root, y0}, {root, y0}, {span, y0 + sweep}, {span, y0 + sweep + chord}, {-span, y0 + sweep + chord},
+         {-span, y0 + sweep});
+}
+
+// A pair of swept wings (or tailplanes), each its own shape so the trailing
+// edge sweeps back too: at the root (±root) from y0 to y1, at the tips (±span)
+// from y0 + sweep, chord deep.
+static void part_wing_pair(part_t *o, float root, float y0, float y1, float span, float sweep, float chord, lv_color_t c)
+{
+    POLY(&o[0], c, {root, y0}, {span, y0 + sweep}, {span, y0 + sweep + chord}, {root, y1});
+    POLY(&o[1], c, {-root, y0}, {-root, y1}, {-span, y0 + sweep + chord}, {-span, y0 + sweep});
+}
+
+// An engine pod centred on x, from y0 to y1, and its twin on the other side.
+static void part_pods(part_t *o, float x, float y0, float y1, float w, lv_color_t c)
+{
+    POLY(&o[0], c, {x - w / 2, y0}, {x + w / 2, y0}, {x + w / 2, y1}, {x - w / 2, y1});
+    POLY(&o[1], c, {-x - w / 2, y0}, {-x + w / 2, y0}, {-x + w / 2, y1}, {-x - w / 2, y1});
+}
+
+// The shapes of an aircraft of this kind around its position, nose up (at
+// most ADSB_MAX_PARTS). *turns: false for those drawn upright whatever their
+// track (round ones, whose circles can't be turned). *extent: how far it
+// reaches. Returns how many.
+#define ADSB_MAX_PARTS 9
+
+static int adsb_parts(adsb_kind_t kind, lv_color_t c, part_t *o, bool *turns, float *extent)
+{
+    *turns = true;
+    switch (kind) {
+    case ADSB_KIND_LIGHT: // high straight wing, propeller
+        part_fuselage(&o[0], -11, 9, 4, c);
+        POLY(&o[1], c, {-13, -5}, {13, -5}, {13, -1}, {-13, -1});
+        POLY(&o[2], c, {-5, 6}, {5, 6}, {5, 9}, {-5, 9});
+        part_bar(&o[3], -5, -11, 5, -11, 2, c);
+        *extent = 14;
+        return 4;
+    case ADSB_KIND_SMALL: // business jet: swept wings, engines by the tail, T-tail
+        part_fuselage(&o[0], -14, 11, 4.5f, c);
+        part_wing_pair(&o[1], 2, -3, 2, 12, 6, 2, c);
+        part_pods(&o[3], 3.8f, 3, 8, 2.6f, c);
+        part_wing_pair(&o[5], 1, 8.5f, 11, 6, 3, 1.5f, c);
+        *extent = 15;
+        return 7;
+    case ADSB_KIND_LARGE:
+    case ADSB_KIND_HIGH_VORTEX: { // airliner: two engines under the wings
+        float k = kind == ADSB_KIND_HIGH_VORTEX ? 1.12f : 1.0f;
+        part_fuselage(&o[0], -17 * k, 15 * k, 5 * k, c);
+        part_wing_pair(&o[1], 2.5f * k, -5 * k, 1.5f * k, 17 * k, 9 * k, 2.5f * k, c);
+        part_pods(&o[3], 7.5f * k, -4 * k, 1 * k, 2.6f * k, c);
+        part_wing_pair(&o[5], 1.5f * k, 10 * k, 13 * k, 7 * k, 4 * k, 2 * k, c);
+        *extent = 19 * k;
+        return 7;
+    }
+    case ADSB_KIND_HEAVY: // jumbo: four engines, the biggest
+        part_fuselage(&o[0], -21, 18, 6.5f, c);
+        part_wing_pair(&o[1], 3.2f, -6, 2.5f, 22, 12, 3, c);
+        part_pods(&o[3], 8, -5.5f, -0.5f, 3, c);
+        part_pods(&o[5], 15, -1, 4, 3, c);
+        part_wing_pair(&o[7], 2, 12, 16, 9.5f, 4.5f, 2.5f, c);
+        *extent = 24;
+        return 9;
+    case ADSB_KIND_FAST: // military jet: a delta
+        POLY(&o[0], c, {0, -12}, {11, 8}, {-11, 8});
+        part_fuselage(&o[1], -17, 11, 4, c);
+        *extent = 17;
+        return 2;
+    case ADSB_KIND_ROTOR: // helicopter: cabin, tail boom and rotor, crossed blades
+        part_circle(&o[0], 0, 0, 5.5f, c, false);
+        part_bar(&o[1], 0, 3, 0, 15, 2.5f, c);
+        part_bar(&o[2], -3.5f, 14, 3.5f, 14, 2, c);
+        part_bar(&o[3], -11, -11, 11, 11, 2, c);
+        part_bar(&o[4], 11, -11, -11, 11, 2, c);
+        *extent = 16;
+        return 5;
+    case ADSB_KIND_GLIDER: // long thin wings
+        part_fuselage(&o[0], -8, 11, 3, c);
+        part_bar(&o[1], -19, -2, 19, -2, 3, c);
+        part_bar(&o[2], -5, 10, 5, 10, 2, c);
+        *extent = 19;
+        return 3;
+    case ADSB_KIND_BALLOON: // envelope, ropes and basket
+        *turns = false;
+        part_circle(&o[0], 0, -4, 9, c, false);
+        part_bar(&o[1], -6, 2, -2, 8, 1.5f, c);
+        part_bar(&o[2], 6, 2, 2, 8, 1.5f, c);
+        part_rect(&o[3], -3, 8, 3, 12, c, false);
+        *extent = 14;
+        return 4;
+    case ADSB_KIND_PARACHUTE: // canopy, lines and jumper
+        *turns = false;
+        POLY(&o[0], c, {-10, -1}, {-8, -7}, {-3, -10}, {3, -10}, {8, -7}, {10, -1});
+        part_bar(&o[1], -9, -1, -1, 7, 1.5f, c);
+        part_bar(&o[2], 9, -1, 1, 7, 1.5f, c);
+        part_circle(&o[3], 0, 9, 3, c, false);
+        *extent = 13;
+        return 4;
+    case ADSB_KIND_ULTRALIGHT: // hang glider: a wide delta and its keel
+        POLY(&o[0], c, {0, -8}, {15, 5}, {-15, 5});
+        part_bar(&o[1], 0, -8, 0, 8, 2, c);
+        *extent = 15;
+        return 2;
+    case ADSB_KIND_UAV: // quadcopter
+        *turns = false;
+        part_bar(&o[0], -8, -8, 8, 8, 2.5f, c);
+        part_bar(&o[1], 8, -8, -8, 8, 2.5f, c);
+        part_rect(&o[2], -3, -3, 3, 3, c, false);
+        part_circle(&o[3], -8, -8, 3.5f, c, false);
+        part_circle(&o[4], 8, -8, 3.5f, c, false);
+        part_circle(&o[5], 8, 8, 3.5f, c, false);
+        part_circle(&o[6], -8, 8, 3.5f, c, false);
+        *extent = 13;
+        return 7;
+    default: // no category: a plain aeroplane
+        part_fuselage(&o[0], -14, 11, 5, c);
+        part_wing_pair(&o[1], 2.5f, -4, 2, 13, 5, 2.5f, c);
+        part_wing_pair(&o[3], 1.5f, 6.5f, 9.5f, 6, 3, 2, c);
+        *extent = 14;
+        return 5;
+    }
+}
+
+static bool adsb_stale(const adsb_target_t *t, int64_t now_us)
+{
+    return now_us - t->pos_us > (int64_t)ADSB_STALE_S * 1000000;
+}
+
+static void draw_adsb(lv_layer_t *layer, placed_t *pl, int64_t now_us)
+{
+    const adsb_aircraft_t *a = &pl->ac->a;
+    float x, y;
+    geo_project(&s_view.bbox, UI_SIZE, UI_SIZE, a->lat, a->lon, &x, &y);
+    float dx = x - UI_CENTER, dy = y - UI_CENTER;
+    pl->shown = false;
+    if (dx * dx + dy * dy > (float)(UI_CENTER + 40) * (UI_CENTER + 40)) return; // off the round screen
+
+    lv_opa_t opa = adsb_stale(pl->ac, now_us) ? LV_OPA_50 : LV_OPA_COVER;
+    lv_color_t color = adsb_is_emergency(a) ? ADSB_EMERG_COLOR : ADSB_COLOR;
+    bool track = a->fields & ADSB_F_TRACK;
+    if (track && (a->fields & ADSB_F_GS) && a->gs_kn >= HEADING_MIN_KN) {
+        float vlen = fminf(a->gs_kn * 1852.0f * ADSB_VECTOR_MINUTES / 60.0f / s_view.m_per_px, ADSB_VECTOR_MAX_PX);
+        float s = sinf(a->track_deg * (float)M_PI / 180), c = cosf(a->track_deg * (float)M_PI / 180);
+        lv_point_precise_t p0 = {x, y}, p1 = {x + s * vlen, y - c * vlen};
+        draw_dashed_line(layer, p0, p1, lv_color_white(), 2 + 2 * HALO_PX, (lv_opa_t)(opa * 85 / 100));
+        draw_dashed_line(layer, p0, p1, color, 2, opa);
+    }
+    part_t parts[ADSB_MAX_PARTS];
+    bool turns;
+    float extent;
+    int n = adsb_parts(adsb_kind(a), color, parts, &turns, &extent);
+    float dir = turns && track ? a->track_deg * (float)M_PI / 180 : 0;
+    parts_place(parts, n, sinf(dir), cosf(dir), x, y);
+    draw_parts(layer, parts, n, false, opa);
+    place(pl, x, y, extent, opa);
+}
+
+// Call sign (else registration, else address) per the label options, then the
+// altitude, which always shows. An emergency always shows its call sign and squawk.
+static void adsb_label_text(const adsb_target_t *t, char *text, size_t cap)
+{
+    const adsb_aircraft_t *a = &t->a;
+    bool emerg = adsb_is_emergency(a);
+    char name[24] = "", line2[32] = "";
+    if (s_filter.label_name || emerg) {
+        if (a->flight[0]) strlcpy(name, a->flight, sizeof(name));
+        else if (a->reg[0]) strlcpy(name, a->reg, sizeof(name));
+        else snprintf(name, sizeof(name), "%06lX", (unsigned long)a->addr);
+        if (emerg && (a->fields & ADSB_F_SQUAWK)) {
+            size_t k = strlen(name);
+            snprintf(name + k, sizeof(name) - k, " %04u", a->squawk);
+        }
+    }
+    int n = 0;
+    if (a->fields & ADSB_F_GROUND) n = snprintf(line2, sizeof(line2), "GND");
+    else if (a->fields & ADSB_F_ALT) n = snprintf(line2, sizeof(line2), "%ld ft", (long)a->alt_ft);
+    if (s_filter.label_speed && (a->fields & ADSB_F_GS) && a->gs_kn >= HEADING_MIN_KN)
+        snprintf(line2 + n, sizeof(line2) - n, "%s%.0f kn", n ? ", " : "", a->gs_kn);
+    snprintf(text, cap, "%s%s%s", name, name[0] && line2[0] ? "\n" : "", line2);
+}
+
+// The status bubble: a boat before the vessel count and a plane before the
+// aircraft count. White, upright as the text reads (tops to the rim).
+#define STATUS_ICON_PX      24
+#define STATUS_ICON_GAP_PX  8
+
+static struct {
+    bool boat, plane, plane_ok; // plane_ok: dump1090 is answering (else the plane is greyed)
+} s_status_icons;
+
+static void draw_pill_icon(lv_layer_t *layer, const part_t *src, int n, float angle_deg, lv_color_t color)
+{
+    const pill_t *p = &s_pills[PILL_STATUS];
+    float rm = pill_outer_r() - p->width / 2.0f, a = angle_deg * (float)M_PI / 180;
+    part_t parts[4];
+    memcpy(parts, src, n * sizeof(parts[0]));
+    float h = a + (float)M_PI / 2; // icon up = out towards the rim
+    parts_place(parts, n, sinf(h), cosf(h), UI_CENTER + rm * cosf(a), UI_CENTER + rm * sinf(a));
+    for (int i = 0; i < n; i++) {
+        const part_t *q = &parts[i];
+        for (int k = 1; k + 1 < q->n; k++) draw_triangle(layer, q->p[0], q->p[k], q->p[k + 1], color, LV_OPA_COVER);
+        for (int k = 2; k + 1 < q->n; k++) draw_line(layer, q->p[0], q->p[k], color, 1, LV_OPA_COVER);
+    }
+}
+
+static void draw_status_icons(lv_layer_t *layer)
+{
+    const pill_t *p = &s_pills[PILL_STATUS];
+    if (p->hidden) return;
+    lv_color_t w = lv_color_white();
+    if (s_status_icons.boat && p->lead_deg) {
+        // Midway between the bubble's round end and the count.
+        float rm = pill_outer_r() - p->width / 2.0f;
+        float end = p->center - p->dir * (p->span / 2 + px_to_deg(p->width / 2.0f, rm));
+        float text = p->center - p->dir * (p->span / 2 - PILL_PAD_DEG - p->lead_deg);
+        part_t boat[3];
+        POLY(&boat[0], w, {-11, 4}, {11, 4}, {7, 9}, {-7, 9});  // hull
+        POLY(&boat[1], w, {1, -11}, {1, 2}, {9, 2});           // mainsail
+        POLY(&boat[2], w, {-1, -8}, {-1, 2}, {-7, 2});         // jib
+        draw_pill_icon(layer, boat, 3, (end + text) / 2, w);
+    }
+    if (s_status_icons.plane && p->text2[0]) {
+        part_t plane[3];
+        part_fuselage(&plane[0], -11, 9, 4, w);
+        part_wings(&plane[1], 2, -3, 11, 4, 2.5f, w);
+        part_wings(&plane[2], 1.5f, 5, 5, 3, 2, w);
+        draw_pill_icon(layer, plane, 3, p->mid_angle, s_status_icons.plane_ok ? w : UI_COLOR_MUTED);
+    }
+}
+
 // Emergency beacons: AIS-SART (970...), man overboard (972...), EPIRB (974...).
 static bool is_beacon(uint32_t mmsi)
 {
@@ -1504,7 +1770,8 @@ static void draw_labels(lv_layer_t *layer, int n)
         const placed_t *pl = s_label_order[i];
         if (!pl->shown || !pl->labelled) continue;
         char text[48];
-        label_text(pl->v, text, sizeof(text));
+        if (pl->ac) adsb_label_text(pl->ac, text, sizeof(text));
+        else label_text(pl->v, text, sizeof(text));
         if (!text[0]) continue;
         lv_point_t size;
         lv_text_get_size(&size, text, &lv_font_montserrat_14, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
@@ -1632,16 +1899,31 @@ static void overlay_draw_cb(lv_event_t *e)
         float prio = vessel_priority(v, now);
         s_placed[n++] = (placed_t){.v = v, .prio = prio, .layer = vessel_layer(v, prio, now), .labelled = pass};
     }
+    // ADS-B aircraft above the vessels, with an emergency on top of everything.
+    // Their labels give way to the vessels' (the lowest aircraft's first), but
+    // an emergency's always shows.
+    for (int i = 0; i < s_nac; i++) {
+        const adsb_target_t *t = &s_ac[i];
+        bool emerg = adsb_is_emergency(&t->a);
+        float prio = emerg ? 1000000.0f
+                           : -100000.0f - ((t->a.fields & ADSB_F_ALT) ? t->a.alt_ft / 1000.0f : 0) -
+                                 (adsb_stale(t, now) ? 1000 : 0);
+        s_placed[n++] = (placed_t){.ac = t, .prio = prio, .layer = (emerg ? 4000000.0f : 3000000.0f) + prio, .labelled = true};
+    }
     // Bottom layer first: the weather stations, then the targets.
     draw_met_stations(layer, now);
     qsort(s_placed, n, sizeof(s_placed[0]), placed_cmp);
-    for (int i = 0; i < n; i++) draw_vessel(layer, &s_placed[i], now);
+    for (int i = 0; i < n; i++) {
+        if (s_placed[i].ac) draw_adsb(layer, &s_placed[i], now);
+        else draw_vessel(layer, &s_placed[i], now);
+    }
     draw_labels(layer, n);
     draw_wind_and_waves(layer);
     draw_pills(layer);
     draw_time_icon(layer);
     draw_net_icon(layer);
     draw_tide_wave_icon(layer);
+    draw_status_icons(layer);
 }
 
 static void set_pressed_pill(pill_t *hit)
@@ -1709,6 +1991,7 @@ static void overlay_click_cb(lv_event_t *e)
     }
     if (best < 0) return;
     if (s_hits[best].met >= 0) ui_met_open(&s_met[s_hits[best].met]);
+    else if (s_hits[best].aircraft) ui_show_aircraft(s_hits[best].mmsi);
     else ui_show_detail(s_hits[best].mmsi);
 }
 
@@ -1756,22 +2039,40 @@ static void update_border_text(void)
     }
     pill_set_text(&s_pills[PILL_TIDE], buf);
 
-    // Vessel count while either AIS source (network feed, RTL-SDR) is live.
+    // Vessel count (after a boat) while either AIS source (network feed,
+    // RTL-SDR) is live; then, while ADS-B is on, the aircraft count (after a
+    // plane), which takes in AIS SAR aircraft too.
+    settings_t cfg;
+    settings_get(&cfg);
+    adsb_status_t as;
+    adsb_get_status(&as);
+    s_status_icons.plane = cfg.adsb_enabled && cfg.adsb_url[0];
+    s_status_icons.plane_ok = as.state == ADSB_OK;
+    int nvessels = 0, nplanes = s_nac;
+    for (int i = 0; i < s_nvessels; i++) {
+        const vessel_t *v = &s_vessels[i];
+        if (v->cls == AIS_CLASS_ATON) continue; // not the marks
+        if (s_status_icons.plane && vessel_is_aircraft(v)) nplanes++;
+        else nvessels++;
+    }
     nmea_status_t ns;
     nmea_client_get_status(&ns);
     sdr_status_t ss;
     sdr_get_status(&ss);
     bool sdr_live = ss.state == SDR_READY || ss.state == SDR_CAPTURING;
-    if (ns.state == NMEA_STATE_CONNECTED || sdr_live) {
-        int n = 0;
-        for (int i = 0; i < s_nvessels; i++) n += s_vessels[i].cls != AIS_CLASS_ATON; // not the marks
-        snprintf(buf, sizeof(buf), "%d vessel%s", n, n == 1 ? "" : "s");
+    s_status_icons.boat = ns.state == NMEA_STATE_CONNECTED || sdr_live;
+    if (s_status_icons.boat) {
+        snprintf(buf, sizeof(buf), "%d", nvessels);
     } else if ((ns.state == NMEA_STATE_NOT_CONFIGURED || ns.state == NMEA_STATE_OFF) && ss.state != SDR_TESTING) {
         strcpy(buf, "#f5b13f AIS not set#");
     } else {
         strcpy(buf, "#f2545b AIS offline#");
     }
     pill_set_text(&s_pills[PILL_STATUS], buf);
+    pill_set_lead_room(&s_pills[PILL_STATUS], s_status_icons.boat ? STATUS_ICON_PX + STATUS_ICON_GAP_PX : 0);
+    char planes[8] = "";
+    if (s_status_icons.plane) snprintf(planes, sizeof(planes), "%d", nplanes);
+    pill_set_text2(&s_pills[PILL_STATUS], planes, 2 * STATUS_ICON_GAP_PX + STATUS_ICON_PX);
 
     // Centre message for setup problems.
     wifi_mgr_status_t ws;
@@ -1806,11 +2107,57 @@ static void refresh_timer_cb(lv_timer_t *t)
 
     s_nvessels = vessel_db_snapshot(s_vessels, VESSEL_MAX);
     s_nmet = met_db_snapshot(s_met, MET_MAX);
+    s_nac = adsb_snapshot(s_ac, ADSB_MAX);
     update_distress();
     if (lv_screen_active() == s_scr) lv_obj_invalidate(s_overlay);
     update_border_text();
     update_net_icon();
     update_weather();
+}
+
+// Tapping the status bubble: the vessel list, or with ADS-B on, a choice of
+// that or the aircraft list.
+static lv_obj_t *s_chooser;
+
+static void chooser_cb(lv_event_t *e)
+{
+    lv_obj_set_hidden(s_chooser, true);
+    void (*open)(void) = lv_event_get_user_data(e);
+    if (open) open();
+}
+
+static void status_tap(void)
+{
+    if (s_status_icons.plane) lv_obj_set_hidden(s_chooser, false);
+    else ui_vessels_open();
+}
+
+static void chooser_create(void)
+{
+    s_chooser = lv_obj_create(s_scr); // dims the map; a tap outside the box closes it
+    lv_obj_remove_style_all(s_chooser);
+    lv_obj_set_size(s_chooser, UI_SIZE, UI_SIZE);
+    lv_obj_set_style_bg_color(s_chooser, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(s_chooser, LV_OPA_50, 0);
+    lv_obj_set_scrollable(s_chooser, false);
+    lv_obj_add_event_cb(s_chooser, chooser_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_set_hidden(s_chooser, true);
+
+    lv_obj_t *box = lv_obj_create(s_chooser);
+    lv_obj_remove_style_all(box);
+    lv_obj_set_size(box, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_color(box, UI_COLOR_BG, 0);
+    lv_obj_set_style_bg_opa(box, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(box, 24, 0);
+    lv_obj_set_style_border_color(box, UI_COLOR_MUTED, 0);
+    lv_obj_set_style_border_width(box, 2, 0);
+    lv_obj_set_style_pad_all(box, 24, 0);
+    lv_obj_set_style_pad_row(box, 16, 0);
+    lv_obj_set_flex_flow(box, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_scrollable(box, false);
+    lv_obj_center(box);
+    lv_obj_add_event_cb(ui_round_button(box, "Vessels", 260, 72), chooser_cb, LV_EVENT_CLICKED, ui_vessels_open);
+    lv_obj_add_event_cb(ui_round_button(box, "Aircraft", 260, 72), chooser_cb, LV_EVENT_CLICKED, ui_aircraft_open);
 }
 
 static void zoom_in(void) { set_zoom(s_zoom - 1); }
@@ -1821,10 +2168,11 @@ static void zoom_out(void) { set_zoom(s_zoom + 1); }
 lv_obj_t *ui_map_create(void)
 {
     s_vessels = heap_caps_malloc(VESSEL_MAX * sizeof(vessel_t), MALLOC_CAP_SPIRAM);
-    s_hits = heap_caps_malloc((VESSEL_MAX + MET_MAX) * sizeof(hit_t), MALLOC_CAP_SPIRAM);
-    s_placed = heap_caps_malloc(VESSEL_MAX * sizeof(placed_t), MALLOC_CAP_SPIRAM);
-    s_label_order = heap_caps_malloc(VESSEL_MAX * sizeof(placed_t *), MALLOC_CAP_SPIRAM);
-    s_label_areas = heap_caps_malloc(VESSEL_MAX * sizeof(lv_area_t), MALLOC_CAP_SPIRAM);
+    s_ac = heap_caps_malloc(ADSB_MAX * sizeof(adsb_target_t), MALLOC_CAP_SPIRAM);
+    s_hits = heap_caps_malloc((VESSEL_MAX + MET_MAX + ADSB_MAX) * sizeof(hit_t), MALLOC_CAP_SPIRAM);
+    s_placed = heap_caps_malloc((VESSEL_MAX + ADSB_MAX) * sizeof(placed_t), MALLOC_CAP_SPIRAM);
+    s_label_order = heap_caps_malloc((VESSEL_MAX + ADSB_MAX) * sizeof(placed_t *), MALLOC_CAP_SPIRAM);
+    s_label_areas = heap_caps_malloc((VESSEL_MAX + ADSB_MAX) * sizeof(lv_area_t), MALLOC_CAP_SPIRAM);
     s_ev = settings_subscribe();
     settings_t cfg;
     settings_get(&cfg);
@@ -1885,7 +2233,8 @@ lv_obj_t *ui_map_create(void)
     pill_create(&s_pills[PILL_TIME], &lv_font_montserrat_28, 270, 0, LV_ARCLABEL_DIR_CLOCKWISE, ui_weather_open);
     pill_create(&s_pills[PILL_TIDE], &lv_font_montserrat_24, 90, 0, LV_ARCLABEL_DIR_COUNTER_CLOCKWISE, ui_tide_open);
     s_pills[PILL_TIDE].lbl2 = pill_label(&s_pills[PILL_TIDE], &lv_font_montserrat_24, 90, LV_ARCLABEL_DIR_COUNTER_CLOCKWISE);
-    pill_create(&s_pills[PILL_STATUS], &lv_font_montserrat_24, 180, 0, LV_ARCLABEL_DIR_CLOCKWISE, ui_vessels_open);
+    pill_create(&s_pills[PILL_STATUS], &lv_font_montserrat_24, 180, 0, LV_ARCLABEL_DIR_CLOCKWISE, status_tap);
+    s_pills[PILL_STATUS].lbl2 = pill_label(&s_pills[PILL_STATUS], &lv_font_montserrat_24, 180, LV_ARCLABEL_DIR_CLOCKWISE);
     // Zoom on the right edge: + above the current radius, - below.
     pill_create(&s_pills[PILL_ZOOM_IN], &lv_font_montserrat_28, -21, 9, LV_ARCLABEL_DIR_CLOCKWISE, zoom_in);
     pill_create(&s_pills[PILL_ZOOM], &lv_font_montserrat_24, 0, 0, LV_ARCLABEL_DIR_CLOCKWISE, NULL);
@@ -1896,6 +2245,8 @@ lv_obj_t *ui_map_create(void)
     ui_vessels_create(s_scr);
     ui_tide_create(s_scr);
     ui_weather_create(s_scr);
+    ui_aircraft_create(s_scr);
+    chooser_create();
 
     view_go_home();
     lv_timer_create(refresh_timer_cb, 1000, NULL);
@@ -1913,6 +2264,7 @@ void ui_map_on_show(void)
 {
     s_nvessels = vessel_db_snapshot(s_vessels, VESSEL_MAX);
     s_nmet = met_db_snapshot(s_met, MET_MAX);
+    s_nac = adsb_snapshot(s_ac, ADSB_MAX);
     update_distress();
     lv_obj_invalidate(s_overlay);
 }

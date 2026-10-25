@@ -7,6 +7,7 @@
 #include "esp_log.h"
 #include "esp_system.h"
 
+#include "adsb.h"
 #include "ais_fwd.h"
 #include "fw_update.h"
 #include "https_lock.h"
@@ -86,6 +87,7 @@ void app_main(void)
     tide_start();
     weather_start();
     nmea_client_start();
+    adsb_start();
     ais_fwd_start();
     map_tiles_init();
     web_server_start();

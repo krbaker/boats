@@ -15,6 +15,7 @@ idf_component_register(
         "ais/met_db.c"
         "ais/nmea_client.c"
         "ais/rx_stats.c"
+        "adsb/adsb.c"
         "tide/tide.c"
         "weather/weatherlink.c"
         "weather/weather.c"
@@ -31,12 +32,13 @@ idf_component_register(
         "ui/ui_safety.c"
         "ui/ui_met.c"
         "ui/ui_vessels.c"
+        "ui/ui_aircraft.c"
         "ui/ui_tide.c"
         "ui/map_tiles.c"
         "ui/map_tile_decode.c"
         "ui/wx_icon_render.c"
         "ui/ui_weather.c"
-    INCLUDE_DIRS "." "config" "net" "ais" "tide" "geo" "map" "ui" "sdr" "weather"
+    INCLUDE_DIRS "." "config" "net" "ais" "tide" "geo" "map" "ui" "sdr" "weather" "adsb"
     EMBED_TXTFILES "web/index.html"
-    REQUIRES ais ais_demod vessel_cache weather_parse esp_ringbuf app_update esp_http_server esp_http_client esp-tls json nvs_flash esp_wifi esp_netif esp_timer lwip usb esp_hosted bootloader_support espcoredump esp_partition
+    REQUIRES adsb_parse ais ais_demod vessel_cache weather_parse esp_ringbuf app_update esp_http_server esp_http_client esp-tls json nvs_flash esp_wifi esp_netif esp_timer lwip usb esp_hosted bootloader_support espcoredump esp_partition
 )

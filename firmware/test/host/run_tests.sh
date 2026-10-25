@@ -1,8 +1,8 @@
 #!/bin/sh
 # Build and run the host-side unit tests (AIS parser, AIS demodulator, geo
-# helpers, vessel cache, retransmit, weather parsers and icon, simulator round
-# trip). Set AIS_CAPTURE to a .cu8 I/Q capture (288 kS/s, centred on 162.000
-# MHz) to also run the demodulator over real signals.
+# helpers, vessel cache, retransmit, weather parsers and icon, ADS-B parser,
+# simulator round trip). Set AIS_CAPTURE to a .cu8 I/Q capture (288 kS/s,
+# centred on 162.000 MHz) to also run the demodulator over real signals.
 set -e
 cd "$(dirname "$0")"
 CC=${CC:-cc}
@@ -36,6 +36,11 @@ W=../../components/weather_parse
 $CC $CFLAGS -I$W/include -I"$CJSON" -o build/test_weather_parse test_weather_parse.c $W/weatherlink.c $W/nws.c \
     $W/ndbc.c $W/wx.c $W/astro.c "$CJSON/cJSON.c" -lm
 build/test_weather_parse
+
+# dump1090's aircraft.json, in each variant's format (fixtures/adsb/), and cut short anywhere.
+A=../../components/adsb_parse
+$CC $CFLAGS -I$A/include -o build/test_adsb_parse test_adsb_parse.c $A/adsb_parse.c -lm
+build/test_adsb_parse
 
 # Weather icon renderer: moon phases by lit area, nothing clipped, stale = grey.
 $CC $CFLAGS -Wno-missing-field-initializers -I../../main/ui -I$W/include -o build/test_wx_icon test_wx_icon.c \

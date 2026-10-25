@@ -19,6 +19,7 @@
 #include "lwip/sockets.h"
 #include "mbedtls/base64.h"
 
+#include "adsb.h"
 #include "ais_fwd.h"
 #include "cp_update.h"
 #include "fw_update.h"
@@ -327,6 +328,14 @@ static esp_err_t status_get(httpd_req_t *req)
         cJSON_AddItemToArray(types, tj);
     }
     cJSON_AddNumberToObject(o, "vessels", vessel_db_count());
+    adsb_status_t as;
+    adsb_get_status(&as);
+    cJSON *aj = cJSON_AddObjectToObject(o, "adsb");
+    cJSON_AddStringToObject(aj, "state", adsb_state_str(as.state));
+    cJSON_AddStringToObject(aj, "error", as.error);
+    cJSON_AddNumberToObject(aj, "heard", as.heard);
+    cJSON_AddNumberToObject(aj, "shown", as.shown);
+    cJSON_AddNumberToObject(aj, "last_ok_s", as.last_ok_us ? (now_us - as.last_ok_us) / 1000000 : -1);
 
     // Safety broadcasts (AIS type 14), newest first.
     static safety_msg_t msgs[SAFETY_MSG_MAX];

@@ -13,7 +13,7 @@
 #define HOLD_TRIGGER_MS 10000   // open the network page after this long
 #define HOLD_SLOP_PX    30      // finger may wander this far
 
-static lv_obj_t *s_map_scr, *s_detail_scr, *s_net_scr;
+static lv_obj_t *s_map_scr, *s_detail_scr, *s_net_scr, *s_aircraft_scr;
 static lv_obj_t *s_hold_arc, *s_hold_label;
 
 static void load(lv_obj_t *scr)
@@ -33,6 +33,12 @@ void ui_show_detail(uint32_t mmsi)
 {
     ui_detail_set_vessel(mmsi);
     load(s_detail_scr);
+}
+
+void ui_show_aircraft(uint32_t id)
+{
+    ui_aircraft_detail_set(id);
+    load(s_aircraft_scr);
 }
 
 void ui_show_netinfo(void)
@@ -109,6 +115,7 @@ void ui_start(void)
     s_map_scr = ui_map_create();
     s_detail_scr = ui_detail_create();
     s_net_scr = ui_netinfo_create();
+    s_aircraft_scr = ui_aircraft_detail_create();
     create_hold_indicator();
     ui_safety_init();
     ui_map_on_show();

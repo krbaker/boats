@@ -1,0 +1,10 @@
+{ "now" : 1761431234.5,
+  "messages" : 98123456,
+  "aircraft" : [
+{"hex":"a1b2c3","type":"adsb_icao","flight":"ASA123  ","r":"N123AS","t":"B739","desc":"BOEING 737-900","alt_baro":4825,"alt_geom":5000,"gs":231.4,"ias":220,"track":172.31,"baro_rate":-1216,"squawk":"4433","emergency":"none","category":"A3","nav_qnh":1013.6,"nav_altitude_mcp":3008,"nav_modes":["autopilot","approach"],"lat":47.612345,"lon":-122.401234,"nic":8,"rc":186,"seen_pos":0.4,"version":2,"mlat":[],"tisb":[],"messages":1534,"seen":0.1,"rssi":-12.3},
+{"hex":"a0ffee","type":"adsb_icao","flight":"N60HX   ","t":"EC35","alt_baro":"ground","gs":0.0,"squawk":"1200","category":"A7","lat":47.6201,"lon":-122.3402,"seen_pos":2.1,"mlat":[],"tisb":[],"seen":1.0,"rssi":-20.0},
+{"hex":"~2c4f01","type":"tisb_trackfile","alt_baro":1500,"gs":95,"track":45.0,"lat":47.55,"lon":-122.30,"seen_pos":3.0,"mlat":[],"tisb":["lat","lon"],"seen":3.0},
+{"hex":"abcdef","flight":"UAL9\u00e9  ","alt_baro":12000,"geom_rate":800,"baro_rate":640,"squawk":"7700","emergency":"general","category":"A5","lat":47.7,"lon":-122.5,"seen_pos":1.0,"seen":0.5},
+{"hex":"c0ffee","alt_baro":38000,"seen":12.0,"rssi":-30.1},
+{"hex":"7c1234","flight":"QFA12","alt_geom":2100,"category":"B2","squawk":"7600","lat":47.5,"lon":-122.2,"seen_pos":0.2,"seen":0.2}
+]}

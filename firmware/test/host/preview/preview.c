@@ -11,6 +11,7 @@
 
 #include "lvgl.h"
 
+#include "adsb.h"
 #include "ais_fwd.h"
 #include "log_save.h"
 #include "map_pack.h"
@@ -574,6 +575,76 @@ const char *nmea_state_str(nmea_state_t st) { return "connected"; }
 // Rendering
 // ---------------------------------------------------------------------------
 
+// Aircraft from dump1090: one of each kind on a ring round the centre, one
+// squawking 7700, one not heard for a while. Shown once s_cfg.adsb_enabled is set.
+static const struct {
+    const char *flight;
+    uint8_t category;
+    int alt_ft, gs;
+    uint16_t squawk;
+} k_planes[] = {
+    {"N172SP", 0xA1, 1500, 105, 1200}, {"EJA512", 0xA2, 9000, 280, 4521}, {"ASA123", 0xA3, 4800, 230, 4433},
+    {"UPS2912", 0xA4, 6200, 250, 3341}, {"BAW49", 0xA5, 11000, 310, 2216}, {"VV100", 0xA6, 3000, 420, 0},
+    {"N911KC", 0xA7, 800, 90, 1200}, {"N4GL", 0xB1, 3500, 55, 0}, {"", 0xB2, 2000, 8, 0},
+    {"", 0xB4, 600, 25, 1200}, {"", 0xB6, 300, 20, 0}, {"", 0, 5500, 160, 0},
+    {"QXE2204", 0xA3, 3100, 190, 7700},
+};
+#define PLANES_N (int)(sizeof(k_planes) / sizeof(k_planes[0]))
+
+static void make_plane(int i, adsb_target_t *t)
+{
+    memset(t, 0, sizeof(*t));
+    adsb_aircraft_t *a = &t->a;
+    a->addr = 0xA00000 + i * 0x1111;
+    strcpy(a->flight, k_planes[i].flight);
+    if (i == 2) strcpy(a->type, "B739"), strcpy(a->reg, "N123AS");
+    a->category = k_planes[i].category;
+    bool emerg = i == PLANES_N - 1;
+    float ang = (emerg ? 250 : i * 360.0f / PLANES_N) * (float)M_PI / 180, r = emerg ? 0.75f : 1.35f;
+    a->lat = CENTER_LAT + r * cosf(ang) / 60.0;
+    a->lon = CENTER_LON + r * sinf(ang) / 60.0 / cos(CENTER_LAT * M_PI / 180);
+    a->alt_ft = k_planes[i].alt_ft;
+    a->gs_kn = k_planes[i].gs;
+    a->track_deg = fmodf(i * 360.0f / PLANES_N + 90 + i * 17, 360);
+    a->vrate_fpm = i == PLANES_N - 1 ? -1800 : 0;
+    a->squawk = k_planes[i].squawk;
+    a->fields = ADSB_F_POS | ADSB_F_ALT | ADSB_F_GS | ADSB_F_TRACK | ADSB_F_VRATE | (a->squawk ? ADSB_F_SQUAWK : 0);
+    if (i == PLANES_N - 1) a->emergency = ADSB_EMERG_GENERAL;
+    t->id = adsb_id(a);
+    t->dist_nm = r;
+    (void)emerg;
+    t->pos_us = esp_timer_get_time() - (i == 11 ? 40 : 1) * 1000000LL; // the plain one: stale
+}
+
+int adsb_snapshot(adsb_target_t *out, int max)
+{
+    if (!s_cfg.adsb_enabled) return 0;
+    int n = PLANES_N < max ? PLANES_N : max;
+    for (int i = 0; i < n; i++) make_plane(PLANES_N - 1 - i, &out[i]); // nearest (the emergency) first
+    return n;
+}
+
+bool adsb_get(uint32_t id, adsb_target_t *out)
+{
+    for (int i = 0; i < PLANES_N; i++) {
+        make_plane(i, out);
+        if (out->id == id) return true;
+    }
+    return false;
+}
+
+uint32_t adsb_generation(void) { return s_cfg.adsb_enabled; }
+
+void adsb_get_status(adsb_status_t *out)
+{
+    memset(out, 0, sizeof(*out));
+    out->state = s_cfg.adsb_enabled ? ADSB_OK : ADSB_OFF;
+    out->heard = s_cfg.adsb_enabled ? 41 : 0;
+    out->shown = s_cfg.adsb_enabled ? PLANES_N : 0;
+}
+
+const char *adsb_state_str(adsb_state_t st) { return st == ADSB_OK ? "connected" : "off"; }
+
 static uint16_t s_fb[800 * 800];
 
 static uint32_t tick_ms(void)
@@ -754,8 +825,9 @@ int main(int argc, char **argv)
     ui_netinfo_on_show();
     run_ms(1100);
     lv_obj_t *net_tabs = find_class(lv_screen_active(), &lv_tabview_class);
-    static const char *const net_names[] = {"net_network", "net_ais", "net_retransmit", "net_display", "net_system"};
-    for (int i = 0; i < 5; i++) {
+    static const char *const net_names[] = {"net_network", "net_ais", "net_retransmit", "net_display", "net_system",
+                                            "net_adsb"};
+    for (int i = 0; i < 6; i++) {
         lv_tabview_set_active(net_tabs, i, LV_ANIM_OFF);
         run_ms(1100);
         snap(net_names[i]);
@@ -784,5 +856,35 @@ int main(int argc, char **argv)
     ui_met_open(&k_met[0]);
     run_ms(1100);
     snap("met_popup");
+    for (uint32_t i = 0; i < lv_obj_get_child_count(lv_layer_top()); i++) lv_obj_set_hidden(lv_obj_get_child(lv_layer_top(), i), true);
+
+    // Aircraft from dump1090: the map, the status bubble's choice, the list and one aircraft.
+    s_cfg.adsb_enabled = true;
+    strcpy(s_cfg.adsb_url, "http://192.168.1.60:8080/data/aircraft.json");
+    s_cfg.adsb_range_nm = 10;
+    lv_screen_load(scr);
+    ui_map_on_show();
+    tap_edge(21);  // out to 2 nm
+    tap_edge(21);
+    run_ms(1100);
+    snap("map_aircraft");
+    tap_edge(180);
+    snap("status_chooser");
+    tap(400, 400 + 44); // "Aircraft", the lower button
+    snap("aircraft_list");
+    hide_overlays(scr);
+    lv_obj_t *acs = ui_aircraft_detail_create(); // (ui_start makes it on the display)
+    lv_screen_load(acs);
+    ui_aircraft_detail_set(adsb_id(&(adsb_aircraft_t){.addr = 0xA00000 + (PLANES_N - 1) * 0x1111})); // the emergency
+    run_ms(1100);
+    snap("aircraft_detail");
+    ui_aircraft_detail_set(adsb_id(&(adsb_aircraft_t){.addr = 0xA00000 + 2 * 0x1111}));
+    run_ms(1100);
+    snap("aircraft_detail_airliner");
+    lv_screen_load(net);
+    ui_netinfo_on_show();
+    lv_tabview_set_active(net_tabs, 5, LV_ANIM_OFF);
+    run_ms(1100);
+    snap("net_adsb");
     return 0;
 }

@@ -37,6 +37,17 @@ static bool valid_host(const char *h)
     return true;
 }
 
+// Empty, or a plain-HTTP URL (dump1090 doesn't do HTTPS).
+static bool valid_http_url(const char *u)
+{
+    if (!u[0]) return true;
+    if (strncmp(u, "http://", 7) != 0 || !u[7] || u[7] == '/') return false;
+    for (; *u; u++) {
+        if (*u <= ' ' || *u > '~') return false;
+    }
+    return true;
+}
+
 static bool valid_zone(const char *z)
 {
     if (!z[0]) return true;
@@ -162,6 +173,9 @@ cJSON *settings_to_json(const settings_t *s)
     cJSON_AddStringToObject(o, "wl_key", s->wl_key);
     cJSON_AddNumberToObject(o, "wl_station", s->wl_station);
     cJSON_AddNumberToObject(o, "wl_tx", s->wl_tx);
+    cJSON_AddBoolToObject(o, "adsb_enabled", s->adsb_enabled);
+    cJSON_AddStringToObject(o, "adsb_url", s->adsb_url);
+    cJSON_AddNumberToObject(o, "adsb_range_nm", s->adsb_range_nm);
     cJSON *fa = cJSON_AddArrayToObject(o, "retransmit");
     for (int i = 0; i < FWD_DEST_MAX; i++) {
         cJSON *d = cJSON_CreateObject();
@@ -216,6 +230,9 @@ bool settings_from_json(const cJSON *o, settings_t *s, char *msg, size_t cap)
     if (get_num(o, "wl_station", 0, 4294967295.0, &d, &bad)) s->wl_station = (uint32_t)d;
     if (get_num(o, "wl_tx", 0, 255, &d, &bad)) s->wl_tx = (uint8_t)d;
     if (get_num(o, "map_created", 0, 4294967295.0, &d, &bad)) s->map_created = (uint32_t)d;
+    get_bool(o, "adsb_enabled", &s->adsb_enabled, &bad);
+    settings_json_str(o, "adsb_url", s->adsb_url, sizeof(s->adsb_url), &bad);
+    if (get_num(o, "adsb_range_nm", 1, ADSB_RANGE_MAX_NM, &d, &bad)) s->adsb_range_nm = (uint8_t)d;
 
     cJSON *v;
     if ((v = cJSON_GetObjectItem(o, "filter"))) parse_filter(v, &s->filter, &bad);
@@ -227,6 +244,11 @@ bool settings_from_json(const cJSON *o, settings_t *s, char *msg, size_t cap)
                 parse_fwd(cJSON_GetArrayItem(v, i), &s->fwd[i], i + 1, msg, cap);
             }
         }
+    }
+    if (!msg[0] && !valid_http_url(s->adsb_url)) {
+        snprintf(msg, cap, "the aircraft.json address must start with http://");
+    } else if (!msg[0] && s->adsb_enabled && !s->adsb_url[0]) {
+        snprintf(msg, cap, "enter the dump1090 aircraft.json address before turning aircraft on");
     }
     if (bad) snprintf(msg, cap, "invalid value for %s", bad);
     return !msg[0];

@@ -53,6 +53,7 @@ static void defaults(settings_t *s)
     s->net_enabled = true;
     s->sdr_enabled = true;
     s->sdr_gain = SDR_GAIN_BEST;
+    s->adsb_range_nm = ADSB_RANGE_DEFAULT_NM;
 }
 
 static void fwd_key(char *key, size_t cap, int i, const char *name)
@@ -147,6 +148,9 @@ static esp_err_t nvs_save(const settings_t *in)
     nvs_set_str(h, "wl_key", in->wl_key);
     nvs_set_u32(h, "wl_station", in->wl_station);
     nvs_set_u8(h, "wl_tx", in->wl_tx);
+    nvs_set_u8(h, "adsb_on", in->adsb_enabled);
+    nvs_set_str(h, "adsb_url", in->adsb_url);
+    nvs_set_u8(h, "adsb_range", in->adsb_range_nm);
     err = nvs_commit(h);
     nvs_close(h);
     return err;
@@ -336,6 +340,9 @@ esp_err_t settings_init(void)
         get_str(h, "wl_key", s_settings.wl_key, sizeof(s_settings.wl_key));
         nvs_get_u32(h, "wl_station", &s_settings.wl_station);
         nvs_get_u8(h, "wl_tx", &s_settings.wl_tx);
+        if (nvs_get_u8(h, "adsb_on", &u8) == ESP_OK) s_settings.adsb_enabled = u8;
+        get_str(h, "adsb_url", s_settings.adsb_url, sizeof(s_settings.adsb_url));
+        if (nvs_get_u8(h, "adsb_range", &u8) == ESP_OK && u8) s_settings.adsb_range_nm = u8;
         nvs_close(h);
     }
     card_load();
@@ -388,6 +395,10 @@ esp_err_t settings_set(const settings_t *in)
         strcmp(old.wl_key, in->wl_key) ||
         old.wl_station != in->wl_station || old.wl_tx != in->wl_tx) {
         bits |= SETTINGS_EV_WEATHER;
+    }
+    if (old.adsb_enabled != in->adsb_enabled || strcmp(old.adsb_url, in->adsb_url) ||
+        old.adsb_range_nm != in->adsb_range_nm) {
+        bits |= SETTINGS_EV_ADSB;
     }
     notify(bits);
     return err;
