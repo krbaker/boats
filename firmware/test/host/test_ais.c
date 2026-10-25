@@ -225,6 +225,25 @@ static void test_type4_base(void)
     CHECK(ais_msg_type_used(11));
 }
 
+static void test_type14_safety(void)
+{
+    bits_t b = {0};
+    put(&b, 14, 6); put(&b, 0, 2); put(&b, 970123456, 30); put(&b, 0, 2);
+    put_str(&b, "SART ACTIVE", 11);
+    char pl[80];
+    int fill;
+    armour(&b, pl, &fill);
+    ais_report_t r;
+    CHECK(ais_decode_payload(pl, fill, &r) == AIS_RESULT_REPORT);
+    CHECK(r.msg_type == 14 && r.mmsi == 970123456);
+    CHECK((r.fields & AIS_F_TEXT) && strcmp(r.text, "SART ACTIVE") == 0);
+    CHECK(ais_safety_kind(r.mmsi, r.text) == AIS_SAFETY_DISTRESS);
+    CHECK(ais_safety_kind(972000001, "MOB TEST") == AIS_SAFETY_TEST);
+    CHECK(ais_safety_kind(366123456, "SART ACTIVE") == AIS_SAFETY_TEXT); // not a beacon's MMSI
+    CHECK(ais_safety_kind(366123456, "MAYDAY MAYDAY") == AIS_SAFETY_DISTRESS);
+    CHECK(ais_msg_type_used(14));
+}
+
 static void test_type_counts(void)
 {
     ais_parser_t p;
@@ -242,6 +261,7 @@ int main(void)
     test_type9_sar();
     test_type21_aton();
     test_type4_base();
+    test_type14_safety();
     test_type_counts();
     test_type1();
     test_type5_multipart();

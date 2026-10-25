@@ -54,6 +54,23 @@ bool vessel_db_get(uint32_t mmsi, vessel_t *out);
 // Vessels and aircraft (not aids to navigation).
 int vessel_db_count(void);
 
+// Safety broadcasts (AIS type 14), the latest SAFETY_MSG_MAX. A repeat of the
+// same text from the same sender (beacons send theirs every minute) is the
+// same entry, counted.
+#define SAFETY_MSG_MAX 16
+typedef struct {
+    uint32_t mmsi;
+    char text[162];
+    ais_safety_t kind;
+    uint32_t count;             // times heard
+    int64_t first_us, last_us;  // esp_timer_get_time()
+    time_t last_wall;           // wall clock of the latest (0 if the clock wasn't set)
+} safety_msg_t;
+
+// Newest first. Returns how many.
+int vessel_db_safety_msgs(safety_msg_t *out, int max);
+uint32_t vessel_db_safety_generation(void);    // changes with every message heard
+
 // How many vessels have been heard only on the network feed, only by the
 // local SDR, and by both.
 void vessel_db_source_counts(int *net_only, int *sdr_only, int *both);

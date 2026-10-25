@@ -344,7 +344,7 @@ static const fake_mark_t k_marks[] = {
 };
 #define MARKS_N (int)(sizeof(k_marks) / sizeof(k_marks[0]))
 #define VESSELS_N (int)(sizeof(k_fleet) / sizeof(k_fleet[0]))
-#define FLEET_N (VESSELS_N + MARKS_N + 1)
+#define FLEET_N (VESSELS_N + MARKS_N + 2)   // + a SAR aircraft and an AIS-SART
 
 static void make_mark(int i, vessel_t *v)
 {
@@ -375,8 +375,45 @@ static void make_aircraft(vessel_t *v)
     v->last_heard_us = esp_timer_get_time() - 5 * 1000000LL;
 }
 
+// An AIS-SART going off, south-east of the centre.
+static void make_sart(vessel_t *v)
+{
+    memset(v, 0, sizeof(*v));
+    v->mmsi = 970111222;
+    v->lat = CENTER_LAT - 0.10 / 60.0;
+    v->lon = CENTER_LON + 0.12 / 60.0 / cos(CENTER_LAT * M_PI / 180);
+    v->fields = AIS_F_POS | AIS_F_NAVSTAT;
+    v->nav_status = 14;
+    v->cls = AIS_CLASS_A;
+    v->last_heard_us = esp_timer_get_time() - 20 * 1000000LL;
+}
+
+// Safety messages: the SART's, a shore notice, a man-overboard device's test.
+int vessel_db_safety_msgs(safety_msg_t *out, int max)
+{
+    int64_t now = esp_timer_get_time();
+    static const struct { uint32_t mmsi; const char *text; ais_safety_t kind; uint32_t count; int age_s; } k[] = {
+        {970111222, "SART ACTIVE", AIS_SAFETY_DISTRESS, 7, 20},
+        {3669702, "BUOY 12 OFF STATION. MARINERS USE CAUTION", AIS_SAFETY_TEXT, 1, 300},
+        {972000123, "MOB TEST", AIS_SAFETY_TEST, 2, 900},
+    };
+    int n = 0;
+    for (int i = 0; i < 3 && n < max; i++, n++) {
+        out[n] = (safety_msg_t){.mmsi = k[i].mmsi, .kind = k[i].kind, .count = k[i].count,
+                                .last_us = now - k[i].age_s * 1000000LL, .first_us = now - 3600 * 1000000LL,
+                                .last_wall = time(NULL) - k[i].age_s};
+        strcpy(out[n].text, k[i].text);
+    }
+    return n;
+}
+uint32_t vessel_db_safety_generation(void) { return 1; }
+
 static void make_vessel(int i, vessel_t *v)
 {
+    if (i == VESSELS_N + MARKS_N + 1) {
+        make_sart(v);
+        return;
+    }
     if (i >= VESSELS_N + MARKS_N) {
         make_aircraft(v);
         return;
@@ -669,5 +706,21 @@ int main(int argc, char **argv)
         run_ms(1100);
         snap(net_names[i]);
     }
+
+    // Safety messages: the Messages tab, then the distress popup over the map.
+    lv_screen_load(scr);
+    ui_map_on_show();
+    run_ms(1100);
+    snap("map_sart");
+    tap_edge(180); // vessel count -> Vessels overlay
+    lv_obj_t *vtabs = find_class(scr, &lv_tabview_class);
+    lv_tabview_set_active(vtabs, 3, LV_ANIM_OFF);
+    lv_obj_send_event(vtabs, LV_EVENT_VALUE_CHANGED, NULL);
+    run_ms(1100);
+    snap("vessels_messages");
+    hide_overlays(scr);
+    ui_safety_init();
+    run_ms(1200);
+    snap("safety_popup");
     return 0;
 }

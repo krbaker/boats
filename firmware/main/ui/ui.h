@@ -9,6 +9,7 @@
 
 #include "lvgl.h"
 #include "settings.h"
+#include "vessel_db.h"
 
 #define UI_SIZE     800
 #define UI_CENTER   (UI_SIZE / 2)
@@ -53,6 +54,13 @@ lv_obj_t *ui_tide_create(lv_obj_t *parent);
 void ui_tide_open(void);
 lv_obj_t *ui_weather_create(lv_obj_t *parent);
 void ui_weather_open(void);
+
+// AIS safety broadcasts (ui_safety.c): popups over any screen, and helpers
+// for listing them.
+void ui_safety_init(void);
+uint32_t ui_safety_msg_id(const safety_msg_t *m);
+void ui_safety_sender(const safety_msg_t *m, char *buf, size_t len);   // name/MMSI, distance and bearing
+const char *ui_safety_sender_kind(uint32_t mmsi);                      // "AIS-SART", ... or NULL
 
 // The settings tabs of the Network screen (ui_settings.c)
 void ui_settings_build(lv_obj_t *tabs);

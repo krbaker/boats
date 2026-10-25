@@ -24,7 +24,7 @@
 #define COL_NUM_W   ((BOX_W - COL_NAME_W) / 2)
 #define POLL_MS     250
 #define RX_POLL_MS  1000
-enum { TAB_LIST, TAB_RX, TAB_OPTIONS };
+enum { TAB_LIST, TAB_RX, TAB_OPTIONS, TAB_MSGS };
 
 typedef struct {
     uint32_t mmsi;
@@ -392,11 +392,78 @@ static void close_cb(lv_event_t *e)
     lv_obj_set_hidden(s_root, true);
 }
 
+// ---------------------------------------------------------------------------
+// Messages: AIS safety broadcasts, newest first
+// ---------------------------------------------------------------------------
+
+static lv_obj_t *s_msgs_tab;
+static uint32_t s_msgs_gen = UINT32_MAX;
+
+static lv_obj_t *msg_label(lv_obj_t *parent, const char *t, const lv_font_t *font, lv_color_t color)
+{
+    lv_obj_t *l = text(parent, t, color);
+    lv_obj_set_width(l, lv_pct(100));
+    lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_font(l, font, 0);
+    return l;
+}
+
+static void refresh_msgs(void)
+{
+    s_msgs_gen = vessel_db_safety_generation();
+    static safety_msg_t msgs[SAFETY_MSG_MAX];
+    int n = vessel_db_safety_msgs(msgs, SAFETY_MSG_MAX);
+    lv_obj_clean(s_msgs_tab);
+    if (!n) {
+        lv_obj_t *l = msg_label(s_msgs_tab, "No safety messages heard yet.\n\nShips, shore stations and emergency "
+                                            "beacons broadcast these as text (AIS type 14).", &lv_font_montserrat_16,
+                                UI_COLOR_MUTED);
+        lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
+        return;
+    }
+    for (int i = 0; i < n; i++) {
+        const safety_msg_t *m = &msgs[i];
+        lv_color_t c = m->kind == AIS_SAFETY_DISTRESS ? UI_COLOR_BAD : m->kind == AIS_SAFETY_TEST ? UI_COLOR_MUTED
+                                                                                                  : UI_COLOR_WARN;
+        lv_obj_t *box = lv_obj_create(s_msgs_tab);
+        lv_obj_set_size(box, lv_pct(100), LV_SIZE_CONTENT);
+        lv_obj_set_flex_flow(box, LV_FLEX_FLOW_COLUMN);
+        lv_obj_set_style_pad_all(box, 10, 0);
+        lv_obj_set_style_pad_row(box, 4, 0);
+        lv_obj_set_style_radius(box, 10, 0);
+        lv_obj_set_style_bg_color(box, UI_COLOR_PANEL, 0);
+        lv_obj_set_style_border_color(box, c, 0);
+        lv_obj_set_style_border_width(box, 2, 0);
+        lv_obj_set_scrollable(box, false);
+
+        char buf[96], t[32] = "";
+        if (m->last_wall) ui_format_time(m->last_wall, t, sizeof(t), false);
+        snprintf(buf, sizeof(buf), "%s%s%s", m->kind == AIS_SAFETY_DISTRESS ? "DISTRESS"
+                                             : m->kind == AIS_SAFETY_TEST ? "Beacon test" : "Notice",
+                 t[0] ? ", " : "", t);
+        if (m->count > 1) {
+            size_t k = strlen(buf);
+            snprintf(buf + k, sizeof(buf) - k, "  (x%lu)", (unsigned long)m->count);
+        }
+        msg_label(box, buf, &lv_font_montserrat_16, c);
+        ui_safety_sender(m, buf, sizeof(buf));
+        msg_label(box, buf, &lv_font_montserrat_16, UI_COLOR_MUTED);
+        msg_label(box, m->text, &lv_font_montserrat_20, UI_COLOR_TEXT);
+    }
+}
+
+static void msgs_timer_cb(lv_timer_t *t)
+{
+    if (lv_obj_is_hidden(s_root) || lv_tabview_get_tab_active(s_tabs) != TAB_MSGS) return;
+    if (vessel_db_safety_generation() != s_msgs_gen) refresh_msgs();
+}
+
 static void tab_changed_cb(lv_event_t *e)
 {
     uint32_t tab = lv_tabview_get_tab_active(s_tabs);
     if (tab == TAB_LIST) refresh_list();
     else if (tab == TAB_RX) refresh_rx();
+    else if (tab == TAB_MSGS) refresh_msgs();
 }
 
 lv_obj_t *ui_vessels_create(lv_obj_t *parent)
@@ -423,8 +490,18 @@ lv_obj_t *ui_vessels_create(lv_obj_t *parent)
     lv_obj_t *list_tab = lv_tabview_add_tab(s_tabs, "Vessels");
     lv_obj_t *rx_tab = lv_tabview_add_tab(s_tabs, "Receiver");
     lv_obj_t *opt_tab = lv_tabview_add_tab(s_tabs, "Options");
+    s_msgs_tab = lv_tabview_add_tab(s_tabs, "Messages");
+    lv_obj_set_flex_flow(s_msgs_tab, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_hor(s_msgs_tab, 24, 0);
+    lv_obj_set_style_pad_ver(s_msgs_tab, 14, 0);
+    lv_obj_set_style_pad_row(s_msgs_tab, 10, 0);
+    // Each tab as wide as its name needs.
     for (uint32_t i = 0; i < lv_obj_get_child_count(bar); i++) {
-        lv_obj_set_style_text_color(lv_obj_get_child(bar, i), UI_COLOR_TEXT, 0);
+        lv_obj_t *b = lv_obj_get_child(bar, i);
+        lv_obj_set_style_text_color(b, UI_COLOR_TEXT, 0);
+        lv_obj_set_style_pad_hor(b, 4, 0);
+        lv_obj_t *l = lv_obj_get_child(b, 0);
+        if (l) lv_obj_set_flex_grow(b, (uint8_t)(strlen(lv_label_get_text(l)) + 3));
     }
 
     lv_obj_set_style_pad_all(list_tab, 0, 0);
@@ -448,6 +525,7 @@ lv_obj_t *ui_vessels_create(lv_obj_t *parent)
 
     lv_timer_create(poll_timer_cb, POLL_MS, NULL);
     lv_timer_create(rx_timer_cb, RX_POLL_MS, NULL);
+    lv_timer_create(msgs_timer_cb, RX_POLL_MS, NULL);
     return s_root;
 }
 

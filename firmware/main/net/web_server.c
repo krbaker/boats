@@ -328,6 +328,24 @@ static esp_err_t status_get(httpd_req_t *req)
     }
     cJSON_AddNumberToObject(o, "vessels", vessel_db_count());
 
+    // Safety broadcasts (AIS type 14), newest first.
+    static safety_msg_t msgs[SAFETY_MSG_MAX];
+    int nmsgs = vessel_db_safety_msgs(msgs, SAFETY_MSG_MAX);
+    cJSON *safety = cJSON_AddArrayToObject(o, "safety");
+    for (int i = 0; i < nmsgs; i++) {
+        const safety_msg_t *m = &msgs[i];
+        cJSON *mj = cJSON_CreateObject();
+        vessel_t v;
+        cJSON_AddNumberToObject(mj, "mmsi", m->mmsi);
+        cJSON_AddStringToObject(mj, "name", vessel_db_get(m->mmsi, &v) ? v.name : "");
+        cJSON_AddStringToObject(mj, "kind", m->kind == AIS_SAFETY_DISTRESS ? "distress"
+                                            : m->kind == AIS_SAFETY_TEST    ? "test" : "notice");
+        cJSON_AddStringToObject(mj, "text", m->text);
+        cJSON_AddNumberToObject(mj, "count", m->count);
+        cJSON_AddNumberToObject(mj, "age_s", (now_us - m->last_us) / 1000000);
+        cJSON_AddItemToArray(safety, mj);
+    }
+
     vc_stats_t vc;
     cJSON *cachej = cJSON_AddObjectToObject(o, "vessel_cache");
     if (!vessel_db_cache_stats(&vc)) {

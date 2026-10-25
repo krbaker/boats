@@ -389,6 +389,11 @@ ais_result_t ais_decode_payload(const char *payload, int fill_bits, ais_report_t
         return AIS_RESULT_REPORT;
     }
 
+    case 14: // safety broadcast: text after 2 spare bits, to the end of the message
+        if (b.nbits < 46) return AIS_RESULT_UNSUPPORTED;
+        set_str_field(out, AIS_F_TEXT, out->text, sizeof(out->text), &b, 40, (b.nbits - 40) / 6);
+        return (out->fields & AIS_F_TEXT) ? AIS_RESULT_REPORT : AIS_RESULT_UNSUPPORTED;
+
     case 27:
         if (b.nbits < 95) return AIS_RESULT_UNSUPPORTED;
         out->cls = AIS_CLASS_A;
@@ -487,9 +492,20 @@ const char *ais_aton_type_str(uint8_t type)
 bool ais_msg_type_used(uint8_t type)
 {
     switch (type) {
-    case 1: case 2: case 3: case 4: case 5: case 9: case 11: case 18: case 19: case 21: case 24: case 27: return true;
+    case 1: case 2: case 3: case 4: case 5: case 9: case 11: case 14: case 18: case 19: case 21: case 24: case 27:
+        return true;
     default: return false;
     }
+}
+
+ais_safety_t ais_safety_kind(uint32_t mmsi, const char *text)
+{
+    uint32_t prefix = mmsi / 1000000; // 970 AIS-SART, 972 man overboard, 974 EPIRB
+    bool beacon = prefix == 970 || prefix == 972 || prefix == 974;
+    if (strstr(text, "MAYDAY")) return AIS_SAFETY_DISTRESS;
+    if (beacon && strstr(text, "ACTIVE")) return AIS_SAFETY_DISTRESS;
+    if (beacon && strstr(text, "TEST")) return AIS_SAFETY_TEST;
+    return AIS_SAFETY_TEXT;
 }
 
 const char *ais_msg_type_str(uint8_t type)

@@ -35,6 +35,7 @@ typedef enum {
 #define AIS_F_ATON      (1u << 10)  // aton_type, aton_flags
 #define AIS_F_ALT       (1u << 11)  // alt_m
 #define AIS_F_UTC       (1u << 12)  // utc
+#define AIS_F_TEXT      (1u << 13)  // text (a safety broadcast, type 14)
 
 // ais_report_t.aton_flags
 #define AIS_ATON_VIRTUAL    0x01    // no physical mark there: only the AIS signal
@@ -70,7 +71,15 @@ typedef struct {
         uint16_t year;
         uint8_t month, day, hour, minute, second;
     } utc;                  // a base station's clock
+    char text[162];         // safety broadcast (type 14): up to 161 characters
 } ais_report_t;
+
+// What a safety broadcast is (ais_safety_kind).
+typedef enum {
+    AIS_SAFETY_TEXT,        // a notice or free text
+    AIS_SAFETY_TEST,        // an emergency beacon's test ("SART TEST", "MOB TEST", "EPIRB TEST")
+    AIS_SAFETY_DISTRESS,    // an emergency beacon going off ("SART ACTIVE", ...), or "MAYDAY"
+} ais_safety_t;
 
 typedef enum {
     AIS_RESULT_REPORT = 0,  // *out filled with a decoded report
@@ -128,6 +137,10 @@ const char *ais_class_str(ais_class_t cls);
 const char *ais_aton_type_str(uint8_t type);
 const char *ais_msg_type_str(uint8_t type);   // "Position report (Class A)", ...
 bool ais_msg_type_used(uint8_t type);         // one ais_decode_payload() decodes
+
+// A safety broadcast's kind, from its sender (emergency beacons have MMSIs
+// 970..., 972..., 974...) and text.
+ais_safety_t ais_safety_kind(uint32_t mmsi, const char *text);
 
 #ifdef __cplusplus
 }

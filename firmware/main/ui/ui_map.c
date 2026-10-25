@@ -896,10 +896,13 @@ static void draw_triangle(lv_layer_t *layer, lv_point_precise_t a, lv_point_prec
     lv_draw_triangle(layer, &d);
 }
 
+static bool is_beacon(uint32_t mmsi);
+static bool beacon_active(const vessel_t *v);
+
 static bool vessel_passes_filter(const vessel_t *v)
 {
     const vessel_filter_t *f = &s_filter;
-    if (v->cls == AIS_CLASS_ATON || v->cls == AIS_CLASS_SAR) return true; // the filters are for vessels
+    if (v->cls == AIS_CLASS_ATON || v->cls == AIS_CLASS_SAR || is_beacon(v->mmsi)) return true; // the filters are for vessels
     if (f->min_len_ft) {
         if ((v->fields & AIS_F_DIM) && v->dim_a + v->dim_b > 0) {
             if ((v->dim_a + v->dim_b) * 3.28084f < f->min_len_ft) return false;
@@ -929,6 +932,7 @@ static float vessel_priority(const vessel_t *v, int64_t now_us)
 {
     float p;
     if (v->cls == AIS_CLASS_ATON) return -200000; // marks never take label space from vessels
+    if (is_beacon(v->mmsi)) return 1000000;       // beacons always get theirs
     if (s_filter.order == ORDER_SPEED) p = (v->fields & AIS_F_SOG) ? v->sog_kn : -1;
     else p = ((v->fields & AIS_F_DIM) && v->dim_a + v->dim_b) ? v->dim_a + v->dim_b : -1;
     if (vessel_stale(v, now_us)) p -= 100000;
@@ -939,7 +943,8 @@ static float vessel_priority(const vessel_t *v, int64_t now_us)
 // under way on top, so a moving vessel is never hidden under a stationary one.
 static float vessel_layer(const vessel_t *v, float prio, int64_t now_us)
 {
-    // Marks at the very bottom, aircraft on top of everything.
+    // Marks at the very bottom; aircraft, then beacons, on top of everything.
+    if (is_beacon(v->mmsi)) return 4000000.0f + prio;
     if (v->cls == AIS_CLASS_ATON) return -1000000.0f + prio;
     if (v->cls == AIS_CLASS_SAR) return 3000000.0f + prio;
     int tier = vessel_stale(v, now_us) ? 0 : ((v->fields & AIS_F_SOG) && v->sog_kn >= HEADING_MIN_KN) ? 2 : 1;
@@ -982,6 +987,11 @@ static void draw_label(lv_layer_t *layer, const char *text, const lv_area_t *bg,
 // ever show their name; aircraft always show their altitude.
 static void label_text(const vessel_t *v, char *text, size_t cap)
 {
+    if (is_beacon(v->mmsi)) { // always labelled, whatever the options
+        uint32_t p = v->mmsi / 1000000;
+        snprintf(text, cap, "%s%s", p == 970 ? "SART" : p == 972 ? "MOB" : "EPIRB", beacon_active(v) ? "" : " (test)");
+        return;
+    }
     if (v->cls == AIS_CLASS_ATON) {
         strlcpy(text, s_filter.label_name ? v->name : "", cap);
         return;
@@ -1308,6 +1318,69 @@ static void draw_aircraft(lv_layer_t *layer, placed_t *pl, float x, float y, lv_
     place(pl, x, y, 14, opa);
 }
 
+// Emergency beacons: AIS-SART (970...), man overboard (972...), EPIRB (974...).
+static bool is_beacon(uint32_t mmsi)
+{
+    uint32_t p = mmsi / 1000000;
+    return p == 970 || p == 972 || p == 974;
+}
+
+#define BEACON_ACTIVE_S 600     // a distress message this recent: the beacon is going off
+static uint32_t s_distress_mmsi[SAFETY_MSG_MAX];
+static int s_ndistress;
+
+// Which beacons have sent a distress message lately (with each new snapshot).
+static void update_distress(void)
+{
+    static safety_msg_t msgs[SAFETY_MSG_MAX];
+    int n = vessel_db_safety_msgs(msgs, SAFETY_MSG_MAX);
+    int64_t now = esp_timer_get_time();
+    s_ndistress = 0;
+    for (int i = 0; i < n; i++) {
+        if (msgs[i].kind == AIS_SAFETY_DISTRESS && now - msgs[i].last_us < (int64_t)BEACON_ACTIVE_S * 1000000)
+            s_distress_mmsi[s_ndistress++] = msgs[i].mmsi;
+    }
+}
+
+// Going off (not just being tested): its position reports say so (navigational
+// status 14, "AIS-SART active"), or it sent a distress message lately.
+static bool beacon_active(const vessel_t *v)
+{
+    if ((v->fields & AIS_F_NAVSTAT) && v->nav_status == 14) return true;
+    for (int i = 0; i < s_ndistress; i++) {
+        if (s_distress_mmsi[i] == v->mmsi) return true;
+    }
+    return false;
+}
+
+// The chart symbol for an AIS-SART: a circle with a cross in it. Red when going
+// off; smaller and grey in test.
+static void draw_beacon(lv_layer_t *layer, placed_t *pl, float x, float y, lv_opa_t opa)
+{
+    bool active = beacon_active(pl->v);
+    float r = active ? 13 : 9;
+    lv_color_t c = active ? MARK_RED : lv_color_hex(0x9AA5B1);
+    for (int pass = 0; pass < 3; pass++) {
+        lv_color_t col = pass == 0 ? lv_color_white() : pass == 1 ? lv_color_hex(0x101010) : c;
+        int w = pass == 0 ? 3 + 2 * HALO_PX + 2 : pass == 1 ? 5 : 3;
+        lv_opa_t o = pass == 0 ? (lv_opa_t)(opa * 85 / 100) : opa;
+        lv_draw_arc_dsc_t a;
+        lv_draw_arc_dsc_init(&a);
+        a.center = (lv_point_t){(int32_t)x, (int32_t)y};
+        a.radius = (int32_t)(r + w / 2.0f);
+        a.width = w;
+        a.start_angle = 0;
+        a.end_angle = 360;
+        a.color = col;
+        a.opa = o;
+        lv_draw_arc(layer, &a);
+        float k = r * 0.7071f; // the cross, corner to corner
+        draw_line(layer, (lv_point_precise_t){x - k, y - k}, (lv_point_precise_t){x + k, y + k}, col, w, o);
+        draw_line(layer, (lv_point_precise_t){x - k, y + k}, (lv_point_precise_t){x + k, y - k}, col, w, o);
+    }
+    place(pl, x, y, r + 4, opa);
+}
+
 static void draw_vessel(lv_layer_t *layer, placed_t *pl, int64_t now_us)
 {
     const vessel_t *v = pl->v;
@@ -1319,6 +1392,10 @@ static void draw_vessel(lv_layer_t *layer, placed_t *pl, int64_t now_us)
 
     bool stale = vessel_stale(v, now_us);
     lv_opa_t opa = stale ? LV_OPA_50 : LV_OPA_COVER;
+    if (is_beacon(v->mmsi)) {
+        draw_beacon(layer, pl, x, y, opa);
+        return;
+    }
     if (v->cls == AIS_CLASS_ATON) {
         draw_aton(layer, pl, x, y, opa);
         return;
@@ -1623,6 +1700,7 @@ static void refresh_timer_cb(lv_timer_t *t)
     if (bits & SETTINGS_EV_CENTER) view_go_home();
 
     s_nvessels = vessel_db_snapshot(s_vessels, VESSEL_MAX);
+    update_distress();
     if (lv_screen_active() == s_scr) lv_obj_invalidate(s_overlay);
     update_border_text();
     update_net_icon();
@@ -1728,5 +1806,6 @@ void ui_map_set_filter(const vessel_filter_t *f)
 void ui_map_on_show(void)
 {
     s_nvessels = vessel_db_snapshot(s_vessels, VESSEL_MAX);
+    update_distress();
     lv_obj_invalidate(s_overlay);
 }

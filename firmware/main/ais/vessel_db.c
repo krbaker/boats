@@ -1,5 +1,6 @@
 #include "vessel_db.h"
 
+#include <stdlib.h>
 #include <string.h>
 
 #include "esp_heap_caps.h"
@@ -20,6 +21,9 @@ static const char *TAG = "vessels";
 
 static vessel_t *s_vessels;
 static int s_count;
+static safety_msg_t s_safety[SAFETY_MSG_MAX];
+static int s_nsafety;
+static volatile uint32_t s_safety_gen;
 static volatile uint32_t s_generation;
 static SemaphoreHandle_t s_lock;
 static vessel_cache_t *s_cache; // NULL until cache_task has loaded it
@@ -162,9 +166,66 @@ static time_t wall_now(void)
     return now > 1600000000 ? now : 0; // treat an unset clock as unknown
 }
 
+static void add_safety_msg(const ais_report_t *r)
+{
+    int64_t now = esp_timer_get_time();
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    safety_msg_t *m = NULL;
+    for (int i = 0; i < s_nsafety && !m; i++) {
+        if (s_safety[i].mmsi == r->mmsi && strcmp(s_safety[i].text, r->text) == 0) m = &s_safety[i];
+    }
+    bool is_new = !m;
+    if (!m) {
+        if (s_nsafety < SAFETY_MSG_MAX) {
+            m = &s_safety[s_nsafety++];
+        } else { // full: replace the one heard longest ago
+            m = &s_safety[0];
+            for (int i = 1; i < s_nsafety; i++) {
+                if (s_safety[i].last_us < m->last_us) m = &s_safety[i];
+            }
+        }
+        *m = (safety_msg_t){.mmsi = r->mmsi, .kind = ais_safety_kind(r->mmsi, r->text), .first_us = now};
+        strcpy(m->text, r->text);
+    }
+    m->count++;
+    m->last_us = now;
+    m->last_wall = wall_now();
+    s_safety_gen++;
+    xSemaphoreGive(s_lock);
+    if (is_new) ESP_LOGW(TAG, "safety message from %lu: %s", (unsigned long)r->mmsi, r->text);
+}
+
+static int by_newest_safety(const void *a, const void *b)
+{
+    int64_t x = ((const safety_msg_t *)a)->last_us, y = ((const safety_msg_t *)b)->last_us;
+    return (x < y) - (x > y);
+}
+
+int vessel_db_safety_msgs(safety_msg_t *out, int max)
+{
+    static safety_msg_t sorted[SAFETY_MSG_MAX]; // used under s_lock
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    int n = s_nsafety;
+    memcpy(sorted, s_safety, n * sizeof(sorted[0]));
+    qsort(sorted, n, sizeof(sorted[0]), by_newest_safety);
+    if (n > max) n = max;
+    memcpy(out, sorted, n * sizeof(out[0]));
+    xSemaphoreGive(s_lock);
+    return n;
+}
+
+uint32_t vessel_db_safety_generation(void)
+{
+    return s_safety_gen;
+}
+
 void vessel_db_update(const ais_report_t *r, rx_source_t src)
 {
     if (r->mmsi == 0) return;
+    if (r->fields & AIS_F_TEXT) { // a safety broadcast: kept apart, not a target's report
+        add_safety_msg(r);
+        return;
+    }
     if (r->cls == AIS_CLASS_BASE) { // a clock (types 4, 11), not a target: for when the internet's isn't there
         if (r->fields & AIS_F_UTC) {
             clock_set_from_ais(r->utc.year, r->utc.month, r->utc.day, r->utc.hour, r->utc.minute, r->utc.second);
