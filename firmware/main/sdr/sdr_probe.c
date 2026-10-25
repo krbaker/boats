@@ -57,6 +57,8 @@ static const char *TAG = "sdr_probe";
 #define DEC_RING            (2 * 1024 * 1024)  // PSRAM: ~3.6 s of samples
 #define DEC_CHUNK           (16 * 1024)
 #define CPU_PERIOD_US       2000000
+#define STALL_US            3000000   // no samples this long: restart the stream
+#define RETRY_US            10000000  // between attempts to start the stream
 
 // librtlsdr register blocks
 enum { DEMODB = 0, USBB = 1, SYSB = 2, IICB = 6 };
@@ -571,6 +573,12 @@ static void stream_stop(void)
 {
     s_streaming = false;
     vTaskDelay(pdMS_TO_TICKS(300)); // let in-flight transfers finish
+    // Cancel any that won't (a stalled stream), so they can be freed.
+    if (usb_host_endpoint_halt(s_dev, BULK_EP) == ESP_OK) {
+        usb_host_endpoint_flush(s_dev, BULK_EP);
+        usb_host_endpoint_clear(s_dev, BULK_EP);
+        vTaskDelay(pdMS_TO_TICKS(50)); // the cancelled callbacks
+    }
     for (int i = 0; i < BULK_XFERS; i++) {
         if (s_xfers[i]) usb_host_transfer_free(s_xfers[i]);
         s_xfers[i] = NULL;
@@ -767,6 +775,8 @@ static void probe_device(uint8_t addr)
         // Stream continuously into the decoder (captures tap the same stream),
         // following the settings as they change.
         bool streaming = false, need_sweep = false;
+        int64_t retry_at = 0, last_data = 0;
+        uint64_t last_bytes = 0;
         settings_t old = {0};
         s_target_idx = -1;
         for (bool first = true; !s_gone; first = false) {
@@ -781,20 +791,46 @@ static void probe_device(uint8_t addr)
                     need_sweep = true;
                 }
                 old = cfg;
-                if (cfg.sdr_enabled && !streaming) {
-                    s_dec_reset = true;
-                    s_dec_on = true;
-                    streaming = stream_start(AIS_RATE) != 0;
-                    if (!streaming) ESP_LOGE(TAG, "could not start the sample stream");
-                    ESP_LOGI(TAG, "receiving: decoding AIS on 161.975 and 162.025 MHz");
-                } else if (!cfg.sdr_enabled && streaming) {
+                if (!cfg.sdr_enabled && streaming) {
                     s_dec_on = false;
                     stream_stop();
                     streaming = false;
                     ESP_LOGI(TAG, "turned off in the settings");
                 }
-                s_state = cfg.sdr_enabled ? SDR_READY : SDR_DISABLED;
             }
+            // A stream that stops delivering samples (its transfers all failed)
+            // isn't receiving: drop it and start it again below.
+            int64_t now = esp_timer_get_time();
+            if (streaming && s_bytes != last_bytes) {
+                last_bytes = s_bytes;
+                last_data = now;
+            } else if (streaming && now - last_data > STALL_US) {
+                ESP_LOGE(TAG, "no samples for %d s (%lu transfer errors); restarting the stream",
+                         (int)(STALL_US / 1000000), (unsigned long)s_xfer_errors);
+                s_dec_on = false;
+                stream_stop();
+                streaming = false;
+            }
+            // Start the stream, retrying while it fails (say internal RAM is
+            // short for the transfer buffers).
+            if (old.sdr_enabled && !streaming && now >= retry_at) {
+                s_dec_reset = true;
+                s_dec_on = true;
+                streaming = stream_start(AIS_RATE) != 0;
+                if (streaming) {
+                    ESP_LOGI(TAG, "receiving: decoding AIS on 161.975 and 162.025 MHz");
+                    last_bytes = 0;
+                    last_data = esp_timer_get_time();
+                } else {
+                    s_dec_on = false;
+                    stream_stop(); // frees the transfers it did get
+                    ESP_LOGE(TAG, "could not start the sample stream; trying again in %d s",
+                             (int)(RETRY_US / 1000000));
+                    retry_at = esp_timer_get_time() + RETRY_US;
+                }
+            }
+            // "Receiving" only while samples are flowing.
+            s_state = !old.sdr_enabled ? SDR_DISABLED : streaming ? SDR_READY : SDR_TESTING;
             if (need_sweep && streaming) {
                 need_sweep = false;
                 int best = gain_sweep();
