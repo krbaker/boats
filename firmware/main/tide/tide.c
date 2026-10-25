@@ -306,7 +306,7 @@ void tide_start(void)
     sntp.sync_cb = on_ntp_sync;
     esp_netif_sntp_init(&sntp);
 
-    xTaskCreate(tide_task, "tide", 8192, NULL, 3, NULL);
+    xTaskCreatePinnedToCore(tide_task, "tide", 8192, NULL, 3, NULL, 0); // off the SDR decoder's core
 }
 
 void tide_get_status(tide_status_t *out)

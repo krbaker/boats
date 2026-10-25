@@ -390,7 +390,9 @@ void weather_start(void)
     s_data = heap_caps_calloc(1, sizeof(*s_data), MALLOC_CAP_SPIRAM);
     assert(s_data);
     s_events = settings_subscribe();
-    xTaskCreate(weather_task, "weather", 8192, NULL, 3, NULL);
+    // Core 0: its HTTPS handshakes would otherwise take turns with the SDR
+    // decoder on core 1.
+    xTaskCreatePinnedToCore(weather_task, "weather", 8192, NULL, 3, NULL, 0);
 }
 
 void weather_get(weather_data_t *out)
