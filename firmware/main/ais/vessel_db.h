@@ -14,6 +14,7 @@
 // clock: see clock_set_from_ais).
 #define VESSEL_MAX          500
 #define VESSEL_EXPIRY_S     (10 * 60)
+#define ATON_EXPIRY_S       (3 * 3600)  // aids to navigation stay put: kept far longer
 
 typedef struct {
     uint32_t mmsi;

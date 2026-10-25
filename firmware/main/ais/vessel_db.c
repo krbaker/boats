@@ -219,11 +219,12 @@ void vessel_db_update(const ais_report_t *r, rx_source_t src)
 
 void vessel_db_expire(void)
 {
-    int64_t cutoff = esp_timer_get_time() - (int64_t)VESSEL_EXPIRY_S * 1000000;
+    int64_t now = esp_timer_get_time();
+    int64_t cutoff = now - (int64_t)VESSEL_EXPIRY_S * 1000000, aton_cutoff = now - (int64_t)ATON_EXPIRY_S * 1000000;
     xSemaphoreTake(s_lock, portMAX_DELAY);
     int removed = 0;
     for (int i = 0; i < s_count;) {
-        if (s_vessels[i].last_heard_us < cutoff) {
+        if (s_vessels[i].last_heard_us < (s_vessels[i].cls == AIS_CLASS_ATON ? aton_cutoff : cutoff)) {
             s_vessels[i] = s_vessels[--s_count];
             removed++;
         } else {
