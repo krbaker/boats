@@ -55,7 +55,7 @@
 #define WIND_SHAFT_W    48
 #define WIND_HEAD_W     78
 #define WX_OVERLAP_DEG  16      // wind and wave arrows this close in direction share one label
-#define WAVE_TEXT_COLOR lv_color_hex(0x9AD4FF)  // wave figures in a shared label: a lighter blue, to read on the arrows
+#define ARROW_TEXT_COLOR lv_color_hex(0x111111) // figures on the wind and wave arrows: dark, to read on their fills
 #define WAVE_ICON_PX    26      // the wave icon in the tide bubble (buoy without wave direction)
 
 // Wi-Fi icon before the time: signal bars online, struck through offline,
@@ -360,8 +360,8 @@ static void text_at_color(lv_layer_t *layer, const char *text, const lv_font_t *
     int32_t x = (int32_t)lroundf(c.x) - size.x / 2, y = (int32_t)lroundf(c.y) - size.y / 2;
     for (int i = 0; i < 2; i++) {
         lv_area_t a = {x + (i ? 0 : 1), y + (i ? 0 : 1), x + size.x + (i ? 0 : 1), y + size.y + (i ? 0 : 1)};
-        d.color = i ? color : lv_color_black();
-        d.opa = i ? LV_OPA_COVER : LV_OPA_70;
+        d.color = i ? color : lv_color_white(); // a light shadow: the text is dark
+        d.opa = i ? LV_OPA_COVER : LV_OPA_50;
         lv_draw_label(layer, &d, &a);
     }
 }
@@ -418,23 +418,23 @@ static int wind_lines(label_line_t *l)
 {
     int n = 0;
     bool gust = s_wx.wind_mph >= 1 && s_wx.gust_mph - s_wx.wind_mph >= GUST_SHOW_MPH;
-    l[n] = (label_line_t){.font = gust ? &lv_font_montserrat_20 : &lv_font_montserrat_24, .color = lv_color_white()};
+    l[n] = (label_line_t){.font = gust ? &lv_font_montserrat_20 : &lv_font_montserrat_24, .color = ARROW_TEXT_COLOR};
     snprintf(l[n++].text, sizeof(l->text), "%.0f", s_wx.wind_mph < 1 ? 0 : s_wx.wind_mph);
     if (gust) {
-        l[n] = (label_line_t){.font = &lv_font_montserrat_14, .color = lv_color_white()};
+        l[n] = (label_line_t){.font = &lv_font_montserrat_14, .color = ARROW_TEXT_COLOR};
         snprintf(l[n++].text, sizeof(l->text), "G%.0f", s_wx.gust_mph);
     }
     return n;
 }
 
 // The waves' figures: height, and period if known.
-static int wave_lines(label_line_t *l, lv_color_t color)
+static int wave_lines(label_line_t *l)
 {
     int n = 0;
-    l[n] = (label_line_t){.font = &lv_font_montserrat_16, .color = color};
+    l[n] = (label_line_t){.font = &lv_font_montserrat_16, .color = ARROW_TEXT_COLOR};
     snprintf(l[n++].text, sizeof(l->text), "%.1f ft", s_wx.wave_ft);
     if (s_wx.wave_s > 0) {
-        l[n] = (label_line_t){.font = &lv_font_montserrat_14, .color = color};
+        l[n] = (label_line_t){.font = &lv_font_montserrat_14, .color = ARROW_TEXT_COLOR};
         snprintf(l[n++].text, sizeof(l->text), "%.0f s", s_wx.wave_s);
     }
     return n;
@@ -442,7 +442,7 @@ static int wave_lines(label_line_t *l, lv_color_t color)
 
 // Wind and wave arrows, the same shape and at the same distance from the
 // edge. Translucent, so they can overlap; their labels go on top of both, and
-// when the arrows overlap the two labels become one: wind, then waves in blue.
+// when the arrows overlap the two labels become one: wind, then waves.
 static void draw_wind_and_waves(lv_layer_t *layer)
 {
     bool wind = s_wx.wind_on, wave = s_wx.wave_on;
@@ -475,14 +475,14 @@ static void draw_wind_and_waves(lv_layer_t *layer)
     bool shared = wind && wave && fabsf(fmodf(s_wx.wind_dir - s_wx.wave_dir + 540, 360) - 180) < WX_OVERLAP_DEG;
     if (shared) {
         n = wind_lines(l);
-        n += wave_lines(l + n, WAVE_TEXT_COLOR);
+        n += wave_lines(l + n);
         // Between the two directions, so it sits on both.
         float mid = s_wx.wave_dir + (fmodf(s_wx.wind_dir - s_wx.wave_dir + 540, 360) - 180) / 2;
         draw_label_lines(layer, l, n, arrow_label_at(mid));
         return;
     }
     if (wave) {
-        n = wave_lines(l, lv_color_white());
+        n = wave_lines(l);
         draw_label_lines(layer, l, n, arrow_label_at(s_wx.wave_dir));
     }
     if (wind) {
