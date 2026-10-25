@@ -1,4 +1,5 @@
-// Network info screen (opened by holding a finger on the screen for 10 s).
+// Network and settings screen (opened by holding a finger on the screen for
+// 10 s): the Network tab here, the settings tabs in ui_settings.c.
 
 #include <stdio.h>
 #include <string.h>
@@ -14,8 +15,11 @@
 
 #define CONFIRM_TIMEOUT_MS 4000
 #define SAVE_RESULT_MS     5000    // how long the save button shows how it went
+#define TABS_W             540     // the tab box; its corners just fit inside the round screen
+#define TABS_H             560
+#define TABS_Y             (-16)   // offset of its centre from the screen's
 
-static lv_obj_t *s_scr, *s_info, *s_ap_box, *s_ap_ssid, *s_ap_pass, *s_ap_url, *s_ap_btn, *s_ap_lbl;
+static lv_obj_t *s_scr, *s_tabs, *s_info, *s_ap_box, *s_ap_ssid, *s_ap_pass, *s_ap_url, *s_ap_btn, *s_ap_lbl;
 static lv_obj_t *s_pass_cap, *s_pass_btn, *s_save_btn, *s_save_lbl;
 static bool s_saving;            // a save started here hasn't finished
 static uint32_t s_saved_at;      // lv_tick it finished, 0 = not showing a result
@@ -165,23 +169,20 @@ static void refresh(void)
     if (t.station[0]) {
         len += snprintf(buf + len, sizeof(buf) - len, "\nTide station: %s %s", t.station, t.station_name);
     }
-    if (w.ap_active) {
-        // Just the Wi-Fi line, so the access-point details below fit.
-        char *nl = strchr(buf, '\n');
-        if (nl) nl[1] = '\0';
-    }
     if (strcmp(lv_label_get_text(s_info), buf) != 0) lv_label_set_text(s_info, buf);
 }
 
 static void timer_cb(lv_timer_t *tm)
 {
-    if (lv_screen_active() == s_scr) refresh();
+    if (lv_screen_active() != s_scr) return;
+    refresh();
+    ui_settings_refresh();
 }
 
 static lv_obj_t *centered_label(lv_obj_t *parent, const lv_font_t *font, lv_color_t color)
 {
     lv_obj_t *l = lv_label_create(parent);
-    lv_obj_set_width(l, 560);
+    lv_obj_set_width(l, lv_pct(100));
     lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_font(l, font, 0);
     lv_obj_set_style_text_color(l, color, 0);
@@ -195,20 +196,31 @@ lv_obj_t *ui_netinfo_create(void)
     lv_obj_set_style_bg_color(s_scr, UI_COLOR_BG, 0);
     lv_obj_set_scrollable(s_scr, false);
 
-    lv_obj_t *title = centered_label(s_scr, &lv_font_montserrat_32, UI_COLOR_ACCENT);
-    lv_label_set_text(title, LV_SYMBOL_WIFI "  Network");
-    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 90);
+    s_tabs = lv_tabview_create(s_scr);
+    lv_obj_set_size(s_tabs, TABS_W, TABS_H);
+    lv_obj_align(s_tabs, LV_ALIGN_CENTER, 0, TABS_Y);
+    lv_obj_set_style_bg_color(s_tabs, UI_COLOR_BG, 0);
+    lv_obj_set_style_radius(s_tabs, 24, 0);
+    lv_obj_set_style_clip_corner(s_tabs, true, 0);
+    lv_tabview_set_tab_bar_size(s_tabs, 52);
+    // Tabs switch from the tab bar only, so drags on the slider don't swipe tabs.
+    lv_obj_set_scrollable(lv_tabview_get_content(s_tabs), false);
+    lv_obj_t *bar = lv_tabview_get_tab_bar(s_tabs);
+    lv_obj_set_style_bg_color(bar, UI_COLOR_PANEL, 0);
+    lv_obj_set_style_text_font(bar, &lv_font_montserrat_20, 0);
 
-    s_info = centered_label(s_scr, &lv_font_montserrat_20, UI_COLOR_TEXT);
-    lv_label_set_recolor(s_info, true);
-    lv_obj_set_style_text_line_space(s_info, 6, 0);
-    lv_obj_align(s_info, LV_ALIGN_TOP_MID, 0, 160);
+    // Network: what it's connected to, the access point, saving the log.
+    lv_obj_t *tab = lv_tabview_add_tab(s_tabs, "Network");
+    lv_obj_set_flex_flow(tab, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(tab, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_hor(tab, 16, 0);
+    lv_obj_set_style_pad_ver(tab, 16, 0);
+    lv_obj_set_style_pad_row(tab, 14, 0);
 
-    // Access-point credentials, shown in setup mode.
-    s_ap_box = lv_obj_create(s_scr);
+    // Access-point credentials, at the top while the access point is on.
+    s_ap_box = lv_obj_create(tab);
     lv_obj_remove_style_all(s_ap_box);
-    lv_obj_set_size(s_ap_box, 600, 330);
-    lv_obj_align(s_ap_box, LV_ALIGN_TOP_MID, 0, 200);
+    lv_obj_set_size(s_ap_box, lv_pct(100), LV_SIZE_CONTENT);
     lv_obj_set_flex_flow(s_ap_box, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(s_ap_box, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_row(s_ap_box, 6, 0);
@@ -236,23 +248,40 @@ lv_obj_t *ui_netinfo_create(void)
     s_ap_url = centered_label(s_ap_box, &lv_font_montserrat_24, UI_COLOR_ACCENT);
     lv_obj_set_hidden(s_ap_box, true);
 
+    s_info = centered_label(tab, &lv_font_montserrat_20, UI_COLOR_TEXT);
+    lv_label_set_recolor(s_info, true);
+    lv_obj_set_style_text_line_space(s_info, 6, 0);
+
     // Side by side: the access point and saving the log.
-    s_ap_btn = ui_round_button(s_scr, "", 280, 64);
+    row = lv_obj_create(tab);
+    lv_obj_remove_style_all(row);
+    lv_obj_set_size(row, lv_pct(100), LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    s_ap_btn = ui_round_button(row, "", 240, 64);
     s_ap_lbl = lv_obj_get_child(s_ap_btn, 0);
-    lv_obj_set_style_text_font(s_ap_lbl, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_font(s_ap_lbl, &lv_font_montserrat_16, 0);
     lv_obj_set_style_opa(s_ap_btn, LV_OPA_50, LV_STATE_DISABLED);
-    lv_obj_align(s_ap_btn, LV_ALIGN_BOTTOM_MID, -150, -140);
     lv_obj_add_event_cb(s_ap_btn, ap_cb, LV_EVENT_CLICKED, NULL);
 
-    s_save_btn = ui_round_button(s_scr, "Save logs", 280, 64);
+    s_save_btn = ui_round_button(row, "Save logs", 240, 64);
     s_save_lbl = lv_obj_get_child(s_save_btn, 0);
-    lv_obj_set_style_text_font(s_save_lbl, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_font(s_save_lbl, &lv_font_montserrat_16, 0);
     lv_label_set_recolor(s_save_lbl, true);
-    lv_obj_align(s_save_btn, LV_ALIGN_BOTTOM_MID, 150, -140);
     lv_obj_add_event_cb(s_save_btn, save_cb, LV_EVENT_CLICKED, NULL);
 
+    ui_settings_build(s_tabs);
+    // Each tab as wide as its name needs (equal widths cut "Retransmit" short).
+    for (uint32_t i = 0; i < lv_obj_get_child_count(bar); i++) {
+        lv_obj_t *b = lv_obj_get_child(bar, i);
+        lv_obj_set_style_text_color(b, UI_COLOR_TEXT, 0);
+        lv_obj_set_style_pad_hor(b, 4, 0);
+        lv_obj_t *l = lv_obj_get_child(b, 0);
+        if (l) lv_obj_set_flex_grow(b, (uint8_t)(strlen(lv_label_get_text(l)) + 3));
+    }
+
     lv_obj_t *back = ui_round_button(s_scr, LV_SYMBOL_LEFT " Map", 160, 64);
-    lv_obj_align(back, LV_ALIGN_BOTTOM_MID, 0, -50);
+    lv_obj_align(back, LV_ALIGN_BOTTOM_MID, 0, -28);
     lv_obj_add_event_cb(back, back_cb, LV_EVENT_CLICKED, NULL);
 
     lv_timer_create(timer_cb, 1000, NULL);
@@ -263,4 +292,5 @@ void ui_netinfo_on_show(void)
 {
     set_pass_confirm(false);
     refresh();
+    ui_settings_refresh();
 }

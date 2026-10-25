@@ -54,6 +54,10 @@ void ui_tide_open(void);
 lv_obj_t *ui_weather_create(lv_obj_t *parent);
 void ui_weather_open(void);
 
+// The settings tabs of the Network screen (ui_settings.c)
+void ui_settings_build(lv_obj_t *tabs);
+void ui_settings_refresh(void);
+
 // Shared widgets
 lv_obj_t *ui_round_button(lv_obj_t *parent, const char *text, int32_t w, int32_t h);
 // Hidden full-screen round panel with a close button at the top.

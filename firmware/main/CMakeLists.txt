@@ -25,6 +25,7 @@ idf_component_register(
         "ui/ui_map.c"
         "ui/ui_detail.c"
         "ui/ui_netinfo.c"
+        "ui/ui_settings.c"
         "ui/ui_vessels.c"
         "ui/ui_tide.c"
         "ui/map_tiles.c"

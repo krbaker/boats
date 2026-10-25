@@ -11,6 +11,8 @@
 
 #include "lvgl.h"
 
+#include "ais_fwd.h"
+#include "log_save.h"
 #include "map_pack.h"
 #include "map_store.h"
 #include "map_tiles.h"
@@ -461,8 +463,21 @@ void rx_stats_get(rx_stats_t *out)
 // Screens we don't preview.
 lv_obj_t *ui_detail_create(void) { return lv_obj_create(NULL); }
 void ui_detail_set_vessel(uint32_t mmsi) {}
-lv_obj_t *ui_netinfo_create(void) { return lv_obj_create(NULL); }
-void ui_netinfo_on_show(void) {}
+// The Network / settings screen's services.
+void wifi_mgr_ap(bool on) {}
+void wifi_mgr_new_ap_password(void) {}
+void log_save_start(void) {}
+log_save_state_t log_save_state(char *msg, size_t len) { if (msg) msg[0] = '\0'; return LOG_SAVE_IDLE; }
+void ais_fwd_get_status(int dest, fwd_status_t *out)
+{
+    memset(out, 0, sizeof(*out));
+    out->state = dest == 0 ? FWD_STATE_SENDING : FWD_STATE_OFF;
+}
+const char *ais_fwd_state_str(fwd_state_t st) { return st == FWD_STATE_SENDING ? "sending" : "off"; }
+void vessel_db_save(void) {}
+void vessel_db_forget_all(void) {}
+bool sdr_capture_start(int seconds, char *err, size_t errlen) { return true; }
+const char *nmea_state_str(nmea_state_t st) { return "connected"; }
 
 // ---------------------------------------------------------------------------
 // Rendering
@@ -641,5 +656,18 @@ int main(int argc, char **argv)
     set_weather(4);
     run_ms(1100);
     snap("map_weather_overlap");
+
+    // The Network screen and its settings tabs.
+    lv_obj_t *net = ui_netinfo_create();
+    lv_screen_load(net);
+    ui_netinfo_on_show();
+    run_ms(1100);
+    lv_obj_t *net_tabs = find_class(lv_screen_active(), &lv_tabview_class);
+    static const char *const net_names[] = {"net_network", "net_ais", "net_retransmit", "net_display", "net_system"};
+    for (int i = 0; i < 5; i++) {
+        lv_tabview_set_active(net_tabs, i, LV_ANIM_OFF);
+        run_ms(1100);
+        snap(net_names[i]);
+    }
     return 0;
 }
