@@ -132,7 +132,7 @@ static int dist_cmp(const void *a, const void *b)
 }
 
 // One fetch. False if it failed (the state says why).
-static bool poll(const settings_t *cfg)
+static bool fetch_once(const settings_t *cfg)
 {
     char err[64];
     int64_t t0 = esp_timer_get_time();
@@ -178,7 +178,7 @@ static void adsb_task(void *arg)
             wait = portMAX_DELAY;
         } else {
             if (s_status.state == ADSB_OFF || s_status.state == ADSB_NOT_SET) set_state(ADSB_CONNECTING, "");
-            if (poll(&cfg)) {
+            if (fetch_once(&cfg)) {
                 backoff_ms = 0;
             } else {
                 // Keep what we had (it ages out by itself), and try less often.
