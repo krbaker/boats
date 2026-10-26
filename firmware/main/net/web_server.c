@@ -9,6 +9,7 @@
 #include "cJSON.h"
 #include "esp_core_dump.h"
 #include "esp_heap_caps.h"
+#include "esp_memory_utils.h"
 #include "esp_partition.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
@@ -750,6 +751,55 @@ static esp_err_t coredump_get(httpd_req_t *req)
     return httpd_resp_send_chunk(req, NULL, 0);
 }
 
+// Where the memory is: each heap (free, largest free block, the least free
+// since start-up) and each task's stack (how much was never used, and whether
+// it's in PSRAM). Needs CONFIG_FREERTOS_USE_TRACE_FACILITY.
+static esp_err_t memory_get(httpd_req_t *req)
+{
+    cJSON *o = cJSON_CreateObject();
+    static const struct {
+        const char *name;
+        uint32_t caps;
+    } heaps[] = {
+        {"internal", MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT},
+        {"internal_dma", MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA},
+        {"psram", MALLOC_CAP_SPIRAM},
+    };
+    cJSON *hj = cJSON_AddArrayToObject(o, "heaps");
+    for (size_t i = 0; i < sizeof(heaps) / sizeof(heaps[0]); i++) {
+        multi_heap_info_t info;
+        heap_caps_get_info(&info, heaps[i].caps);
+        cJSON *h = cJSON_CreateObject();
+        cJSON_AddStringToObject(h, "name", heaps[i].name);
+        cJSON_AddNumberToObject(h, "total", heap_caps_get_total_size(heaps[i].caps));
+        cJSON_AddNumberToObject(h, "free", info.total_free_bytes);
+        cJSON_AddNumberToObject(h, "largest", info.largest_free_block);
+        cJSON_AddNumberToObject(h, "min_free", info.minimum_free_bytes);
+        cJSON_AddNumberToObject(h, "blocks", info.allocated_blocks);
+        cJSON_AddItemToArray(hj, h);
+    }
+#if CONFIG_FREERTOS_USE_TRACE_FACILITY
+    UBaseType_t cap = uxTaskGetNumberOfTasks() + 4;
+    TaskStatus_t *ts = heap_caps_malloc(cap * sizeof(TaskStatus_t), MALLOC_CAP_SPIRAM);
+    if (ts) {
+        UBaseType_t n = uxTaskGetSystemState(ts, cap, NULL);
+        cJSON *tj = cJSON_AddArrayToObject(o, "tasks");
+        for (UBaseType_t i = 0; i < n; i++) {
+            cJSON *t = cJSON_CreateObject();
+            cJSON_AddStringToObject(t, "name", ts[i].pcTaskName);
+            cJSON_AddNumberToObject(t, "priority", ts[i].uxCurrentPriority);
+            BaseType_t core = xTaskGetCoreID(ts[i].xHandle);
+            cJSON_AddNumberToObject(t, "core", core == tskNO_AFFINITY ? -1 : core);
+            cJSON_AddNumberToObject(t, "stack_unused", ts[i].usStackHighWaterMark); // bytes, on ESP-IDF
+            cJSON_AddBoolToObject(t, "stack_psram", esp_ptr_external_ram(ts[i].pxStackBase));
+            cJSON_AddItemToArray(tj, t);
+        }
+        free(ts);
+    }
+#endif
+    return send_json(req, o);
+}
+
 // The logs saved to the microSD card (log_save), newest first.
 static esp_err_t logs_get(httpd_req_t *req)
 {
@@ -919,6 +969,7 @@ void web_server_start(void)
         {.uri = "/log", .method = HTTP_GET, .handler = log_get},
         {.uri = "/api/coredump", .method = HTTP_GET, .handler = coredump_get},
         {.uri = "/api/logs", .method = HTTP_GET, .handler = logs_get},
+        {.uri = "/api/memory", .method = HTTP_GET, .handler = memory_get},
         {.uri = "/api/logs/file", .method = HTTP_GET, .handler = logs_file_get},
     };
     for (size_t i = 0; i < sizeof(uris) / sizeof(uris[0]); i++) {

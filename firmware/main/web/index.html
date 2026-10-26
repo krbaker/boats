@@ -227,6 +227,16 @@
   </section>
 
   <section>
+    <h2>Memory</h2>
+    <div class="hint">Internal RAM is what runs short (the Wi-Fi link, USB and the microSD card need it); PSRAM is plentiful.
+      "Lowest" is the least there has been free since start-up. A task's unused stack is how much of it has never been
+      touched: a lot unused means the stack could be smaller.</div>
+    <table id="mem_heaps"><tr><td>Loading…</td><td></td></tr></table>
+    <table id="mem_tasks"></table>
+    <button onclick="loadMemory()">Refresh</button>
+  </section>
+
+  <section>
     <h2>Logs</h2>
     <div class="hint">Saved with <b>Save logs</b> on the display's Network screen (it works without the network),
       to the microSD card. The newest 10 are kept, each with the last crash's core dump if there was one.</div>
@@ -871,6 +881,26 @@ async function loadLogs() {
 }
 loadLogs();
 setInterval(loadLogs, 30000);
+
+async function loadMemory() {
+  try {
+    const m = await api("/api/memory");
+    const names = { internal: "Internal RAM", internal_dma: "Internal, DMA-capable", psram: "PSRAM" };
+    $("mem_heaps").innerHTML = m.heaps.map(h => row(names[h.name] || esc(h.name),
+      `${fmtSize(h.free)} free of ${fmtSize(h.total)}, largest block ${fmtSize(h.largest)}, lowest ${fmtSize(h.min_free)}`,
+      h.name !== "psram" && h.largest < 16384 ? "warn" : "")).join("");
+    if (!m.tasks) {
+      $("mem_tasks").innerHTML = row("Tasks", "not available (needs CONFIG_FREERTOS_USE_TRACE_FACILITY)");
+      return;
+    }
+    // Internal-RAM stacks first, most unused first: the ones worth shrinking or moving.
+    const t = m.tasks.slice().sort((a, b) => (a.stack_psram - b.stack_psram) || (b.stack_unused - a.stack_unused));
+    $("mem_tasks").innerHTML = `<tr><td><b>Task</b></td><td><b>Stack never used</b> (core, priority, where)</td></tr>` +
+      t.map(x => row(esc(x.name), `${(x.stack_unused / 1024).toFixed(1)} KB <span class="hint">(core ${x.core < 0 ? "any" : x.core},
+        priority ${x.priority}, ${x.stack_psram ? "PSRAM" : "internal"})</span>`)).join("");
+  } catch (e) { $("mem_heaps").innerHTML = row("Memory", "couldn't load: " + esc(e.message), "bad"); }
+}
+loadMemory();
 </script>
 </body>
 </html>

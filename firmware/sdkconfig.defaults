@@ -104,3 +104,6 @@ CONFIG_MBEDTLS_DYNAMIC_BUFFER=y
 # P4's USB DMA reaches it, the sample stream is only ~0.6 MB/s, and internal
 # RAM is often too fragmented by then for 16 KB blocks.
 CONFIG_USB_HOST_DWC_DMA_CAP_MEMORY_IN_PSRAM=y
+
+# Lets the web page's Memory section list every task and its unused stack.
+CONFIG_FREERTOS_USE_TRACE_FACILITY=y
