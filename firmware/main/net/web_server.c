@@ -518,6 +518,10 @@ static esp_err_t vessels_get(httpd_req_t *req)
 }
 
 #define UPLOAD_CHUNK (16 * 1024)
+// Files are sent in pieces this big, read into internal DMA-capable RAM (the
+// card and flash read straight into it). Small, so it's there even when
+// internal RAM is fragmented; Wi-Fi, not this, sets the speed.
+#define DOWNLOAD_CHUNK (4 * 1024)
 
 static esp_err_t map_post(httpd_req_t *req)
 {
@@ -685,14 +689,14 @@ static esp_err_t sdr_capture_get(httpd_req_t *req)
              (unsigned long)r.rate);
     httpd_resp_set_type(req, "application/octet-stream");
     httpd_resp_set_hdr(req, "Content-Disposition", disp);
-    char *buf = heap_caps_malloc(UPLOAD_CHUNK, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+    char *buf = heap_caps_malloc(DOWNLOAD_CHUNK, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
     if (!buf) {
         fclose(f);
         return send_error(req, "500 Internal Server Error", "out of memory");
     }
     esp_err_t err = ESP_OK;
     size_t n;
-    while ((n = fread(buf, 1, UPLOAD_CHUNK, f)) > 0) {
+    while ((n = fread(buf, 1, DOWNLOAD_CHUNK, f)) > 0) {
         if ((err = httpd_resp_send_chunk(req, buf, n)) != ESP_OK) break;
     }
     fclose(f);
@@ -733,11 +737,11 @@ static esp_err_t coredump_get(httpd_req_t *req)
     if (!p || esp_core_dump_image_get(&addr, &size) != ESP_OK) return send_error(req, "404 Not Found", "no core dump saved");
     httpd_resp_set_type(req, "application/octet-stream");
     httpd_resp_set_hdr(req, "Content-Disposition", "attachment; filename=\"coredump.bin\"");
-    char *buf = heap_caps_malloc(UPLOAD_CHUNK, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+    char *buf = heap_caps_malloc(DOWNLOAD_CHUNK, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
     if (!buf) return send_error(req, "500 Internal Server Error", "out of memory");
     esp_err_t err = ESP_OK;
-    for (size_t off = 0; off < size && err == ESP_OK; off += UPLOAD_CHUNK) {
-        size_t n = MIN(UPLOAD_CHUNK, size - off);
+    for (size_t off = 0; off < size && err == ESP_OK; off += DOWNLOAD_CHUNK) {
+        size_t n = MIN(DOWNLOAD_CHUNK, size - off);
         err = esp_partition_read(p, addr - p->address + off, buf, n);
         if (err == ESP_OK) err = httpd_resp_send_chunk(req, buf, n);
     }
@@ -783,14 +787,14 @@ static esp_err_t logs_file_get(httpd_req_t *req)
     bool text = strcmp(name + strlen(name) - 4, ".txt") == 0;
     httpd_resp_set_type(req, text ? "text/plain; charset=utf-8" : "application/octet-stream");
     httpd_resp_set_hdr(req, "Content-Disposition", disp);
-    char *buf = heap_caps_malloc(UPLOAD_CHUNK, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+    char *buf = heap_caps_malloc(DOWNLOAD_CHUNK, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
     if (!buf) {
         fclose(f);
         return send_error(req, "500 Internal Server Error", "out of memory");
     }
     esp_err_t err = ESP_OK;
     size_t n;
-    while ((n = fread(buf, 1, UPLOAD_CHUNK, f)) > 0) {
+    while ((n = fread(buf, 1, DOWNLOAD_CHUNK, f)) > 0) {
         if ((err = httpd_resp_send_chunk(req, buf, n)) != ESP_OK) break;
     }
     fclose(f);
