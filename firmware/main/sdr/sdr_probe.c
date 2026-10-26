@@ -70,7 +70,7 @@ enum { DEMODB = 0, USBB = 1, SYSB = 2, IICB = 6 };
 #define GPO                 0x3001
 #define GPOE                0x3003
 #define GPD                 0x3004
-#define BIAS_TEE_GPIO       0                  // RTL-SDR Blog V3
+#define BIAS_TEE_GPIO       0                  // as on the RTL-SDR Blog V3 (dongles without a bias-tee ignore it)
 #define R820T_I2C_ADDR      0x34
 #define R828D_I2C_ADDR      0x74
 #define R82XX_CHECK_VAL     0x69
@@ -122,7 +122,7 @@ static usb_transfer_t *s_xfers[BULK_XFERS];
 
 // What the web page sees.
 static volatile sdr_state_t s_state = SDR_OFF;
-static char s_tuner[40];
+static char s_tuner[104];        // the dongle's USB name and its tuner, for the status
 static volatile int s_cap_req;  // seconds asked for, picked up by the probe task
 static volatile int s_cap_seconds;
 static volatile uint64_t s_cap_bytes, s_cap_total, s_cap_dropped, s_cap_file_bytes;
@@ -726,6 +726,18 @@ static void run_capture(int seconds)
     }
 }
 
+// A USB string descriptor (UTF-16) as ASCII, trimmed; "" if there isn't one.
+static void usb_string(const usb_str_desc_t *d, char *out, size_t cap)
+{
+    size_t n = 0;
+    for (int i = 0; d && i < (d->bLength - 2) / 2 && n + 1 < cap; i++) {
+        uint16_t c = d->wData[i];
+        out[n++] = c >= 0x20 && c < 0x7f ? (char)c : '?';
+    }
+    while (n && out[n - 1] == ' ') n--;
+    out[n] = '\0';
+}
+
 static void probe_device(uint8_t addr)
 {
     if (usb_host_device_open(s_client, addr, &s_dev) != ESP_OK) {
@@ -739,8 +751,15 @@ static void probe_device(uint8_t addr)
     static const char *const speeds[] = {"Low", "Full", "High"};
     ESP_LOGI(TAG, "USB device %04x:%04x, %s speed, max packet %u", dd->idVendor, dd->idProduct,
              info.speed < 3 ? speeds[info.speed] : "?", dd->bMaxPacketSize0);
-    if (info.str_desc_manufacturer) usb_print_string_descriptor(info.str_desc_manufacturer);
-    if (info.str_desc_product) usb_print_string_descriptor(info.str_desc_product);
+    // What the dongle calls itself: "Realtek RTL2838UHIDIR", "RTLSDRBlog Blog V4", ...
+    char maker[32], product[32], name[64];
+    usb_string(info.str_desc_manufacturer, maker, sizeof(maker));
+    usb_string(info.str_desc_product, product, sizeof(product));
+    if (!maker[0] || strncmp(product, maker, strlen(maker)) == 0) snprintf(name, sizeof(name), "%s", product);
+    else if (!product[0]) snprintf(name, sizeof(name), "%s", maker);
+    else snprintf(name, sizeof(name), "%s %s", maker, product);
+    if (!name[0]) snprintf(name, sizeof(name), "RTL2832U dongle");
+    ESP_LOGI(TAG, "USB name: %s", name);
 
     if (dd->idVendor != RTL_VID || (dd->idProduct != 0x2838 && dd->idProduct != 0x2832)) {
         ESP_LOGW(TAG, "not an RTL2832U dongle; ignoring it");
@@ -763,15 +782,15 @@ static void probe_device(uint8_t addr)
     uint8_t r820 = i2c_read_reg(R820T_I2C_ADDR, 0x00), r828 = 0;
     if (r820 != R82XX_CHECK_VAL) r828 = i2c_read_reg(R828D_I2C_ADDR, 0x00);
     set_i2c_repeater(false);
-    if (r820 == R82XX_CHECK_VAL) ESP_LOGI(TAG, "tuner: Rafael Micro R820T/R820T2 (RTL-SDR Blog V3)");
-    else if (r828 == R82XX_CHECK_VAL) ESP_LOGI(TAG, "tuner: Rafael Micro R828D (RTL-SDR Blog V4)");
+    if (r820 == R82XX_CHECK_VAL) ESP_LOGI(TAG, "tuner: Rafael Micro R820T/R820T2");
+    else if (r828 == R82XX_CHECK_VAL) ESP_LOGI(TAG, "tuner: Rafael Micro R828D");
     else ESP_LOGW(TAG, "tuner: not recognised (R820T check read 0x%02x, R828D 0x%02x)", r820, r828);
 
     ESP_LOGI(TAG, "internal RAM free %u, PSRAM free %u", (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
     // With an R820T, decode AIS; other tuners just get the throughput test.
     if (r820 == R82XX_CHECK_VAL && tune_r820t(AIS_CENTER_HZ, AIS_RATE)) {
-        snprintf(s_tuner, sizeof(s_tuner), "R820T (RTL-SDR Blog V3)");
+        snprintf(s_tuner, sizeof(s_tuner), "%s, R820T tuner", name);
         // Stream continuously into the decoder (captures tap the same stream),
         // following the settings as they change.
         bool streaming = false, need_sweep = false;
@@ -855,7 +874,7 @@ static void probe_device(uint8_t addr)
         s_dec_on = false;
         if (streaming) stream_stop();
     } else {
-        snprintf(s_tuner, sizeof(s_tuner), r828 == R82XX_CHECK_VAL ? "R828D (not supported yet)" : "unknown");
+        snprintf(s_tuner, sizeof(s_tuner), "%s, %s", name, r828 == R82XX_CHECK_VAL ? "R828D tuner (not supported yet)" : "unknown tuner");
         stream_test(AIS_RATE, RUN_MS);
         ESP_LOGI(TAG, "test finished; unplug and replug the dongle to run it again");
     }

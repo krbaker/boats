@@ -22,7 +22,7 @@ typedef enum { SDR_OFF, SDR_NONE, SDR_TESTING, SDR_READY, SDR_CAPTURING, SDR_DIS
 
 typedef struct {
     sdr_state_t state;
-    char tuner[40];
+    char tuner[104];
     uint32_t center_hz, rate;
     // The capture running or last run; cap_file_bytes is the finished file on
     // the card (0 if none).
@@ -42,7 +42,7 @@ typedef struct {
     int sweep_step, sweep_steps;  // sweep progress (sweep_step 0: not sweeping)
 } sdr_status_t;
 
-// Starts USB host on the USB-A port. An RTL-SDR Blog V3 (R820T) dongle plugged
+// Starts USB host on the USB-A port. An RTL2832U dongle with an R820T tuner plugged
 // in is tuned to the AIS channels and decoded continuously into the vessel
 // table, and can record I/Q captures; other RTL2832U dongles just get a
 // throughput test. Only called with CONFIG_AIS_SDR_PROBE.

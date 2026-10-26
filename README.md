@@ -56,7 +56,7 @@ The page also shows live status: Wi-Fi, AIS feed and message counters, vessel co
 
 ## RTL-SDR receiver
 
-Plug an **RTL-SDR Blog V3** dongle (R820T2 tuner) with a VHF antenna into the display's USB-A port, and the display decodes AIS on both channels itself, alongside the network feed. Both sources feed the same vessel table. Never connect the dongle to an antenna a VHF radio transmits on; use a splitter made for AIS.
+Plug an **RTL-SDR** dongle with an R820T/R820T2 tuner (such as the RTL-SDR Blog V3) with a VHF antenna into the display's USB-A port, and the display decodes AIS on both channels itself, alongside the network feed. Both sources feed the same vessel table. Never connect the dongle to an antenna a VHF radio transmits on; use a splitter made for AIS.
 
 On the config page:
 
