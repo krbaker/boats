@@ -368,9 +368,11 @@ static void weather_task(void *arg)
     settings_get(&cfg);
     reset(&cfg);
     for (;;) {
+        // On a timeout this returns every bit set, ours or not (the group gets
+        // every settings change): look at ours only.
         EventBits_t bits = xEventGroupWaitBits(s_events, SETTINGS_EV_WEATHER | SETTINGS_EV_CENTER, pdTRUE, pdFALSE,
                                                pdMS_TO_TICKS(1000));
-        if (bits) {
+        if (bits & (SETTINGS_EV_WEATHER | SETTINGS_EV_CENTER)) {
             settings_get(&cfg);
             reset(&cfg);
         }

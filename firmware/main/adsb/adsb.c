@@ -187,7 +187,7 @@ static void adsb_task(void *arg)
             }
         }
         // Settings changes (on, off, a new address or range) take effect at once.
-        if (xEventGroupWaitBits(s_events, SETTINGS_EV_ADSB, pdTRUE, pdFALSE, wait)) backoff_ms = 0;
+        if (xEventGroupWaitBits(s_events, SETTINGS_EV_ADSB, pdTRUE, pdFALSE, wait) & SETTINGS_EV_ADSB) backoff_ms = 0;
     }
 }
 
