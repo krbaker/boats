@@ -51,7 +51,8 @@ static const char *TAG = "sdr_probe";
 #define AIS_CENTER_HZ       AIS_DEMOD_CENTER_HZ  // channel A at -25 kHz, B at +25 kHz
 #define AIS_RATE            AIS_DEMOD_RATE
 #define CAP_RING            (4 * 1024 * 1024)  // PSRAM: ~7 s of slack if the card stalls
-#define CAP_CHUNK           (32 * 1024)        // written through an internal-RAM bounce buffer
+#define CAP_CHUNK           (32 * 1024)        // written through an internal-RAM bounce buffer this big...
+#define CAP_CHUNK_MIN       (4 * 1024)         // ...or smaller, down to this, when internal RAM is fragmented
 #define CAP_DIR             MAP_ROOT "/sdr"
 #define CAP_LOG             (512 * 1024)       // PSRAM: AIS sentences heard while recording
 #define DEC_RING            (2 * 1024 * 1024)  // PSRAM: ~3.6 s of samples
@@ -653,12 +654,24 @@ static void run_capture(int seconds)
     // The SD driver needs DMA-capable memory, so the ring (PSRAM) is copied
     // through a small internal buffer.
     s_cap_ring = (ring_t){.buf = heap_caps_malloc(CAP_RING, MALLOC_CAP_SPIRAM), .size = CAP_RING};
-    uint8_t *bounce = heap_caps_aligned_alloc(64, CAP_CHUNK, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+    uint32_t chunk;
+    uint8_t *bounce = NULL;
+    for (chunk = CAP_CHUNK; chunk >= CAP_CHUNK_MIN; chunk /= 2) {
+        bounce = heap_caps_aligned_alloc(64, chunk, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+        if (bounce) break;
+    }
+    if (bounce && chunk < CAP_CHUNK) ESP_LOGW(TAG, "capture: internal RAM is short, writing in %lu KB pieces", (unsigned long)(chunk / 1024));
+    if (!bounce) {
+        ESP_LOGE(TAG, "capture: no %d KB of internal RAM (largest free block %u)", CAP_CHUNK_MIN / 1024,
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA));
+    }
     s_cap_log = heap_caps_malloc(CAP_LOG, MALLOC_CAP_SPIRAM);
     s_cap_log_len = 0;
     s_cap_log_lines = s_cap_log_dropped = 0;
     FILE *f = NULL;
-    if (!s_cap_ring.buf || !bounce || !s_cap_log) {
+    if (!bounce) {
+        cap_fail("the display is short of internal memory; restart it and try again");
+    } else if (!s_cap_ring.buf || !s_cap_log) {
         cap_fail("out of memory");
     } else {
         mkdir(CAP_DIR, 0777);
@@ -678,7 +691,7 @@ static void run_capture(int seconds)
             break;
         }
         const uint8_t *p;
-        uint32_t n = ring_peek(&s_cap_ring, &p, CAP_CHUNK);
+        uint32_t n = ring_peek(&s_cap_ring, &p, chunk);
         if (!n) {
             if (esp_timer_get_time() - last_data > 2000000) cap_fail("no samples from the dongle");
             else vTaskDelay(pdMS_TO_TICKS(10));
