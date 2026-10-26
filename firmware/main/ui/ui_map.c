@@ -1570,15 +1570,15 @@ static void draw_status_icons(lv_layer_t *layer)
     if (p->hidden) return;
     lv_color_t w = lv_color_white();
     if (s_status_icons.boat && p->lead_deg) {
-        // Midway between the bubble's round end and the count.
+        // As far before the count as the plane is before the aircraft count.
         float rm = pill_outer_r() - p->width / 2.0f;
-        float end = p->center - p->dir * (p->span / 2 + px_to_deg(p->width / 2.0f, rm));
         float text = p->center - p->dir * (p->span / 2 - PILL_PAD_DEG - p->lead_deg);
+        float at = text - p->dir * px_to_deg(STATUS_ICON_GAP_PX + STATUS_ICON_PX / 2.0f, rm);
         part_t boat[3];
         POLY(&boat[0], w, {-11, 4}, {11, 4}, {7, 9}, {-7, 9});  // hull
         POLY(&boat[1], w, {1, -11}, {1, 2}, {9, 2});           // mainsail
         POLY(&boat[2], w, {-1, -8}, {-1, 2}, {-7, 2});         // jib
-        draw_pill_icon(layer, boat, 3, (end + text) / 2, w);
+        draw_pill_icon(layer, boat, 3, at, w);
     }
     if (s_status_icons.plane && p->text2[0]) {
         part_t plane[3];
@@ -2069,7 +2069,7 @@ static void update_border_text(void)
         strcpy(buf, "#f2545b AIS offline#");
     }
     pill_set_text(&s_pills[PILL_STATUS], buf);
-    pill_set_lead_room(&s_pills[PILL_STATUS], s_status_icons.boat ? STATUS_ICON_PX + STATUS_ICON_GAP_PX : 0);
+    pill_set_lead_room(&s_pills[PILL_STATUS], s_status_icons.boat ? STATUS_ICON_PX : 0); // the gap after it comes out of the padding
     char planes[8] = "";
     if (s_status_icons.plane) snprintf(planes, sizeof(planes), "%d", nplanes);
     pill_set_text2(&s_pills[PILL_STATUS], planes, 2 * STATUS_ICON_GAP_PX + STATUS_ICON_PX);
