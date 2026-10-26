@@ -1000,8 +1000,8 @@ void sdr_probe_start(void)
     }
     ais_demod_init(s_demod, on_sentence, NULL);
     s_events = settings_subscribe();
-    xTaskCreatePinnedToCore(decode_task, "sdr_decode", 7168, NULL, 3, &s_dec_task, 1);
-    xTaskCreatePinnedToCore(probe_task, "sdr_probe", 8192, NULL, 4, &s_probe_task, 1);
+    xTaskCreatePinnedToCore(decode_task, "sdr_decode", 5120, NULL, 3, &s_dec_task, 1);
+    xTaskCreatePinnedToCore(probe_task, "sdr_probe", 6144, NULL, 4, &s_probe_task, 1);
 }
 
 const char *sdr_state_str(sdr_state_t st)

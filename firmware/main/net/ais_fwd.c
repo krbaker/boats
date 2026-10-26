@@ -17,6 +17,7 @@
 
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "esp_heap_caps.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/ringbuf.h"
 #include "freertos/semphr.h"
@@ -398,5 +399,6 @@ void ais_fwd_start(void)
         ESP_LOGE(TAG, "no memory for the retransmit queue");
         return;
     }
-    xTaskCreate(fwd_task, "ais_fwd", 5120, NULL, 3, NULL);
+    // The stack in PSRAM: it waits on the network, and internal RAM is short.
+    xTaskCreateWithCaps(fwd_task, "ais_fwd", 5120, NULL, 3, NULL, MALLOC_CAP_SPIRAM);
 }

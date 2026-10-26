@@ -202,8 +202,9 @@ void adsb_start(void)
         return;
     }
     s_events = settings_subscribe();
-    // Core 0: off the SDR decoder's core.
-    xTaskCreatePinnedToCore(adsb_task, "adsb", 6144, NULL, 2, NULL, 0);
+    // Core 0: off the SDR decoder's core. The stack in PSRAM: it waits on the
+    // network, and internal RAM is short.
+    xTaskCreatePinnedToCoreWithCaps(adsb_task, "adsb", 6144, NULL, 2, NULL, 0, MALLOC_CAP_SPIRAM);
 }
 
 int adsb_snapshot(adsb_target_t *out, int max)

@@ -4,6 +4,7 @@
 
 #include "dhcpserver/dhcpserver.h"
 #include "esp_event.h"
+#include "esp_heap_caps.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
 #include "esp_mac.h"
@@ -550,9 +551,10 @@ void wifi_mgr_start(void)
     if (settings_take_card_wifi(ssid, pass)) wifi_mgr_set_credentials(ssid, pass);
     memset(pass, 0, sizeof(pass));
 
-    xTaskCreate(wifi_task, "wifi_mgr", 4096, NULL, 4, NULL);
-    xTaskCreate(dns_task, "dns", 4096, NULL, 3, NULL);
-    xTaskCreate(probe_task, "net_probe", 6144, NULL, 3, NULL);
+    xTaskCreate(wifi_task, "wifi_mgr", 4096, NULL, 4, NULL); // internal: it saves to flash
+    // These two only wait on the network: their stacks in PSRAM, as internal RAM is short.
+    xTaskCreateWithCaps(dns_task, "dns", 4096, NULL, 3, NULL, MALLOC_CAP_SPIRAM);
+    xTaskCreateWithCaps(probe_task, "net_probe", 6144, NULL, 3, NULL, MALLOC_CAP_SPIRAM);
 }
 
 bool wifi_mgr_has_ip(void)

@@ -4,6 +4,7 @@
 #include <fcntl.h>
 #include <string.h>
 
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -233,7 +234,8 @@ void nmea_client_start(void)
     s_lock = xSemaphoreCreateMutex();
     s_events = settings_subscribe();
     ais_parser_init(&s_parser);
-    xTaskCreatePinnedToCore(nmea_task, "nmea", 7168, NULL, 5, NULL, 1);
+    // The stack in PSRAM: it waits on the network, and internal RAM is short.
+    xTaskCreatePinnedToCoreWithCaps(nmea_task, "nmea", 7168, NULL, 5, NULL, 1, MALLOC_CAP_SPIRAM);
 }
 
 void nmea_client_get_status(nmea_status_t *out)

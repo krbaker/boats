@@ -364,6 +364,6 @@ void map_tiles_init(void)
     s_pack_lock = xSemaphoreCreateMutex();
     map_store_on_replace(release_packs);
     s_cache = heap_caps_calloc(CACHE_TILES, sizeof(entry_t), MALLOC_CAP_SPIRAM);
-    xTaskCreatePinnedToCore(loader_task, "map_tiles", 8192, NULL, 2, &s_task, 1);
+    xTaskCreatePinnedToCore(loader_task, "map_tiles", 5120, NULL, 2, &s_task, 1);
     map_tiles_reload();
 }

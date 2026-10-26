@@ -306,7 +306,8 @@ void tide_start(void)
     sntp.sync_cb = on_ntp_sync;
     esp_netif_sntp_init(&sntp);
 
-    xTaskCreatePinnedToCore(tide_task, "tide", 8192, NULL, 3, NULL, 0); // off the SDR decoder's core
+    // Core 0, off the SDR decoder's; the stack in PSRAM (it waits on the network, and internal RAM is short).
+    xTaskCreatePinnedToCoreWithCaps(tide_task, "tide", 8192, NULL, 3, NULL, 0, MALLOC_CAP_SPIRAM);
 }
 
 void tide_get_status(tide_status_t *out)

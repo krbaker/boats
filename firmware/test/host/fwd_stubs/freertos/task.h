@@ -21,3 +21,10 @@ static inline BaseType_t xTaskCreate(TaskFunction_t fn, const char *name, uint32
     pthread_detach(th);
     return pdTRUE;
 }
+// The stack's memory doesn't matter on the host.
+static inline BaseType_t xTaskCreateWithCaps(TaskFunction_t fn, const char *name, uint32_t stack, void *arg, int prio,
+                                             TaskHandle_t *out, uint32_t caps)
+{
+    (void)caps;
+    return xTaskCreate(fn, name, stack, arg, prio, out);
+}

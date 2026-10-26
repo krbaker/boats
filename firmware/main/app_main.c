@@ -77,7 +77,7 @@ void app_main(void)
         },
     };
     disp_cfg.lv_adapter_cfg.task_core_id = 0;
-    disp_cfg.lv_adapter_cfg.task_stack_size = 16 * 1024;
+    disp_cfg.lv_adapter_cfg.task_stack_size = 10 * 1024; // ~6 KB used at most (web page: Memory)
     disp_cfg.lv_adapter_cfg.stack_in_psram = false;
     if (!bsp_display_start_with_config(&disp_cfg)) {
         ESP_LOGE(TAG, "display init failed");

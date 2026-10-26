@@ -393,8 +393,9 @@ void weather_start(void)
     assert(s_data);
     s_events = settings_subscribe();
     // Core 0: its HTTPS handshakes would otherwise take turns with the SDR
-    // decoder on core 1.
-    xTaskCreatePinnedToCore(weather_task, "weather", 8192, NULL, 3, NULL, 0);
+    // decoder on core 1. The stack in PSRAM: it waits on the network, and
+    // internal RAM is short.
+    xTaskCreatePinnedToCoreWithCaps(weather_task, "weather", 8192, NULL, 3, NULL, 0, MALLOC_CAP_SPIRAM);
 }
 
 void weather_get(weather_data_t *out)
