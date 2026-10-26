@@ -517,7 +517,7 @@ void ui_settings_refresh(void)
 {
     settings_t cfg;
     settings_get(&cfg);
-    char buf[128];
+    char buf[192]; // room for the aircraft.json address and its note
 
     // AIS
     set_checked(s_net_sw, cfg.net_enabled);
