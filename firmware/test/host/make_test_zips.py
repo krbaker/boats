@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""Write zip files for test_map_store into build/zips and print '<expect> <path>' pairs."""
+"""Write zip files for test_map_store into build/zips and print '<expect> <path>' pairs.
+
+expect is ok or fail for a chart set, flags-ok or flags-fail for flags."""
 
 import json
 import os
@@ -68,3 +70,13 @@ print("fail", os.path.join(OUT, "truncated.zip"))
 with open(os.path.join(OUT, "not_zip.zip"), "wb") as f:
     f.write(png(800, 800))
 print("fail", os.path.join(OUT, "not_zip.zip"))
+
+flags = {"lr.png": png(32, 24), "us.png": png(32, 24), "gb.png": png(32, 24)}
+make("flags.zip", flags, expect="flags-ok")
+make("flags_folder.zip", {"flags/" + k: v for k, v in flags.items()}, expect="flags-ok")
+make("flags_deflated.zip", flags, zipfile.ZIP_DEFLATED, "flags-fail")
+make("flags_bad_name.zip", {**flags, "usa.png": png(32, 24)}, expect="flags-fail")
+make("flags_upper.zip", {**flags, "US.png": png(32, 24)}, expect="flags-fail")
+make("flags_too_big.zip", {**flags, "fr.png": png(32, 24) + b"\0" * 8192}, expect="flags-fail")
+make("flags_empty.zip", {"flags/": b""}, expect="flags-fail")
+make("flags_chart.zip", good, expect="flags-fail")

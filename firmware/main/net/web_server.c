@@ -95,6 +95,7 @@ static esp_err_t config_get(httpd_req_t *req)
     cJSON *o = settings_to_json(&cfg);
     cJSON_AddStringToObject(o, "wifi_ssid", ssid);
     cJSON_AddBoolToObject(o, "wl_secret_set", secret[0] != '\0'); // the secret itself is never sent
+    if (map_store_card_ok()) cJSON_AddNumberToObject(o, "flag_count", map_store_flag_count());
     return send_json(req, o);
 }
 
@@ -531,19 +532,23 @@ static esp_err_t vessels_get(httpd_req_t *req)
 // internal RAM is fragmented; Wi-Fi, not this, sets the speed.
 #define DOWNLOAD_CHUNK (4 * 1024)
 
-static esp_err_t map_post(httpd_req_t *req)
+// A map_set.zip or flags.zip, unpacked onto the card as it arrives.
+static esp_err_t zip_post(httpd_req_t *req, map_upload_kind_t kind)
 {
+    const char *zip = kind == MAP_UPLOAD_FLAGS ? "flags" : "map";
     if (!map_store_card_ok()) {
         return send_error(req, "400 Bad Request", "no microSD card in the display (insert one and restart it)");
     }
     uint64_t total, free_bytes;
     map_store_usage(&total, &free_bytes);
-    if (req->content_len <= 0) return send_error(req, "400 Bad Request", "upload map_set.zip");
+    if (req->content_len <= 0) {
+        return send_error(req, "400 Bad Request", kind == MAP_UPLOAD_FLAGS ? "upload flags.zip" : "upload map_set.zip");
+    }
     if (req->content_len + (1 << 20) > free_bytes) {
         return send_error(req, "400 Bad Request", "not enough free space on the microSD card");
     }
     char msg[200] = "";
-    map_upload_t *u = map_upload_begin(msg, sizeof(msg));
+    map_upload_t *u = map_upload_begin(kind, msg, sizeof(msg));
     if (!u) return send_error(req, "500 Internal Server Error", msg);
 
     char *buf = malloc(UPLOAD_CHUNK);
@@ -575,10 +580,20 @@ static esp_err_t map_post(httpd_req_t *req)
     }
 
     if (map_upload_finish(u, msg, sizeof(msg)) != ESP_OK) {
-        ESP_LOGW(TAG, "map upload rejected: %s", msg);
+        ESP_LOGW(TAG, "%s upload rejected: %s", zip, msg);
         return send_error(req, "400 Bad Request", msg);
     }
     return config_get(req);
+}
+
+static esp_err_t map_post(httpd_req_t *req)
+{
+    return zip_post(req, MAP_UPLOAD_CHART);
+}
+
+static esp_err_t flags_post(httpd_req_t *req)
+{
+    return zip_post(req, MAP_UPLOAD_FLAGS);
 }
 
 // Display firmware update: the body is firmware/build/ais_display.bin.
@@ -967,6 +982,7 @@ void web_server_start(void)
         {.uri = "/api/vessels", .method = HTTP_GET, .handler = vessels_get},
         {.uri = "/api/vessels/forget", .method = HTTP_POST, .handler = vessels_forget_post},
         {.uri = "/api/map", .method = HTTP_POST, .handler = map_post},
+        {.uri = "/api/flags", .method = HTTP_POST, .handler = flags_post},
         {.uri = "/api/coprocessor", .method = HTTP_POST, .handler = coprocessor_post},
         {.uri = "/api/firmware", .method = HTTP_POST, .handler = firmware_post},
         {.uri = "/api/restart", .method = HTTP_POST, .handler = restart_post},

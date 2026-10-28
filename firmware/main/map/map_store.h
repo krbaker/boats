@@ -1,6 +1,7 @@
 // Chart storage: the map set (manifest + one tile pack per zoom level) lives
 // on the microSD card in /sdcard/ais_map. It arrives either as an upload of
-// the map builder's map_set.zip, or copied onto the card by hand.
+// the map builder's map_set.zip, or copied onto the card by hand. The country
+// flags (mapbuilder/make_flags.py) arrive the same ways, in /sdcard/flags.
 
 #pragma once
 
@@ -15,6 +16,7 @@
 #define MAP_ROOT            "/sdcard"   // overridden by the host tests
 #endif
 #define MAP_DIR             MAP_ROOT "/ais_map"
+#define FLAGS_DIR           MAP_ROOT "/flags"
 #define MAP_MAX_LEVELS      8
 #define MAP_TILE_PX         256
 
@@ -47,18 +49,26 @@ bool map_store_card_ok(void);
 // Read the current manifest. Returns false if there is no (valid) chart set.
 bool map_store_get_manifest(map_manifest_t *out);
 
-// Streaming upload of a map_set.zip (STORED entries only).
+// Streaming upload of a map_set.zip or flags.zip (STORED entries only).
+typedef enum { MAP_UPLOAD_CHART, MAP_UPLOAD_FLAGS } map_upload_kind_t;
 typedef struct map_upload map_upload_t;
 // Returns NULL, with err set, if the card can't be written.
-map_upload_t *map_upload_begin(char *err, size_t errlen);
+map_upload_t *map_upload_begin(map_upload_kind_t kind, char *err, size_t errlen);
 esp_err_t map_upload_feed(map_upload_t *u, const uint8_t *data, size_t len);
-// Validate, install, update the configured centre. On failure err explains why.
+// Validate and install; a chart also updates the configured centre. Either
+// replaces what was there only once the whole upload checks out. On failure
+// err explains why.
 esp_err_t map_upload_finish(map_upload_t *u, char *err, size_t errlen);
 void map_upload_abort(map_upload_t *u);
 
 // Called just before an upload replaces the chart set, so whoever reads the
 // tile packs can close them first (FAT doesn't stop open files being deleted).
 void map_store_on_replace(void (*fn)(void));
+
+// How many flags are on the card (counted at start-up and after an upload),
+// and a number that changes each time an upload replaces them.
+int map_store_flag_count(void);
+uint32_t map_store_flags_version(void);
 
 // Card capacity and free space in bytes (0 if no card).
 void map_store_usage(uint64_t *total, uint64_t *free_bytes);

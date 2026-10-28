@@ -1,5 +1,6 @@
 // Feeds zip files to the streaming map uploader in awkward chunk sizes.
-// Usage: test_map_store <ok|fail> file.zip [<ok|fail> file.zip ...]
+// Usage: test_map_store <expect> file.zip [<expect> file.zip ...]
+// expect: ok or fail for a chart set, flags-ok or flags-fail for flags.
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -23,13 +24,17 @@ static int run(const char *expect, const char *path, size_t chunk)
     size_t n = fread(buf, 1, sizeof(buf), f);
     fclose(f);
 
+    bool is_flags = strncmp(expect, "flags-", 6) == 0;
+    if (is_flags) expect += 6;
     int changed_before = s_map_changed;
+    uint32_t flags_before = map_store_flags_version();
+    int count_before = map_store_flag_count();
     // A card that had the chart copied on from a Mac also holds "._name" files.
     FILE *junk = fopen(MAP_DIR "/._z0.pak", "w");
     if (junk) fclose(junk);
 
     char berr[160];
-    map_upload_t *u = map_upload_begin(berr, sizeof(berr));
+    map_upload_t *u = map_upload_begin(is_flags ? MAP_UPLOAD_FLAGS : MAP_UPLOAD_CHART, berr, sizeof(berr));
     if (!u) {
         printf("FAIL %s: %s\n", path, berr);
         return 1;
@@ -45,7 +50,17 @@ static int run(const char *expect, const char *path, size_t chunk)
         printf("FAIL %s (chunk %zu): expected %s, got %s %s\n", path, chunk, expect, ok ? "ok" : "fail", err);
         return 1;
     }
-    if (ok) {
+    if (is_flags) {
+        FILE *lr = fopen(FLAGS_DIR "/lr.png", "rb");
+        if (lr) fclose(lr);
+        bool good = ok ? map_store_flag_count() == 3 && map_store_flags_version() == flags_before + 1 && lr
+                       : map_store_flag_count() == count_before && map_store_flags_version() == flags_before;
+        if (!good || s_map_changed != changed_before) {
+            printf("FAIL %s (chunk %zu): flags not as expected\n", path, chunk);
+            return 1;
+        }
+    }
+    else if (ok) {
         map_manifest_t m;
         if (!map_store_get_manifest(&m) || m.nlevels != 3 || m.levels[0].radius_nm > m.levels[1].radius_nm ||
             s_cfg.center_lat != m.center_lat || s_cfg.map_created != 1234567 || s_map_changed != changed_before + 1 ||

@@ -86,6 +86,14 @@
     <div class="hint">The chart is stored on the display's microSD card (FAT32). Uploading a chart set also sets the
       centre position below to the chart's centre. You can instead copy the builder's <code>ais_map</code> folder to
       the root of the card and restart the display.</div>
+    <label for="flags_file">Flags (<code>flags.zip</code> from <code>mapbuilder/make_flags.py</code>)</label>
+    <input id="flags_file" type="file" accept=".zip,application/zip">
+    <button id="flags_btn" onclick="uploadFlags()">Upload</button>
+    <div class="msg" id="flags_msg"></div>
+    <progress id="flags_progress" max="1" value="0" hidden></progress>
+    <div class="hint"><span id="flags_count"></span>Ships' country flags, shown in the vessel list and on a vessel's
+      details. Uploading replaces the flags on the card. You can instead copy the <code>flags</code> folder to the
+      root of the card.</div>
     <div class="row">
       <div><label for="center_lat">Centre latitude</label><input id="center_lat" type="number" step="any"></div>
       <div><label for="center_lon">Centre longitude</label><input id="center_lon" type="number" step="any"></div>
@@ -332,6 +340,7 @@ function showConfig(c) {
     if (document.activeElement !== $(k)) $(k).value = c[k] ?? "";
   }
   if (c.ais_port === 0) $("ais_port").value = "";
+  $("flags_count").textContent = "flag_count" in c ? `Flags on card: ${c.flag_count}. ` : "";
   if (document.activeElement !== $("wifi_ssid") && !$("wifi_ssid").value) $("wifi_ssid").value = c.wifi_ssid || "";
   const known = ZONES.find(z => z[0] === c.tz_name && z[1] === c.tz_posix);
   $("tz_select").value = known ? c.tz_name : "custom";
@@ -509,34 +518,38 @@ function saveTideTz() {
   postConfig(body, "tide_msg").then(ok => { if (ok) $("wl_secret").value = ""; });
 }
 
-// XHR rather than fetch, for upload progress on large chart sets.
-function uploadMap() {
-  const f = $("map_file").files[0];
-  if (!f) return setMsg("map_msg", "Choose map_set.zip first.", "bad");
-  $("map_btn").disabled = true;
-  const bar = $("map_progress");
+// XHR rather than fetch, for upload progress on large chart sets. id: "map" or
+// "flags", the prefix of the section's element ids and the API path.
+function uploadZip(id, zip, checking, installed) {
+  const f = $(id + "_file").files[0];
+  if (!f) return setMsg(id + "_msg", `Choose ${zip} first.`, "bad");
+  $(id + "_btn").disabled = true;
+  const bar = $(id + "_progress");
   bar.hidden = false;
   bar.value = 0;
   const mb = (f.size / 1048576).toFixed(1);
-  setMsg("map_msg", `Uploading ${mb} MB…`);
+  setMsg(id + "_msg", `Uploading ${mb} MB…`);
   const xhr = new XMLHttpRequest();
-  xhr.open("POST", "/api/map");
+  xhr.open("POST", "/api/" + id);
   xhr.setRequestHeader("Content-Type", "application/zip");
   xhr.upload.onprogress = e => {
     if (!e.lengthComputable) return;
     bar.value = e.loaded / e.total;
-    setMsg("map_msg", e.loaded < e.total ? `Uploading ${mb} MB… ${Math.round(100 * e.loaded / e.total)}%` : "Checking the chart…");
+    setMsg(id + "_msg", e.loaded < e.total ? `Uploading ${mb} MB… ${Math.round(100 * e.loaded / e.total)}%` : checking);
   };
-  const done = (ok, text) => { $("map_btn").disabled = false; bar.hidden = true; setMsg("map_msg", text, ok ? "ok" : "bad"); };
+  const done = (ok, text) => { $(id + "_btn").disabled = false; bar.hidden = true; setMsg(id + "_msg", text, ok ? "ok" : "bad"); };
   xhr.onload = () => {
     let body = {};
     try { body = JSON.parse(xhr.responseText); } catch (e) {}
-    if (xhr.status === 200) { showConfig(body); done(true, "Map installed."); }
+    if (xhr.status === 200) { showConfig(body); done(true, installed(body)); }
     else done(false, "Upload failed: " + (body.error || "HTTP " + xhr.status));
   };
   xhr.onerror = () => done(false, "Upload failed: connection lost.");
   xhr.send(f);
 }
+
+function uploadMap() { uploadZip("map", "map_set.zip", "Checking the chart…", () => "Map installed."); }
+function uploadFlags() { uploadZip("flags", "flags.zip", "Installing the flags…", c => `${c.flag_count} flags installed.`); }
 
 function uploadCoprocessor() {
   const f = $("cp_file").files[0];

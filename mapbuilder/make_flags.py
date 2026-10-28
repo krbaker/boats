@@ -6,9 +6,12 @@ vessel list and on the vessel's detail screen, if the flag image is on the
 microSD card. This writes them, one 32x24 PNG per country, to
 
     <out>/flags/lr.png, us.png, ...
+    <out>/flags.zip             the same files, ready to upload on the
+                                display's web page (Map section)
 
-Copy the flags folder to the root of the display's microSD card (next to
-ais_map). Without it the display shows the 2-letter country code instead.
+Upload flags.zip, or copy the flags folder to the root of the display's
+microSD card (next to ais_map). Without it the display shows the 2-letter
+country code instead.
 
 The flags come from flagcdn.com (public domain, from Wikimedia Commons). The
 country list is read from the firmware (components/ais/ais.c), so it stays in
@@ -24,6 +27,7 @@ import os
 import re
 import sys
 import urllib.request
+import zipfile
 
 from PIL import Image
 
@@ -62,7 +66,13 @@ def main():
         flat = Image.new("RGB", img.size, BG)
         flat.paste(img, mask=img.split()[3])
         flat.save(os.path.join(out, iso + ".png"), optimize=True)
-    print(f"\r{len(codes) - len(failed)} flags written to {out}")
+    # Uncompressed: the display unpacks the upload as it arrives (PNGs don't shrink anyway).
+    zip_path = os.path.join(args.out, "flags.zip")
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_STORED) as z:
+        for name in sorted(os.listdir(out)):
+            if name.endswith(".png"):
+                z.write(os.path.join(out, name), name)
+    print(f"\r{len(codes) - len(failed)} flags written to {out} and {zip_path}")
     if failed:
         print("failed: " + ", ".join(failed))
 

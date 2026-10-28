@@ -30,10 +30,15 @@ static const char *TAG = "map_store";
 #define NEW_DIR         MAP_ROOT "/ais_map.new"
 #define MAX_FILES       (MAP_MAX_LEVELS + 2)
 #define MAX_FILE_SIZE   (1024u * 1024 * 1024)
+#define FLAGS_NEW_DIR   MAP_ROOT "/flags.new"
+#define MAX_FLAG_FILES  400         // there are 229 countries
+#define MAX_FLAG_SIZE   8192        // what ui_flags.c will read; a 32x24 flag is well under 1 KB
 #define WRITE_BUF       (32 * 1024)
 
 static bool s_card_ok;
 static void (*s_on_replace)(void);
+static int s_flag_count;
+static uint32_t s_flags_version;
 
 void map_store_on_replace(void (*fn)(void))
 {
@@ -63,6 +68,33 @@ static void adopt_new_chart(void)
     settings_set(&cfg);
 }
 
+// A flag file is "<2-letter ISO code>.png", e.g. "lr.png".
+static bool is_flag_name(const char *n)
+{
+    return islower((unsigned char)n[0]) && islower((unsigned char)n[1]) && strcmp(n + 2, ".png") == 0;
+}
+
+static int count_flags(const char *dir)
+{
+    int n = 0;
+    DIR *d = opendir(dir);
+    if (!d) return 0;
+    struct dirent *e;
+    while ((e = readdir(d))) n += is_flag_name(e->d_name);
+    closedir(d);
+    return n;
+}
+
+int map_store_flag_count(void)
+{
+    return s_flag_count;
+}
+
+uint32_t map_store_flags_version(void)
+{
+    return s_flags_version;
+}
+
 esp_err_t map_store_mount(void)
 {
     // The card stays mounted for good: it shares the SDMMC host with the
@@ -83,6 +115,7 @@ esp_err_t map_store_init(void)
     map_store_usage(&total, &free_bytes);
     ESP_LOGI(TAG, "microSD: %u MB free of %u MB", (unsigned)(free_bytes >> 20), (unsigned)(total >> 20));
     adopt_new_chart();
+    s_flag_count = count_flags(FLAGS_DIR);
     return ESP_OK;
 }
 
@@ -209,6 +242,8 @@ bool map_store_get_manifest(map_manifest_t *out)
 typedef enum { Z_HEADER, Z_NAME, Z_EXTRA, Z_DATA, Z_DONE, Z_ERROR } zstate_t;
 
 struct map_upload {
+    map_upload_kind_t kind;
+    const char *dir;        // where the files go until the whole upload checks out
     zstate_t state;
     uint8_t hdr[30];
     size_t have;            // bytes collected for the current header/name
@@ -231,20 +266,26 @@ static void zfail(map_upload_t *u, const char *msg)
     }
 }
 
-map_upload_t *map_upload_begin(char *err, size_t errlen)
+map_upload_t *map_upload_begin(map_upload_kind_t kind, char *err, size_t errlen)
 {
     if (!s_card_ok) {
         snprintf(err, errlen, "no microSD card");
         return NULL;
     }
-    remove_dir(NEW_DIR);
-    if (mkdir(NEW_DIR, 0755) != 0) {
-        snprintf(err, errlen, "could not create %s on the microSD card: %s", NEW_DIR, strerror(errno));
+    const char *dir = kind == MAP_UPLOAD_FLAGS ? FLAGS_NEW_DIR : NEW_DIR;
+    remove_dir(dir);
+    if (mkdir(dir, 0755) != 0) {
+        snprintf(err, errlen, "could not create %s on the microSD card: %s", dir, strerror(errno));
         ESP_LOGE(TAG, "%s", err);
         return NULL;
     }
     map_upload_t *u = calloc(1, sizeof(map_upload_t));
-    if (!u) snprintf(err, errlen, "out of memory");
+    if (!u) {
+        snprintf(err, errlen, "out of memory");
+        return NULL;
+    }
+    u->kind = kind;
+    u->dir = dir;
     return u;
 }
 
@@ -263,12 +304,16 @@ static void start_entry(map_upload_t *u)
             return;
         }
     }
-    if (++u->nfiles > MAX_FILES) {
+    if (u->kind == MAP_UPLOAD_FLAGS && !is_flag_name(base)) {
+        zfail(u, "zip contains a file that isn't a flag (use flags.zip from make_flags.py)");
+        return;
+    }
+    if (++u->nfiles > (u->kind == MAP_UPLOAD_FLAGS ? MAX_FLAG_FILES : MAX_FILES)) {
         zfail(u, "too many files in zip");
         return;
     }
     char path[128];
-    snprintf(path, sizeof(path), "%s/%s", NEW_DIR, base);
+    snprintf(path, sizeof(path), "%s/%s", u->dir, base);
     u->out = fopen(path, "wb");
     if (!u->out) {
         char msg[200];
@@ -308,10 +353,11 @@ esp_err_t map_upload_feed(map_upload_t *u, const uint8_t *data, size_t len)
             u->name_len = rd16(u->hdr + 26);
             u->extra_left = rd16(u->hdr + 28);
             if (method != 0 || (flags & 0x0008) || csize != usize) {
-                zfail(u, "zip must be uncompressed (use the map builder's map_set.zip)");
+                zfail(u, u->kind == MAP_UPLOAD_FLAGS ? "zip must be uncompressed (use flags.zip from make_flags.py)"
+                                                     : "zip must be uncompressed (use the map builder's map_set.zip)");
                 break;
             }
-            if (csize > MAX_FILE_SIZE) {
+            if (csize > (u->kind == MAP_UPLOAD_FLAGS ? MAX_FLAG_SIZE : MAX_FILE_SIZE)) {
                 zfail(u, "file in zip too large");
                 break;
             }
@@ -399,8 +445,32 @@ static void cleanup(map_upload_t *u)
 void map_upload_abort(map_upload_t *u)
 {
     if (!u) return;
+    const char *dir = u->dir;
     cleanup(u);
-    remove_dir(NEW_DIR);
+    remove_dir(dir);
+}
+
+static esp_err_t install_flags(char *err, size_t errlen)
+{
+    int n = count_flags(FLAGS_NEW_DIR);
+    if (n == 0) {
+        snprintf(err, errlen, "no flags in zip");
+        remove_dir(FLAGS_NEW_DIR);
+        return ESP_FAIL;
+    }
+    remove_dir(FLAGS_DIR);
+    if (rename(FLAGS_NEW_DIR, FLAGS_DIR) != 0) {
+        snprintf(err, errlen, "could not install the flags: renaming %s failed: %s", FLAGS_NEW_DIR, strerror(errno));
+        ESP_LOGE(TAG, "%s", err);
+        remove_dir(FLAGS_NEW_DIR);
+        s_flag_count = 0;
+        s_flags_version++;
+        return ESP_FAIL;
+    }
+    ESP_LOGI(TAG, "installed %d flags", n);
+    s_flag_count = n;
+    s_flags_version++; // flags remembered as missing get looked for again
+    return ESP_OK;
 }
 
 esp_err_t map_upload_finish(map_upload_t *u, char *err, size_t errlen)
@@ -415,7 +485,9 @@ esp_err_t map_upload_finish(map_upload_t *u, char *err, size_t errlen)
         map_upload_abort(u);
         return ESP_FAIL;
     }
+    map_upload_kind_t kind = u->kind;
     cleanup(u);
+    if (kind == MAP_UPLOAD_FLAGS) return install_flags(err, errlen);
 
     map_manifest_t m;
     if (!parse_manifest(NEW_DIR, &m, err, errlen)) {
