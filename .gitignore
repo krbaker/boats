@@ -13,3 +13,4 @@ coprocessor/build/
 coprocessor/managed_components/
 coprocessor/sdkconfig
 coprocessor/sdkconfig.old
+captures/
