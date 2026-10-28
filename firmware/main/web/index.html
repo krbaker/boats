@@ -825,7 +825,8 @@ async function pollStatus() {
       const who = m => (m.name ? `${esc(m.name)} (${m.mmsi})` : `MMSI ${m.mmsi}`);
       html += row("Safety messages", s.safety.map(m =>
         `<span class="${m.kind === "distress" ? "bad" : m.kind === "notice" ? "warn" : ""}">${esc(m.text)}</span>` +
-        ` <span class="hint">from ${who(m)}, ${ago(m.age_s)}${m.count > 1 ? `, ${m.count} times` : ""}</span>`).join("<br>"));
+        ` <span class="hint">from ${who(m)}, ${ago(m.age_s)}${m.count > 1 ? `, ${m.count} times` : ""}</span>` +
+        (m.guess ? `<div class="hint"><b>Non-Emergency Decoding Guess</b><br>${esc(m.guess.trim()).replace(/\n/g, "<br>")}</div>` : "")).join("<br>"));
     }
     // A red banner at the top while there's a distress message from the last hour.
     const dist = (s.safety || []).filter(m => m.kind === "distress" && m.age_s < 3600);

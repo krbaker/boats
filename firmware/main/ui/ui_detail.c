@@ -15,16 +15,20 @@
 #define DEG "\xC2\xB0"
 
 enum {
-    ROW_MMSI, ROW_CALLSIGN, ROW_CLASS, ROW_TYPE, ROW_STATUS, ROW_COURSE, ROW_HEADING, ROW_SPEED,
+    ROW_MMSI, ROW_FLAG, ROW_CALLSIGN, ROW_CLASS, ROW_TYPE, ROW_STATUS, ROW_COURSE, ROW_HEADING, ROW_SPEED,
     ROW_DISTANCE, ROW_BEARING, ROW_SIZE, ROW_DEST, ROW_UPDATED, ROW_COUNT
 };
 
 static const char *const k_row_names[ROW_COUNT] = {
-    "MMSI", "Call sign", "AIS class", "Vessel type", "Status", "Course", "Heading", "Speed",
+    "MMSI", "Flag", "Call sign", "AIS class", "Vessel type", "Status", "Course", "Heading", "Speed",
     "Distance", "Bearing", "Size", "Destination", "Last update",
 };
 
-static lv_obj_t *s_scr, *s_title, *s_swatch, *s_values[ROW_COUNT];
+#define TOP         162
+#define ROW_H       34
+#define VALUE_X     400
+
+static lv_obj_t *s_scr, *s_title, *s_swatch, *s_values[ROW_COUNT], *s_flag;
 static uint32_t s_mmsi;
 static vessel_t s_last;     // last known state, kept if the contact expires
 static bool s_have;
@@ -72,6 +76,15 @@ static void refresh(void)
 
     const char *na = "-";
     set_row(ROW_MMSI, "%lu", (unsigned long)v.mmsi);
+    // The flag image if the card has it, then the country: "Liberia (636)".
+    int reads = 1;
+    const lv_image_dsc_t *flag = ui_flag_get(ais_mmsi_mid(v.mmsi), &reads);
+    if (flag) lv_image_set_src(s_flag, flag);
+    lv_obj_set_hidden(s_flag, !flag);
+    lv_obj_set_x(s_values[ROW_FLAG], flag ? VALUE_X + UI_FLAG_W + 10 : VALUE_X);
+    char country[48];
+    ui_flag_country(v.mmsi, country, sizeof(country));
+    set_row(ROW_FLAG, "%s", country);
     set_row(ROW_CALLSIGN, "%s", v.callsign[0] ? v.callsign : na);
     set_row(ROW_CLASS, "%s", v.cls == AIS_CLASS_UNKNOWN ? na : ais_class_str(v.cls));
     // Marks: what kind, and whether it's a real one on its station. Aircraft: the altitude.
@@ -152,7 +165,7 @@ lv_obj_t *ui_detail_create(void)
     lv_obj_set_style_text_color(s_title, UI_COLOR_TEXT, 0);
     lv_obj_align(s_title, LV_ALIGN_TOP_MID, 0, 100);
 
-    const int top = 162, row_h = 34;
+    const int top = TOP, row_h = ROW_H;
     for (int i = 0; i < ROW_COUNT; i++) {
         lv_obj_t *k = lv_label_create(s_scr);
         lv_label_set_text(k, k_row_names[i]);
@@ -169,8 +182,11 @@ lv_obj_t *ui_detail_create(void)
         lv_label_set_long_mode(s_values[i], LV_LABEL_LONG_MODE_DOTS);
         lv_obj_set_style_text_font(s_values[i], &lv_font_montserrat_20, 0);
         lv_obj_set_style_text_color(s_values[i], UI_COLOR_TEXT, 0);
-        lv_obj_set_pos(s_values[i], 400, top + i * row_h);
+        lv_obj_set_pos(s_values[i], VALUE_X, top + i * row_h);
     }
+    s_flag = lv_image_create(s_scr);
+    lv_obj_set_pos(s_flag, VALUE_X, top + ROW_FLAG * row_h);
+    lv_obj_set_hidden(s_flag, true);
 
     lv_obj_t *back = ui_round_button(s_scr, LV_SYMBOL_LEFT " Map", 160, 64);
     lv_obj_align(back, LV_ALIGN_BOTTOM_MID, 0, -50);

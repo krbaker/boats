@@ -1,6 +1,7 @@
 #include "ais.h"
 
 #include <ctype.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -752,6 +753,270 @@ ais_safety_t ais_safety_kind(uint32_t mmsi, const char *text)
     if (beacon && strstr(text, "ACTIVE")) return AIS_SAFETY_DISTRESS;
     if (beacon && strstr(text, "TEST")) return AIS_SAFETY_TEST;
     return AIS_SAFETY_TEXT;
+}
+
+// ---------------------------------------------------------------------------
+// 406 MHz beacon IDs (Cospas-Sarsat T.001): the 15 hex characters are bits
+// 26-85 of the beacon's message
+// ---------------------------------------------------------------------------
+
+typedef struct { uint16_t lo, hi; const char *iso, *name; } mid_country_t;
+
+static const mid_country_t *mid_find(uint16_t mid)
+{
+    // ISO 3166 codes for the flag images; territories with a flag of their own keep it.
+    static const mid_country_t k[] = {
+        {201, 201, "al", "Albania"}, {202, 202, "ad", "Andorra"}, {203, 203, "at", "Austria"}, {204, 204, "pt", "Azores"},
+        {205, 205, "be", "Belgium"}, {206, 206, "by", "Belarus"}, {207, 207, "bg", "Bulgaria"}, {208, 208, "va", "Vatican"},
+        {209, 210, "cy", "Cyprus"}, {211, 211, "de", "Germany"}, {212, 212, "cy", "Cyprus"}, {213, 213, "ge", "Georgia"},
+        {214, 214, "md", "Moldova"}, {215, 215, "mt", "Malta"}, {216, 216, "am", "Armenia"}, {218, 218, "de", "Germany"},
+        {219, 220, "dk", "Denmark"}, {224, 225, "es", "Spain"}, {226, 228, "fr", "France"}, {229, 229, "mt", "Malta"},
+        {230, 230, "fi", "Finland"}, {231, 231, "fo", "Faroe Islands"}, {232, 235, "gb", "United Kingdom"}, {236, 236, "gi", "Gibraltar"},
+        {237, 237, "gr", "Greece"}, {238, 238, "hr", "Croatia"}, {239, 241, "gr", "Greece"}, {242, 242, "ma", "Morocco"},
+        {243, 243, "hu", "Hungary"}, {244, 246, "nl", "Netherlands"}, {247, 247, "it", "Italy"}, {248, 249, "mt", "Malta"},
+        {250, 250, "ie", "Ireland"}, {251, 251, "is", "Iceland"}, {252, 252, "li", "Liechtenstein"}, {253, 253, "lu", "Luxembourg"},
+        {254, 254, "mc", "Monaco"}, {255, 255, "pt", "Madeira"}, {256, 256, "mt", "Malta"}, {257, 259, "no", "Norway"},
+        {261, 261, "pl", "Poland"}, {262, 262, "me", "Montenegro"}, {263, 263, "pt", "Portugal"}, {264, 264, "ro", "Romania"},
+        {265, 266, "se", "Sweden"}, {267, 267, "sk", "Slovakia"}, {268, 268, "sm", "San Marino"}, {269, 269, "ch", "Switzerland"},
+        {270, 270, "cz", "Czech Republic"}, {271, 271, "tr", "Turkey"}, {272, 272, "ua", "Ukraine"}, {273, 273, "ru", "Russia"},
+        {274, 274, "mk", "North Macedonia"}, {275, 275, "lv", "Latvia"}, {276, 276, "ee", "Estonia"}, {277, 277, "lt", "Lithuania"},
+        {278, 278, "si", "Slovenia"}, {279, 279, "rs", "Serbia"},
+        {301, 301, "ai", "Anguilla"}, {303, 303, "us", "Alaska (USA)"}, {304, 305, "ag", "Antigua and Barbuda"},
+        {306, 306, "bq", "Caribbean Netherlands"}, {307, 307, "aw", "Aruba"}, {308, 309, "bs", "Bahamas"}, {310, 310, "bm", "Bermuda"},
+        {311, 311, "bs", "Bahamas"}, {312, 312, "bz", "Belize"}, {314, 314, "bb", "Barbados"}, {316, 316, "ca", "Canada"},
+        {319, 319, "ky", "Cayman Islands"}, {321, 321, "cr", "Costa Rica"}, {323, 323, "cu", "Cuba"}, {325, 325, "dm", "Dominica"},
+        {327, 327, "do", "Dominican Republic"}, {329, 329, "gp", "Guadeloupe"}, {330, 330, "gd", "Grenada"}, {331, 331, "gl", "Greenland"},
+        {332, 332, "gt", "Guatemala"}, {334, 334, "hn", "Honduras"}, {336, 336, "ht", "Haiti"}, {338, 338, "us", "USA"},
+        {339, 339, "jm", "Jamaica"}, {341, 341, "kn", "Saint Kitts and Nevis"}, {343, 343, "lc", "Saint Lucia"}, {345, 345, "mx", "Mexico"},
+        {347, 347, "mq", "Martinique"}, {348, 348, "ms", "Montserrat"}, {350, 350, "ni", "Nicaragua"}, {351, 357, "pa", "Panama"},
+        {358, 358, "pr", "Puerto Rico"}, {359, 359, "sv", "El Salvador"}, {361, 361, "pm", "Saint Pierre and Miquelon"},
+        {362, 362, "tt", "Trinidad and Tobago"}, {364, 364, "tc", "Turks and Caicos"}, {366, 369, "us", "USA"}, {370, 374, "pa", "Panama"},
+        {375, 377, "vc", "Saint Vincent and the Grenadines"}, {378, 378, "vg", "British Virgin Islands"},
+        {379, 379, "vi", "US Virgin Islands"},
+        {401, 401, "af", "Afghanistan"}, {403, 403, "sa", "Saudi Arabia"}, {405, 405, "bd", "Bangladesh"}, {408, 408, "bh", "Bahrain"},
+        {410, 410, "bt", "Bhutan"}, {412, 414, "cn", "China"}, {416, 416, "tw", "Taiwan"}, {417, 417, "lk", "Sri Lanka"},
+        {419, 419, "in", "India"}, {422, 422, "ir", "Iran"}, {423, 423, "az", "Azerbaijan"}, {425, 425, "iq", "Iraq"},
+        {428, 428, "il", "Israel"}, {431, 432, "jp", "Japan"}, {434, 434, "tm", "Turkmenistan"}, {436, 436, "kz", "Kazakhstan"},
+        {437, 437, "uz", "Uzbekistan"}, {438, 438, "jo", "Jordan"}, {440, 441, "kr", "South Korea"}, {443, 443, "ps", "Palestine"},
+        {445, 445, "kp", "North Korea"}, {447, 447, "kw", "Kuwait"}, {450, 450, "lb", "Lebanon"}, {451, 451, "kg", "Kyrgyzstan"},
+        {453, 453, "mo", "Macao"}, {455, 455, "mv", "Maldives"}, {457, 457, "mn", "Mongolia"}, {459, 459, "np", "Nepal"},
+        {461, 461, "om", "Oman"}, {463, 463, "pk", "Pakistan"}, {466, 466, "qa", "Qatar"}, {468, 468, "sy", "Syria"},
+        {470, 471, "ae", "United Arab Emirates"}, {472, 472, "tj", "Tajikistan"}, {473, 473, "ye", "Yemen"}, {475, 475, "ye", "Yemen"},
+        {477, 477, "hk", "Hong Kong"}, {478, 478, "ba", "Bosnia and Herzegovina"},
+        {501, 501, "tf", "Adelie Land"}, {503, 503, "au", "Australia"}, {506, 506, "mm", "Myanmar"}, {508, 508, "bn", "Brunei"},
+        {510, 510, "fm", "Micronesia"}, {511, 511, "pw", "Palau"}, {512, 512, "nz", "New Zealand"}, {514, 515, "kh", "Cambodia"},
+        {516, 516, "cx", "Christmas Island"}, {518, 518, "ck", "Cook Islands"}, {520, 520, "fj", "Fiji"}, {523, 523, "cc", "Cocos Islands"},
+        {525, 525, "id", "Indonesia"}, {529, 529, "ki", "Kiribati"}, {531, 531, "la", "Laos"}, {533, 533, "my", "Malaysia"},
+        {536, 536, "mp", "Northern Mariana Islands"}, {538, 538, "mh", "Marshall Islands"}, {540, 540, "nc", "New Caledonia"},
+        {542, 542, "nu", "Niue"}, {544, 544, "nr", "Nauru"}, {546, 546, "pf", "French Polynesia"}, {548, 548, "ph", "Philippines"},
+        {550, 550, "tl", "Timor-Leste"}, {553, 553, "pg", "Papua New Guinea"}, {555, 555, "pn", "Pitcairn"},
+        {557, 557, "sb", "Solomon Islands"}, {559, 559, "as", "American Samoa"}, {561, 561, "ws", "Samoa"}, {563, 566, "sg", "Singapore"},
+        {567, 567, "th", "Thailand"}, {570, 570, "to", "Tonga"}, {572, 572, "tv", "Tuvalu"}, {574, 574, "vn", "Vietnam"},
+        {576, 577, "vu", "Vanuatu"}, {578, 578, "wf", "Wallis and Futuna"},
+        {601, 601, "za", "South Africa"}, {603, 603, "ao", "Angola"}, {605, 605, "dz", "Algeria"},
+        {607, 607, "tf", "Saint Paul and Amsterdam"}, {608, 608, "sh", "Ascension Island"}, {609, 609, "bi", "Burundi"},
+        {610, 610, "bj", "Benin"}, {611, 611, "bw", "Botswana"}, {612, 612, "cf", "Central African Republic"},
+        {613, 613, "cm", "Cameroon"}, {615, 615, "cg", "Congo"}, {616, 616, "km", "Comoros"}, {617, 617, "cv", "Cape Verde"},
+        {618, 618, "tf", "Crozet Archipelago"}, {619, 619, "ci", "Cote d'Ivoire"}, {620, 620, "km", "Comoros"},
+        {621, 621, "dj", "Djibouti"}, {622, 622, "eg", "Egypt"}, {624, 624, "et", "Ethiopia"}, {625, 625, "er", "Eritrea"},
+        {626, 626, "ga", "Gabon"}, {627, 627, "gh", "Ghana"}, {629, 629, "gm", "Gambia"}, {630, 630, "gw", "Guinea-Bissau"},
+        {631, 631, "gq", "Equatorial Guinea"}, {632, 632, "gn", "Guinea"}, {633, 633, "bf", "Burkina Faso"}, {634, 634, "ke", "Kenya"},
+        {635, 635, "tf", "Kerguelen Islands"}, {636, 637, "lr", "Liberia"}, {638, 638, "ss", "South Sudan"}, {642, 642, "ly", "Libya"},
+        {644, 644, "ls", "Lesotho"}, {645, 645, "mu", "Mauritius"}, {647, 647, "mg", "Madagascar"}, {649, 649, "ml", "Mali"},
+        {650, 650, "mz", "Mozambique"}, {654, 654, "mr", "Mauritania"}, {655, 655, "mw", "Malawi"}, {656, 656, "ne", "Niger"},
+        {657, 657, "ng", "Nigeria"}, {659, 659, "na", "Namibia"}, {660, 660, "re", "Reunion"}, {661, 661, "rw", "Rwanda"},
+        {662, 662, "sd", "Sudan"}, {663, 663, "sn", "Senegal"}, {664, 664, "sc", "Seychelles"}, {665, 665, "sh", "Saint Helena"},
+        {666, 666, "so", "Somalia"}, {667, 667, "sl", "Sierra Leone"}, {668, 668, "st", "Sao Tome and Principe"},
+        {669, 669, "sz", "Eswatini"}, {670, 670, "td", "Chad"}, {671, 671, "tg", "Togo"}, {672, 672, "tn", "Tunisia"},
+        {674, 674, "tz", "Tanzania"}, {675, 675, "ug", "Uganda"}, {676, 676, "cd", "DR Congo"}, {677, 677, "tz", "Tanzania"},
+        {678, 678, "zm", "Zambia"}, {679, 679, "zw", "Zimbabwe"},
+        {701, 701, "ar", "Argentina"}, {710, 710, "br", "Brazil"}, {720, 720, "bo", "Bolivia"}, {725, 725, "cl", "Chile"},
+        {730, 730, "co", "Colombia"}, {735, 735, "ec", "Ecuador"}, {740, 740, "fk", "Falkland Islands"}, {745, 745, "gf", "French Guiana"},
+        {750, 750, "gy", "Guyana"}, {755, 755, "py", "Paraguay"}, {760, 760, "pe", "Peru"}, {765, 765, "sr", "Suriname"},
+        {770, 770, "uy", "Uruguay"}, {775, 775, "ve", "Venezuela"},
+    };
+    for (size_t i = 0; i < sizeof(k) / sizeof(k[0]); i++) {
+        if (mid >= k[i].lo && mid <= k[i].hi) return &k[i];
+    }
+    return NULL;
+}
+
+const char *ais_mid_country(uint16_t mid)
+{
+    const mid_country_t *c = mid_find(mid);
+    return c ? c->name : NULL;
+}
+
+const char *ais_mid_iso(uint16_t mid)
+{
+    const mid_country_t *c = mid_find(mid);
+    return c ? c->iso : NULL;
+}
+
+uint16_t ais_mmsi_mid(uint32_t mmsi)
+{
+    uint32_t mid;
+    if (mmsi >= 200000000 && mmsi < 800000000) mid = mmsi / 1000000;              // MIDxxxxxx: ship
+    else if (mmsi >= 800000000 && mmsi < 900000000) mid = mmsi / 100000 % 1000;   // 8MIDxxxxx: handheld
+    else if (mmsi >= 980000000 && mmsi < 1000000000) mid = mmsi / 10000 % 1000;   // 98MID/99MID: craft, AtoN
+    else if (mmsi >= 111000000 && mmsi < 112000000) mid = mmsi / 1000 % 1000;     // 111MIDxxx: SAR aircraft
+    else if (mmsi >= 10000000 && mmsi < 100000000) mid = mmsi / 100000;           // 0MIDxxxxx: group
+    else if (mmsi >= 1000000 && mmsi < 10000000) mid = mmsi / 10000;              // 00MIDxxxx: coast station
+    else return 0; // 970/972/974 beacons and the like carry no country
+    return mid_find((uint16_t)mid) ? (uint16_t)mid : 0;
+}
+
+// Bits first..last (numbered as in T.001, 26..85) of a beacon ID.
+static uint32_t id_bits(const uint8_t *nib, int first, int last)
+{
+    uint32_t v = 0;
+    for (int b = first; b <= last; b++) {
+        int i = b - 26;
+        v = v << 1 | ((nib[i / 4] >> (3 - i % 4)) & 1);
+    }
+    return v;
+}
+
+// A 6-bit modified-Baudot character (ITA2 with a letters/figures bit on top).
+static char baudot6(uint32_t c)
+{
+    static const char letters[33] = "\0T\rO HNM\nLRGIPCVEZDBSYFXAWJ\0UQK\0";
+    static const char figures[32] = {
+        [1] = '5', [3] = '9', [4] = ' ', [10] = '4', [12] = '8', [13] = '0', [16] = '3',
+        [21] = '6', [23] = '/', [24] = '-', [25] = '2', [28] = '7', [29] = '1',
+    };
+    char ch = (c & 0x20) ? letters[c & 0x1f] : figures[c & 0x1f];
+    return ch >= ' ' ? ch : '?';
+}
+
+bool ais_beacon_id_parse(const char *text, ais_beacon_id_t *out)
+{
+    for (const char *p = text; *p; p++) {
+        if (!isxdigit((unsigned char)*p) || (p > text && isxdigit((unsigned char)p[-1]))) continue;
+        int n = 0;
+        while (isxdigit((unsigned char)p[n])) n++;
+        if (n != 15) {
+            p += n - 1;
+            continue;
+        }
+        uint8_t nib[15];
+        for (int i = 0; i < 15; i++) nib[i] = (uint8_t)hexval(p[i]);
+        ais_beacon_id_t id = {.beacon_no = -1, .t_prefix = p > text && (p[-1] == 'T' || p[-1] == 't')};
+        for (int i = 0; i < 15; i++) id.hex[i] = (char)toupper((unsigned char)p[i]);
+        id.country = (uint16_t)id_bits(nib, 27, 36);
+        id.country_name = ais_mid_country(id.country);
+        if (!id.country_name) {
+            p += n - 1;
+            continue;
+        }
+        if (id_bits(nib, 26, 26)) { // user protocols
+            switch (id_bits(nib, 37, 39)) {
+            case 0: id.what = "orbitography (a satellite-system beacon)"; break;
+            case 1: {
+                id.what = "ELT (aircraft), coded with its registration";
+                char reg[8];
+                for (int i = 0; i < 7; i++) reg[i] = baudot6(id_bits(nib, 40 + 6 * i, 45 + 6 * i));
+                reg[7] = 0;
+                snprintf(id.ident, sizeof(id.ident), "aircraft %s", reg);
+                id.beacon_no = (int)id_bits(nib, 82, 83);
+                break;
+            }
+            case 2: {
+                id.what = "maritime beacon, coded with its ship's MMSI or call sign";
+                char s[7];
+                bool digits = true;
+                for (int i = 0; i < 6; i++) {
+                    s[i] = baudot6(id_bits(nib, 40 + 6 * i, 45 + 6 * i));
+                    digits = digits && s[i] >= '0' && s[i] <= '9';
+                }
+                s[6] = 0;
+                if (digits) id.mmsi = id.country * 1000000u + (uint32_t)atoi(s);
+                else snprintf(id.ident, sizeof(id.ident), "call sign %s", s);
+                char b = baudot6(id_bits(nib, 76, 81));
+                if (b >= '0' && b <= '9') id.beacon_no = b - '0';
+                break;
+            }
+            case 3: {
+                static const char *const types[8] = {
+                    "ELT (aircraft)", "ELT (aircraft, 24-bit address)", "EPIRB (float-free)",
+                    "ELT (aircraft operator)", "EPIRB (not float-free)", NULL, "PLB (personal)", NULL,
+                };
+                uint32_t t = id_bits(nib, 40, 42);
+                id.what = types[t] ? types[t] : "beacon, coded with a serial number";
+                if (t == 1) snprintf(id.ident, sizeof(id.ident), "aircraft address %06lX",
+                                     (unsigned long)id_bits(nib, 44, 67));
+                else snprintf(id.ident, sizeof(id.ident), "serial %lu", (unsigned long)id_bits(nib, 44, 63));
+                break;
+            }
+            case 4: id.what = "beacon with a national (country-assigned) ID"; break;
+            case 6: {
+                id.what = "beacon coded with its ship's call sign";
+                char cs[8];
+                for (int i = 0; i < 4; i++) cs[i] = baudot6(id_bits(nib, 40 + 6 * i, 45 + 6 * i));
+                for (int i = 0; i < 3; i++) {
+                    uint32_t d = id_bits(nib, 64 + 4 * i, 67 + 4 * i);
+                    cs[4 + i] = d < 10 ? (char)('0' + d) : ' ';
+                }
+                cs[7] = 0;
+                snprintf(id.ident, sizeof(id.ident), "call sign %s", cs);
+                char b = baudot6(id_bits(nib, 76, 81));
+                if (b >= '0' && b <= '9') id.beacon_no = b - '0';
+                break;
+            }
+            case 7: id.what = "test beacon"; break;
+            default: id.what = "beacon (unknown user protocol)"; break;
+            }
+        } else { // location protocols
+            uint32_t pc = id_bits(nib, 37, 40);
+            switch (pc) {
+            case 2: case 12:
+                id.what = pc == 2 ? "EPIRB, coded with its ship's MMSI" : "ship security alert, coded with the ship's MMSI";
+                id.mmsi = id.country * 1000000u + id_bits(nib, 41, 60);
+                if (pc == 2) id.beacon_no = (int)id_bits(nib, 61, 64);
+                break;
+            case 3:
+                id.what = "ELT (aircraft), coded with its 24-bit address";
+                snprintf(id.ident, sizeof(id.ident), "aircraft address %06lX", (unsigned long)id_bits(nib, 41, 64));
+                break;
+            case 4: case 6: case 7:
+                id.what = pc == 4 ? "ELT (aircraft), coded with a serial number"
+                        : pc == 6 ? "EPIRB, coded with a serial number" : "PLB (personal), coded with a serial number";
+                snprintf(id.ident, sizeof(id.ident), "serial %lu (type approval %lu)",
+                         (unsigned long)id_bits(nib, 51, 64), (unsigned long)id_bits(nib, 41, 50));
+                break;
+            case 5: id.what = "ELT (aircraft), coded with its operator"; break;
+            case 8: id.what = "ELT (aircraft) with a national ID"; break;
+            case 9: id.what = "ELT (aircraft, distress tracking)"; break;
+            case 10: id.what = "EPIRB with a national ID"; break;
+            case 11: id.what = "PLB (personal) with a national ID"; break;
+            case 13: id.what = "beacon with return-link service"; break;
+            case 14: case 15: id.what = "test beacon"; break;
+            default: id.what = "beacon (unknown location protocol)"; break;
+            }
+        }
+        *out = id;
+        return true;
+    }
+    return false;
+}
+
+void ais_beacon_id_describe(const ais_beacon_id_t *id, const char *ship_name, char *buf, size_t len)
+{
+    size_t n = 0;
+#define ADD(...) do { if (n < len) n += (size_t)snprintf(buf + n, len - n, __VA_ARGS__); } while (0)
+    if (len) buf[0] = 0;
+    ADD("406 MHz beacon ID %s\n", id->hex);
+    ADD("%c%s\n", toupper((unsigned char)id->what[0]), id->what + 1);
+    if (id->mmsi) {
+        ADD("Ship MMSI %lu", (unsigned long)id->mmsi);
+        if (ship_name && ship_name[0]) ADD(" (%s)", ship_name);
+        ADD(", %s\n", id->country_name);
+    } else {
+        ADD("%s%s%s\n", id->ident[0] ? id->ident : "", id->ident[0] ? ", " : "", id->country_name);
+    }
+    if (id->beacon_no >= 0) ADD("Beacon no. %d\n", id->beacon_no);
+    if (id->t_prefix) ADD("The \"T\" before the ID may mean a test\n");
+#undef ADD
 }
 
 const char *ais_msg_type_str(uint8_t type)

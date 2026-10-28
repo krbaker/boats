@@ -3,7 +3,7 @@
 // heard meanwhile (capture.nmea: "<seconds> <N|S> <sentence>", N = network
 // feed, S = the display's live SDR decoder).
 //
-//     build/ais_capture_score capture.cu8 capture.nmea [-v]
+//     build/ais_capture_score capture.cu8 capture.nmea [-v] [ppm]
 //
 // The I/Q is decoded again here (offline, with whatever demodulator this was
 // built with), and each packet the network feed (the reference) heard is looked
@@ -56,6 +56,7 @@ typedef struct {
 } pktlist_t;
 
 static pktlist_t s_lists[NSRC];
+static double s_ppm;        // manual tuning correction, as set on the display
 
 static int bits6(char c)
 {
@@ -151,6 +152,7 @@ static void decode_file(const char *path)
     s_pw[1] = calloc(nwin_max, sizeof(float));
 
     ais_demod_t *d = ais_demod_new(on_offline, NULL);
+    if (s_ppm) ais_demod_set_ppm(d, s_ppm);
     static uint8_t buf[4096];
     // Channel power: mix +-25 kHz down, 12 kHz boxcar, average over the window.
     // Rotating phasors (renormalised every window) instead of cos/sin per sample.
@@ -281,10 +283,14 @@ static bool ref_knows(uint32_t mmsi)
 int main(int argc, char **argv)
 {
     if (argc < 3) {
-        fprintf(stderr, "usage: %s capture.cu8 capture.nmea [-v]\n", argv[0]);
+        fprintf(stderr, "usage: %s capture.cu8 capture.nmea [-v] [ppm]\n", argv[0]);
         return 2;
     }
-    bool verbose = argc > 3 && !strcmp(argv[3], "-v");
+    bool verbose = false;
+    for (int i = 3; i < argc; i++) {
+        if (!strcmp(argv[i], "-v")) verbose = true;
+        else s_ppm = atof(argv[i]);
+    }
     for (int s = 0; s < NSRC; s++) s_lists[s].p = calloc(MAX_PKTS, sizeof(pkt_t));
 
     FILE *f = fopen(argv[2], "r");

@@ -86,6 +86,20 @@ const char *ui_safety_sender_kind(uint32_t mmsi)
     }
 }
 
+// A 406 MHz beacon ID in the text, decoded (lines, the last without "\n"); the
+// raw text is always shown too, since this is only a guess.
+bool ui_safety_guess(const safety_msg_t *m, char *buf, size_t len)
+{
+    ais_beacon_id_t id;
+    if (!ais_beacon_id_parse(m->text, &id)) return false;
+    vessel_t v;
+    bool known = id.mmsi && vessel_db_get(id.mmsi, &v);
+    ais_beacon_id_describe(&id, known ? v.name : NULL, buf, len);
+    size_t n = strlen(buf);
+    if (n && buf[n - 1] == '\n') buf[n - 1] = 0;
+    return true;
+}
+
 // "WENATCHEE (366123456), 1.2 nm 045°" or just the MMSI and what it is.
 void ui_safety_sender(const safety_msg_t *m, char *buf, size_t len)
 {
@@ -139,6 +153,11 @@ static void popup_open(const safety_msg_t *m, uint32_t id)
     ui_safety_sender(m, buf, sizeof(buf));
     label(box, buf, &lv_font_montserrat_16, UI_COLOR_TEXT);
     label(box, m->text, &lv_font_montserrat_24, UI_COLOR_TEXT);
+    char guess[256];
+    if (ui_safety_guess(m, guess, sizeof(guess))) {
+        label(box, UI_SAFETY_GUESS_TITLE, &lv_font_montserrat_16, UI_COLOR_MUTED);
+        label(box, guess, &lv_font_montserrat_16, UI_COLOR_TEXT);
+    }
     char t[32] = "";
     if (m->last_wall) ui_format_time(m->last_wall, t, sizeof(t), false);
     if (m->count > 1) snprintf(buf, sizeof(buf), "%s%sheard %lu times", t, t[0] ? ", " : "", (unsigned long)m->count);

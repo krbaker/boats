@@ -92,6 +92,8 @@ Each zoom level is rendered over the whole pan area as one large image (up to 16
 
 With the defaults a chart set is around 10 MB (9.3 MB for Seattle; open water and solid land compress to almost nothing) and takes about 2 minutes to build. Charts are rendered in Web Mercator (EPSG:3857); a chart set made by an older version of the builder is rejected and must be rebuilt. The charts come from NOAA's ENC-based Chart Display Service, which draws official NOAA ENC data with standard (S-52) nautical chart symbols. The info, data-quality and overscale overlays are turned off to reduce clutter; `--list-layers` and `--layers` control this. Only US waters are covered.
 
+**Flags:** the vessel list and a vessel's detail screen show its country, worked out from its MMSI. To show flags too, run `python3 mapbuilder/make_flags.py -o seattle/` and copy the `seattle/flags/` folder to the root of the microSD card, next to `ais_map/` (229 small PNGs, about 1 MB, from flagcdn.com). Without it the list shows the 2-letter country code.
+
 ## Building and flashing the firmware
 
 You need ESP-IDF **v5.5 or later**:

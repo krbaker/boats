@@ -397,9 +397,10 @@ int vessel_db_safety_msgs(safety_msg_t *out, int max)
         {970111222, "SART ACTIVE", AIS_SAFETY_DISTRESS, 7, 20},
         {3669702, "BUOY 12 OFF STATION. MARINERS USE CAUTION", AIS_SAFETY_TEXT, 1, 300},
         {972000123, "MOB TEST", AIS_SAFETY_TEST, 2, 900},
+        {974010086, "T4F842D5A60FFBFF", AIS_SAFETY_TEXT, 3, 1200},
     };
     int n = 0;
-    for (int i = 0; i < 3 && n < max; i++, n++) {
+    for (int i = 0; i < 4 && n < max; i++, n++) {
         out[n] = (safety_msg_t){.mmsi = k[i].mmsi, .kind = k[i].kind, .count = k[i].count,
                                 .last_us = now - k[i].age_s * 1000000LL, .first_us = now - 3600 * 1000000LL,
                                 .last_wall = time(NULL) - k[i].age_s};
@@ -479,7 +480,8 @@ static void make_vessel(int i, vessel_t *v)
     }
     const fake_t *f = &k_fleet[i];
     memset(v, 0, sizeof(*v));
-    v->mmsi = 366000100 + i * 7;
+    static const uint16_t mids[] = {366, 636, 366, 538, 351, 366, 316, 232, 366, 477};
+    v->mmsi = mids[i % 10] * 1000000u + 100 + i * 7; // a few flags besides the US
     strcpy(v->name, f->name);
     v->cls = f->heading < 0 ? AIS_CLASS_B : AIS_CLASS_A;
     v->lat = CENTER_LAT + f->dn / 60.0;
@@ -728,6 +730,7 @@ int main(int argc, char **argv)
 {
     setenv("TZ", "PST8PDT,M3.2.0,M11.1.0", 1);
     tzset();
+    map_store_mount(); // "sd" (build.sh puts the flags there, if FLAGS is set)
     s_have_chart = map_store_get_manifest(&s_manifest);
     if (!s_have_chart) fprintf(stderr, "no chart set in %s; previewing without one\n", MAP_DIR);
 

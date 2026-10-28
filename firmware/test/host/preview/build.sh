@@ -3,7 +3,7 @@
 # services stubbed out, rendering screens to PNG. Needs a firmware build first
 # (for build/config/sdkconfig.h and managed_components/).
 #
-#   test/host/preview/build.sh [map_builder_output_dir]   # PNGs land in test/host/preview/out/
+#   [FLAGS=make_flags_output_dir] test/host/preview/build.sh [map_builder_output_dir]   # PNGs land in test/host/preview/out/
 set -e
 HERE=$(cd "$(dirname "$0")" && pwd)
 FW=$(cd "$HERE/../../.." && pwd)
@@ -28,7 +28,7 @@ INC="-I$M -I$M/config -I$M/ais -I$M/tide -I$M/geo -I$M/map -I$M/ui -I$M/net -I$M
 WP="$FW/components/weather_parse"
 CJSON=${IDF_PATH:-$HOME/esp/esp-idf}/components/json/cJSON
 $CC $CFLAGS $INC -I"$CJSON" -Wall -o "$OBJ/preview" "$HERE/preview.c" "$M/ui/ui.c" "$M/ui/ui_map.c" \
-    "$M/ui/ui_vessels.c" "$M/ui/ui_aircraft.c" "$FW/components/adsb_parse/adsb_parse.c" "$M/ui/ui_netinfo.c" "$M/ui/ui_settings.c" "$M/ui/ui_safety.c" "$M/ui/ui_met.c" "$M/ui/ui_tide.c" "$M/ui/map_tile_decode.c" "$M/map/map_store.c" "$M/map/map_pack.c" \
+    "$M/ui/ui_vessels.c" "$M/ui/ui_aircraft.c" "$FW/components/adsb_parse/adsb_parse.c" "$M/ui/ui_netinfo.c" "$M/ui/ui_settings.c" "$M/ui/ui_safety.c" "$M/ui/ui_flags.c" "$M/ui/ui_met.c" "$M/ui/ui_tide.c" "$M/ui/map_tile_decode.c" "$M/map/map_store.c" "$M/map/map_pack.c" \
     "$M/geo/geo.c" "$FW/components/ais/ais.c" "$M/ui/wx_icon_render.c" "$M/ui/ui_weather.c" "$WP/wx.c" "$WP/astro.c" "$WP/nws.c" "$WP/ndbc.c" \
     "$CJSON/cJSON.c" "$OBJ/liblvgl.a" -lm
 
@@ -40,6 +40,8 @@ $CC -std=c11 -O2 -Wall -Wno-missing-field-initializers -I"$M/ui" -I"$WP/include"
 CHART=${1:-}
 rm -rf "$OUT/sd" && mkdir -p "$OUT/sd"
 if [ -n "$CHART" ]; then ln -s "$(cd "$CHART" && pwd)/ais_map" "$OUT/sd/ais_map"; fi
+# Optional flags: FLAGS=dir holding flags/ (mapbuilder/make_flags.py output).
+if [ -n "${FLAGS:-}" ]; then ln -s "$(cd "$FLAGS" && pwd)/flags" "$OUT/sd/flags"; fi
 cd "$OUT"
 rm -f ./*.png
 "$OBJ/preview"

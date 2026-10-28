@@ -351,6 +351,13 @@ static esp_err_t status_get(httpd_req_t *req)
         cJSON_AddStringToObject(mj, "kind", m->kind == AIS_SAFETY_DISTRESS ? "distress"
                                             : m->kind == AIS_SAFETY_TEST    ? "test" : "notice");
         cJSON_AddStringToObject(mj, "text", m->text);
+        ais_beacon_id_t id;
+        if (ais_beacon_id_parse(m->text, &id)) { // a guess, shown under the raw text
+            vessel_t sv;
+            char guess[256];
+            ais_beacon_id_describe(&id, id.mmsi && vessel_db_get(id.mmsi, &sv) ? sv.name : NULL, guess, sizeof(guess));
+            cJSON_AddStringToObject(mj, "guess", guess);
+        }
         cJSON_AddNumberToObject(mj, "count", m->count);
         cJSON_AddNumberToObject(mj, "age_s", (now_us - m->last_us) / 1000000);
         cJSON_AddItemToArray(safety, mj);

@@ -1,8 +1,9 @@
 #!/bin/sh
 # Build and run the host-side unit tests (AIS parser, AIS demodulator, geo
 # helpers, vessel cache, retransmit, weather parsers and icon, ADS-B parser,
-# simulator round trip). Set AIS_CAPTURE to a .cu8 I/Q capture (288 kS/s,
-# centred on 162.000 MHz) to also run the demodulator over real signals.
+# simulator round trip), and the capture analysis tools tools/sdr_test.py uses.
+# Set AIS_CAPTURE to a .cu8 I/Q capture (288 kS/s, centred on 162.000 MHz) to
+# also run the demodulator over real signals.
 set -e
 cd "$(dirname "$0")"
 CC=${CC:-cc}
@@ -15,6 +16,7 @@ $CC $CFLAGS -o build/ais_dump ais_dump.c ../../components/ais/ais.c
 $CC $CFLAGS -O2 -o build/test_ais_demod test_ais_demod.c ../../components/ais_demod/ais_demod.c ../../components/ais/ais.c -lm
 $CC $CFLAGS -O2 -o build/ais_demod_file ais_demod_file.c ../../components/ais_demod/ais_demod.c ../../components/ais/ais.c -lm
 $CC $CFLAGS -O2 -o build/ais_capture_score ais_capture_score.c ../../components/ais_demod/ais_demod.c ../../components/ais/ais.c -lm
+$CC $CFLAGS -O2 -o build/iq_stats iq_stats.c -lm
 build/test_ais
 build/test_ais_demod
 if [ -n "$AIS_CAPTURE" ]; then build/ais_demod_file "$AIS_CAPTURE" | tail -1; fi

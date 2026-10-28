@@ -66,6 +66,17 @@ void ui_safety_init(void);
 uint32_t ui_safety_msg_id(const safety_msg_t *m);
 void ui_safety_sender(const safety_msg_t *m, char *buf, size_t len);   // name/MMSI, distance and bearing
 const char *ui_safety_sender_kind(uint32_t mmsi);                      // "AIS-SART", ... or NULL
+bool ui_safety_guess(const safety_msg_t *m, char *buf, size_t len);   // a beacon ID decoded from the text
+#define UI_SAFETY_GUESS_TITLE "Non-Emergency Decoding Guess"
+
+// Country flags (ui_flags.c), from the microSD card; NULL if there isn't one.
+#define UI_FLAG_W 32
+#define UI_FLAG_H 24
+// mid: ais_mmsi_mid(). Reading a flag from the card takes a few ms, so a long
+// list reads a few at a time: *reads is how many more it may read (counted
+// down); with reads NULL, only flags already read.
+const lv_image_dsc_t *ui_flag_get(uint16_t mid, int *reads);
+void ui_flag_country(uint32_t mmsi, char *buf, size_t len); // "Liberia (636)", or "-"
 
 // A weather station heard over AIS (ui_met.c): its readings, in a popup.
 #include "met_db.h"

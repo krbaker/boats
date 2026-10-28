@@ -244,6 +244,41 @@ static void test_type14_safety(void)
     CHECK(ais_msg_type_used(14));
 }
 
+static void test_beacon_id(void)
+{
+    ais_beacon_id_t id;
+    // Heard from AIS-EPIRB 974010086: standard location, EPIRB MMSI, Liberia.
+    CHECK(ais_beacon_id_parse("T4F842D5A60FFBFF", &id));
+    CHECK(strcmp(id.hex, "4F842D5A60FFBFF") == 0 && id.t_prefix);
+    CHECK(id.country == 636 && strcmp(id.country_name, "Liberia") == 0);
+    CHECK(id.mmsi == 636092883 && id.beacon_no == 0 && strstr(id.what, "EPIRB"));
+    char buf[256];
+    ais_beacon_id_describe(&id, "SOME SHIP", buf, sizeof(buf));
+    CHECK(strstr(buf, "Ship MMSI 636092883 (SOME SHIP), Liberia\n") != NULL);
+    CHECK(strstr(buf, "\"T\"") != NULL);
+    // Maritime user protocol, MMSI digits in Baudot, beacon '1'.
+    CHECK(ais_beacon_id_parse("ID ADC9D65028155D0 X", &id));
+    CHECK(!id.t_prefix && id.country == 366 && id.mmsi == 366123456 && id.beacon_no == 1);
+    // Serial-coded EPIRB, standard location.
+    CHECK(ais_beacon_id_parse("2a4c3da3aeffbff", &id));
+    CHECK(id.country == 338 && id.mmsi == 0 && strcmp(id.ident, "serial 4567 (type approval 123)") == 0);
+    // Not one: too long, too short, or no real country code.
+    CHECK(!ais_beacon_id_parse("4F842D5A60FFBFF0", &id));
+    CHECK(!ais_beacon_id_parse("4F842D5A60FFBF", &id));
+    CHECK(!ais_beacon_id_parse("000000000000000", &id));
+    CHECK(!ais_beacon_id_parse("SART ACTIVE", &id));
+    CHECK(ais_mid_country(366) && !ais_mid_country(100));
+    CHECK(strcmp(ais_mid_iso(636), "lr") == 0 && strcmp(ais_mid_iso(204), "pt") == 0);
+    CHECK(ais_mmsi_mid(636092883) == 636);
+    CHECK(ais_mmsi_mid(3669702) == 366);      // 00MID coast station
+    CHECK(ais_mmsi_mid(36600000) == 366);     // 0MID group
+    CHECK(ais_mmsi_mid(111232501) == 232);    // SAR aircraft
+    CHECK(ais_mmsi_mid(993661234) == 366);    // AtoN
+    CHECK(ais_mmsi_mid(982351234) == 235);    // craft with a parent ship
+    CHECK(ais_mmsi_mid(974010086) == 0);      // EPIRB
+    CHECK(ais_mmsi_mid(100000000) == 0);
+}
+
 static void put_s(bits_t *b, int32_t v, int len) { put(b, (uint32_t)v & ((1u << len) - 1), len); }
 
 static void test_type8_met_imo(void)
@@ -359,6 +394,7 @@ int main(void)
     test_type21_aton();
     test_type4_base();
     test_type14_safety();
+    test_beacon_id();
     test_type8_met_imo();
     test_type8_met_us();
     test_type_counts();

@@ -193,6 +193,34 @@ bool ais_msg_type_used(uint8_t type);         // one ais_decode_payload() decode
 // 970..., 972..., 974...) and text.
 ais_safety_t ais_safety_kind(uint32_t mmsi, const char *text);
 
+// A guess at a 406 MHz (Cospas-Sarsat) beacon ID found in a safety broadcast's
+// text: some AIS-EPIRBs send their 15-hex-character ID, e.g. "T4F842D5A60FFBFF".
+typedef struct {
+    char hex[16];               // the 15 hex characters
+    uint16_t country;           // its country code (an MMSI's MID)
+    const char *country_name;   // NULL if the code isn't one
+    const char *what;           // the kind of beacon and how its ID is coded
+    uint32_t mmsi;              // the ship's MMSI, if the ID carries one (else 0)
+    char ident[48];             // another identity: "call sign ...", "serial ...", ... (else "")
+    int beacon_no;              // which of the ship's beacons (-1 if not given)
+    bool t_prefix;              // a "T" right before it
+} ais_beacon_id_t;
+
+// Finds and decodes one (a run of exactly 15 hex characters with a real country
+// code). False if there isn't one.
+bool ais_beacon_id_parse(const char *text, ais_beacon_id_t *out);
+
+// The guess in lines (each ending "\n"); ship_name is the MMSI's vessel name, or NULL.
+void ais_beacon_id_describe(const ais_beacon_id_t *id, const char *ship_name, char *buf, size_t len);
+
+// The country of an MMSI's MID (201..775), or NULL; its ISO 3166 code ("lr"), or NULL.
+const char *ais_mid_country(uint16_t mid);
+const char *ais_mid_iso(uint16_t mid);
+
+// The MID in an MMSI (ships, coast stations, groups, handhelds, SAR aircraft,
+// AtoNs, craft with a parent ship), or 0 if it has none or it isn't a country's.
+uint16_t ais_mmsi_mid(uint32_t mmsi);
+
 #ifdef __cplusplus
 }
 #endif

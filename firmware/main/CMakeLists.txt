@@ -30,6 +30,7 @@ idf_component_register(
         "ui/ui_netinfo.c"
         "ui/ui_settings.c"
         "ui/ui_safety.c"
+        "ui/ui_flags.c"
         "ui/ui_met.c"
         "ui/ui_vessels.c"
         "ui/ui_aircraft.c"

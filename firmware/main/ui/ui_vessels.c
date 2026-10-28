@@ -2,6 +2,7 @@
 // nearest first, how the two receivers (local RTL-SDR and network feed)
 // compare, and the map's vessel filter / label options.
 
+#include <ctype.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -20,8 +21,10 @@
 #define BOX_W       540     // content box; its corners just fit inside the round screen
 #define BOX_H       560
 #define BOX_Y       24      // offset of the box below the screen centre
-#define COL_NAME_W  250
-#define COL_NUM_W   ((BOX_W - COL_NAME_W) / 2)
+#define COL_FLAG_W  (UI_FLAG_W + 28)   // the flag, between the cells' 14 px padding
+#define COL_NAME_W  220
+#define COL_NUM_W   ((BOX_W - COL_FLAG_W - COL_NAME_W) / 2)
+#define FLAG_READS  4               // flags read from the card per refresh
 #define POLL_MS     250
 #define RX_POLL_MS  1000
 enum { TAB_LIST, TAB_RX, TAB_OPTIONS, TAB_MSGS };
@@ -30,6 +33,7 @@ typedef struct {
     uint32_t mmsi;
     int idx;        // into s_vessels
     float dist_nm;
+    uint16_t mid;   // its country (ais_mmsi_mid), 0 if none
 } row_t;
 
 static lv_obj_t *s_root, *s_tabs, *s_table, *s_empty;
@@ -43,6 +47,7 @@ static int s_nrows;
 static uint32_t s_generation;
 static vessel_filter_t s_filter;
 static bool s_filter_dirty;
+static bool s_flags_pending;    // flags left to read from the card
 
 // ---------------------------------------------------------------------------
 // Vessel list
@@ -67,24 +72,31 @@ static void refresh_list(void)
         const vessel_t *v = &s_vessels[i];
         if (v->cls == AIS_CLASS_ATON) continue; // marks are on the map only
         float d = (v->fields & AIS_F_POS) ? geo_distance_nm(cfg.center_lat, cfg.center_lon, v->lat, v->lon) : INFINITY;
-        s_rows[s_nrows++] = (row_t){.mmsi = v->mmsi, .idx = i, .dist_nm = d};
+        s_rows[s_nrows++] = (row_t){.mmsi = v->mmsi, .idx = i, .dist_nm = d, .mid = ais_mmsi_mid(v->mmsi)};
     }
     qsort(s_rows, s_nrows, sizeof(s_rows[0]), row_cmp);
 
     lv_table_set_row_count(s_table, s_nrows + 1);
+    int reads = FLAG_READS;
     for (int r = 0; r < s_nrows; r++) {
         const vessel_t *v = &s_vessels[s_rows[r].idx];
         char buf[32];
-        if (v->name[0]) lv_table_set_cell_value(s_table, r + 1, 0, v->name);
-        else lv_table_set_cell_value_fmt(s_table, r + 1, 0, "%lu", (unsigned long)v->mmsi);
+        // The country code, drawn over by its flag if the card has it (list_draw_cb).
+        const char *iso = s_rows[r].mid ? ais_mid_iso(s_rows[r].mid) : NULL;
+        snprintf(buf, sizeof(buf), "%c%c", iso ? toupper((unsigned char)iso[0]) : 0, iso ? toupper((unsigned char)iso[1]) : 0);
+        lv_table_set_cell_value(s_table, r + 1, 0, buf);
+        ui_flag_get(s_rows[r].mid, &reads);
+        if (v->name[0]) lv_table_set_cell_value(s_table, r + 1, 1, v->name);
+        else lv_table_set_cell_value_fmt(s_table, r + 1, 1, "%lu", (unsigned long)v->mmsi);
         float d = s_rows[r].dist_nm;
         if (isinf(d)) strcpy(buf, "-");
         else snprintf(buf, sizeof(buf), d < 10 ? "%.2f nm" : "%.1f nm", d);
-        lv_table_set_cell_value(s_table, r + 1, 1, buf);
+        lv_table_set_cell_value(s_table, r + 1, 2, buf);
         if (v->fields & AIS_F_SOG) snprintf(buf, sizeof(buf), "%.1f kn", v->sog_kn);
         else strcpy(buf, "-");
-        lv_table_set_cell_value(s_table, r + 1, 2, buf);
+        lv_table_set_cell_value(s_table, r + 1, 3, buf);
     }
+    s_flags_pending = reads == 0; // perhaps more: look again next poll
     lv_obj_set_hidden(s_empty, s_nrows > 0);
 }
 
@@ -94,6 +106,26 @@ static void table_cb(lv_event_t *e)
     lv_table_get_selected_cell(s_table, &row, &col);
     if (row == LV_TABLE_CELL_NONE || row == 0 || row > (uint32_t)s_nrows) return;
     ui_show_detail(s_rows[row - 1].mmsi);
+}
+
+// The flag column: each row's flag over its country code.
+static void list_draw_cb(lv_event_t *e)
+{
+    lv_draw_task_t *t = lv_event_get_draw_task(e);
+    lv_draw_dsc_base_t *base = lv_draw_task_get_draw_dsc(t);
+    if (base->part != LV_PART_ITEMS || base->id2 != 0 || base->id1 == 0 || base->id1 > (uint32_t)s_nrows) return;
+    lv_draw_label_dsc_t *label = lv_draw_task_get_label_dsc(t);
+    const lv_image_dsc_t *flag = label ? ui_flag_get(s_rows[base->id1 - 1].mid, NULL) : NULL;
+    if (!flag) return;
+    label->opa = LV_OPA_TRANSP;
+    lv_area_t a;
+    lv_draw_task_get_area(t, &a);
+    int32_t y = (a.y1 + a.y2 + 1) / 2 - UI_FLAG_H / 2;
+    lv_area_t img = {a.x1, y, a.x1 + UI_FLAG_W - 1, y + UI_FLAG_H - 1};
+    lv_draw_image_dsc_t d;
+    lv_draw_image_dsc_init(&d);
+    d.src = flag;
+    lv_draw_image(base->layer, &d, &img);
 }
 
 // Header row: bold-ish, not selectable.
@@ -114,7 +146,7 @@ static void table_draw_cb(lv_event_t *e)
 static void poll_timer_cb(lv_timer_t *t)
 {
     if (lv_obj_is_hidden(s_root) || lv_tabview_get_tab_active(s_tabs) != TAB_LIST) return;
-    if (vessel_db_generation() != s_generation) refresh_list();
+    if (vessel_db_generation() != s_generation || s_flags_pending) refresh_list();
 }
 
 // ---------------------------------------------------------------------------
@@ -449,6 +481,11 @@ static void refresh_msgs(void)
         ui_safety_sender(m, buf, sizeof(buf));
         msg_label(box, buf, &lv_font_montserrat_16, UI_COLOR_MUTED);
         msg_label(box, m->text, &lv_font_montserrat_20, UI_COLOR_TEXT);
+        char guess[256];
+        if (ui_safety_guess(m, guess, sizeof(guess))) {
+            msg_label(box, UI_SAFETY_GUESS_TITLE, &lv_font_montserrat_16, UI_COLOR_MUTED);
+            msg_label(box, guess, &lv_font_montserrat_16, UI_COLOR_TEXT);
+        }
     }
 }
 
@@ -507,14 +544,17 @@ lv_obj_t *ui_vessels_create(lv_obj_t *parent)
     lv_obj_set_style_pad_all(list_tab, 0, 0);
     s_table = lv_table_create(list_tab);
     lv_obj_set_size(s_table, BOX_W, lv_pct(100));
-    lv_table_set_column_count(s_table, 3);
-    lv_table_set_column_width(s_table, 0, COL_NAME_W);
-    lv_table_set_column_width(s_table, 1, COL_NUM_W);
+    lv_table_set_column_count(s_table, 4);
+    lv_table_set_column_width(s_table, 0, COL_FLAG_W);
+    lv_table_set_column_width(s_table, 1, COL_NAME_W);
     lv_table_set_column_width(s_table, 2, COL_NUM_W);
-    lv_table_set_cell_value(s_table, 0, 0, "Name / MMSI");
-    lv_table_set_cell_value(s_table, 0, 1, "Distance");
-    lv_table_set_cell_value(s_table, 0, 2, "Speed");
+    lv_table_set_column_width(s_table, 3, COL_NUM_W);
+    lv_table_set_cell_value(s_table, 0, 0, "");
+    lv_table_set_cell_value(s_table, 0, 1, "Name / MMSI");
+    lv_table_set_cell_value(s_table, 0, 2, "Distance");
+    lv_table_set_cell_value(s_table, 0, 3, "Speed");
     style_table(s_table);
+    lv_obj_add_event_cb(s_table, list_draw_cb, LV_EVENT_DRAW_TASK_ADDED, NULL);
     lv_obj_add_event_cb(s_table, table_cb, LV_EVENT_VALUE_CHANGED, NULL);
 
     s_empty = text(list_tab, "No vessels heard yet", UI_COLOR_MUTED);
