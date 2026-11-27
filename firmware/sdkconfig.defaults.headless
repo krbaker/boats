@@ -1,0 +1,10 @@
+# Waveshare ESP32-P4 boards without a screen: the ESP32-P4-WIFI6-POE-ETH and
+# the ESP32-P4-WIFI6-DB (no Ethernet). Ethernet when there is one
+# (BOARDS_PLAN.md step 7), else Wi-Fi. (./build.sh headless)
+CONFIG_AIS_BOARD_HEADLESS=y
+# Both have an ESP32-C6 for Wi-Fi, from the shared defaults. Waveshare's pages
+# give the DB an ESP32-C5: for one that has it ("chip mismatch: expect=0x0d
+# got=0x17" at boot), add these two lines and build coprocessor/ with
+# `idf.py set-target esp32c5`:
+#   CONFIG_SLAVE_IDF_TARGET_ESP32C5=y
+#   CONFIG_ESP_HOSTED_CP_TARGET_ESP32C5=y

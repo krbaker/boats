@@ -24,7 +24,8 @@
 
 static const char *TAG = "cp_update";
 
-// The board's Wi-Fi chip: an ESP32-C6, or an ESP32-C5 on the ESP32-P4-WIFI6-DB.
+// The board's Wi-Fi chip: an ESP32-C6, or an ESP32-C5 if the build is for one
+// (CONFIG_SLAVE_IDF_TARGET_ESP32C5, as on some ESP32-P4-WIFI6-DB boards).
 #if CONFIG_SLAVE_IDF_TARGET_ESP32C5
 #define CP_CHIP_ID      ESP_CHIP_ID_ESP32C5
 #define CP_CHIP_NAME    "ESP32-C5"

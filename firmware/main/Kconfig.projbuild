@@ -12,10 +12,8 @@ menu "AIS Display"
             bool "Waveshare ESP32-P4-WIFI6-Touch-LCD-4C (720x720 round)"
         config AIS_BOARD_LCD10
             bool "Waveshare ESP32-P4-WIFI6-Touch-LCD-10.1 (1280x800, landscape)"
-        config AIS_BOARD_POE
-            bool "Waveshare ESP32-P4-WIFI6-POE-ETH (no screen; Ethernet, ESP32-C6 Wi-Fi)"
-        config AIS_BOARD_DB
-            bool "Waveshare ESP32-P4-WIFI6-DB (no screen; ESP32-C5 Wi-Fi)"
+        config AIS_BOARD_HEADLESS
+            bool "Waveshare ESP32-P4 without a screen (WIFI6-POE-ETH, WIFI6-DB)"
     endchoice
 
     config AIS_BOARD_NAME
@@ -23,28 +21,26 @@ menu "AIS Display"
         default "lcd34c" if AIS_BOARD_LCD34C
         default "lcd4c" if AIS_BOARD_LCD4C
         default "lcd10" if AIS_BOARD_LCD10
-        default "poe" if AIS_BOARD_POE
-        default "db" if AIS_BOARD_DB
+        default "headless" if AIS_BOARD_HEADLESS
 
     config AIS_BOARD_TITLE
         string
         default "ESP32-P4-WIFI6-Touch-LCD-3.4C" if AIS_BOARD_LCD34C
         default "ESP32-P4-WIFI6-Touch-LCD-4C" if AIS_BOARD_LCD4C
         default "ESP32-P4-WIFI6-Touch-LCD-10.1" if AIS_BOARD_LCD10
-        default "ESP32-P4-WIFI6-POE-ETH" if AIS_BOARD_POE
-        default "ESP32-P4-WIFI6-DB" if AIS_BOARD_DB
+        default "ESP32-P4, no screen" if AIS_BOARD_HEADLESS
 
     # "display" or "headless": the component manager's rules in
     # main/idf_component.yml test this (a string is always written to the
     # sdkconfig; a hidden bool that's "no" isn't, and then counts as missing).
     config AIS_BOARD_KIND
         string
-        default "headless" if AIS_BOARD_POE || AIS_BOARD_DB
+        default "headless" if AIS_BOARD_HEADLESS
         default "display"
 
     config AIS_HAS_DISPLAY
         bool
-        default y if !AIS_BOARD_POE && !AIS_BOARD_DB
+        default y if !AIS_BOARD_HEADLESS
 
     config AIS_DISPLAY_ROUND
         bool
@@ -52,7 +48,7 @@ menu "AIS Display"
 
     config AIS_HAS_ETH
         bool
-        default y if AIS_BOARD_POE
+        default y if AIS_BOARD_HEADLESS
 
     config AIS_DISPLAY_UPSIDE_DOWN
         bool "Board mounted upside down (USB-C ports at the bottom)"
