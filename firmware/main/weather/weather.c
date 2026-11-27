@@ -400,6 +400,10 @@ void weather_start(void)
 
 void weather_get(weather_data_t *out)
 {
+    if (!s_lock) { // not started: a board without a screen fetches no weather
+        memset(out, 0, sizeof(*out));
+        return;
+    }
     xSemaphoreTake(s_lock, portMAX_DELAY);
     *out = *s_data;
     xSemaphoreGive(s_lock);

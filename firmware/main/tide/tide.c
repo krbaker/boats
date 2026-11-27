@@ -10,6 +10,7 @@
 #include "esp_http_client.h"
 #include "esp_log.h"
 #include "esp_netif_sntp.h"
+#include "sdkconfig.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
@@ -40,6 +41,12 @@ static SemaphoreHandle_t s_lock;
 static EventGroupHandle_t s_settings_ev;
 
 static volatile bool s_ntp_synced;
+
+#if CONFIG_AIS_HAS_DISPLAY
+#define FETCH_TIDES 1
+#else
+#define FETCH_TIDES 0
+#endif
 
 bool clock_is_set(void)
 {
@@ -285,7 +292,9 @@ static void tide_task(void *arg)
         }
         xSemaphoreGive(s_lock);
 
-        if (!cfg.tide_station[0] || !wifi_mgr_has_ip() || !clock_is_set()) continue;
+        // Every board keeps the clock and time zone (above and in tide_start),
+        // but only one with a screen shows tides.
+        if (!FETCH_TIDES || !cfg.tide_station[0] || !wifi_mgr_has_ip() || !clock_is_set()) continue;
         time_t now = time(NULL);
         if (now < next_fetch) continue;
 

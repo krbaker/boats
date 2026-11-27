@@ -10,7 +10,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#include "bsp/esp-bsp.h"
+#include "board.h"
 #include "cJSON.h"
 #include "esp_log.h"
 #include "esp_vfs_fat.h"
@@ -99,7 +99,7 @@ esp_err_t map_store_mount(void)
 {
     // The card stays mounted for good: it shares the SDMMC host with the
     // Wi-Fi co-processor, and unmounting would shut that host down.
-    esp_err_t err = bsp_sdcard_mount();
+    esp_err_t err = board_sdcard_mount();
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "no microSD card (%s)", esp_err_to_name(err));
         return err;

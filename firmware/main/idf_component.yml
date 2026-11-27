@@ -1,7 +1,16 @@
 dependencies:
   idf: ">=5.5"
-  waveshare/esp32_p4_wifi6_touch_lcd_xc: "^3.0.1"
-  lvgl/lvgl: "^9.2"
+  # The screen's BSP and LVGL: not on the screenless boards (BOARDS_PLAN.md).
+  # AIS_BOARD_KIND, not AIS_HAS_DISPLAY: a hidden "no" isn't written to the
+  # sdkconfig, and the component manager then counts the option as missing.
+  waveshare/esp32_p4_wifi6_touch_lcd_xc:
+    version: "^3.0.1"
+    rules:
+      - if: "$CONFIG{AIS_BOARD_KIND} == display"
+  lvgl/lvgl:
+    version: "^9.2"
+    rules:
+      - if: "$CONFIG{AIS_BOARD_KIND} == display"
   espressif/esp_wifi_remote: "*"
   # Exactly this version: it has to match the Wi-Fi chip's firmware, which
   # coprocessor/main/idf_component.yml pins to the same version.

@@ -6,7 +6,9 @@
 #include "cp_update.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "eh_host_core.h"
 #include "eh_host_cp_ota.h"
@@ -14,11 +16,22 @@
 #include "esp_app_format.h"
 #include "esp_log.h"
 #include "esp_system.h"
+#include "sdkconfig.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "map_store.h"
 #include "vessel_db.h"
 
 static const char *TAG = "cp_update";
+
+// The board's Wi-Fi chip: an ESP32-C6, or an ESP32-C5 on the ESP32-P4-WIFI6-DB.
+#if CONFIG_SLAVE_IDF_TARGET_ESP32C5
+#define CP_CHIP_ID      ESP_CHIP_ID_ESP32C5
+#define CP_CHIP_NAME    "ESP32-C5"
+#else
+#define CP_CHIP_ID      ESP_CHIP_ID_ESP32C6
+#define CP_CHIP_NAME    "ESP32-C6"
+#endif
 
 #define OTA_CHUNK 1536  // largest write ESP-Hosted accepts in one call
 
@@ -84,8 +97,9 @@ bool cp_update_feed(cp_update_t *u, const uint8_t *data, size_t len)
                 snprintf(u->err, sizeof(u->err), "not an ESP firmware image (.bin)");
                 return false;
             }
-            if (h->chip_id != ESP_CHIP_ID_ESP32C6) {
-                snprintf(u->err, sizeof(u->err), "firmware is for another chip (id %u), not the ESP32-C6", h->chip_id);
+            if (h->chip_id != CP_CHIP_ID) {
+                snprintf(u->err, sizeof(u->err), "firmware is for another chip (id %u), not this board's " CP_CHIP_NAME,
+                         h->chip_id);
                 return false;
             }
             esp_err_t e = eh_host_cp_ota_begin();
@@ -130,4 +144,61 @@ bool cp_update_finish(cp_update_t *u, char *err, size_t errlen)
     if (!ok) snprintf(err, errlen, "%s", u->err);
     free(u);
     return ok;
+}
+
+#define CARD_IMAGE      MAP_ROOT "/eh_cp_ota_coprocessor_ota.bin"
+#define CARD_INSTALLED  MAP_ROOT "/eh_cp_ota_coprocessor_ota.installed"
+#define CARD_FAILED     MAP_ROOT "/eh_cp_ota_coprocessor_ota.failed"
+#define LINK_WAIT_MS    20000   // for the link to the C6 to come up after boot
+#define CARD_CHUNK      4096
+
+// Renamed so it's tried once: FAT won't rename over a file.
+static void card_image_done(const char *to)
+{
+    unlink(to);
+    rename(CARD_IMAGE, to);
+}
+
+void cp_update_from_card(void)
+{
+    if (!map_store_card_ok()) return;
+    FILE *f = fopen(CARD_IMAGE, "rb");
+    if (!f) return;
+    fseek(f, 0, SEEK_END);
+    long size = ftell(f);
+    fseek(f, 0, SEEK_SET);
+
+    char ver[24];
+    for (int waited = 0; !cp_update_version(ver, sizeof(ver)) && waited < LINK_WAIT_MS; waited += 200) {
+        vTaskDelay(pdMS_TO_TICKS(200));
+    }
+    ESP_LOGW(TAG, "microSD card: installing %s (%ld bytes) on the Wi-Fi co-processor, now %s",
+             CARD_IMAGE, size, ver);
+
+    uint8_t *buf = malloc(CARD_CHUNK);
+    cp_update_t *u = cp_update_begin();
+    bool ok = buf && u;
+    long done = 0;
+    int shown = 0;
+    while (ok) {
+        size_t n = fread(buf, 1, CARD_CHUNK, f);
+        if (!n) break;
+        ok = cp_update_feed(u, buf, n);
+        done += n;
+        if (size > 0 && done * 10 / size > shown) {
+            shown = done * 10 / size;
+            ESP_LOGI(TAG, "%d%%", shown * 10);
+        }
+    }
+    fclose(f);
+    free(buf);
+    char err[96] = "out of memory";
+    if (u) ok = cp_update_finish(u, err, sizeof(err)) && ok;  // finish frees u, and restarts on success
+    if (ok) {
+        card_image_done(CARD_INSTALLED);
+        ESP_LOGW(TAG, "Wi-Fi co-processor updated from the card; restarting");
+        for (;;) vTaskDelay(portMAX_DELAY);  // the restart is on its way
+    }
+    card_image_done(CARD_FAILED);
+    ESP_LOGE(TAG, "updating the Wi-Fi co-processor from the card failed: %s (file renamed to %s)", err, CARD_FAILED);
 }

@@ -1,0 +1,7 @@
+# Waveshare ESP32-P4-WIFI6-DB: no screen, no Ethernet, an ESP32-C5 for Wi-Fi
+# (dual band). Same SD card, SDIO and reset pins as the POE-ETH. (./build.sh db)
+CONFIG_AIS_BOARD_DB=y
+# The Wi-Fi chip: Wi-Fi Remote lays its API out for it, and ESP-Hosted refuses
+# any other chip. Its firmware: coprocessor/ built with `idf.py set-target esp32c5`.
+CONFIG_SLAVE_IDF_TARGET_ESP32C5=y
+CONFIG_ESP_HOSTED_CP_TARGET_ESP32C5=y

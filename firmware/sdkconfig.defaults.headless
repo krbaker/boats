@@ -1,3 +1,0 @@
-# Waveshare ESP32-P4-WIFI6-POE-ETH: no screen, Ethernet. (./build.sh headless)
-# The rest comes with BOARDS_PLAN.md steps 6 and 7.
-CONFIG_AIS_BOARD_HEADLESS=y

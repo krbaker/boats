@@ -30,6 +30,10 @@
   #distress { background:#5a1820; border:3px solid var(--bad); color:#fff; border-radius:10px; padding:12px 16px;
               margin:0 0 16px; font-size:17px; }
   #distress b { color:var(--bad); font-size:20px; }
+  /* A board without a screen (firmware.display false) has no use for these, and fetches none of it. */
+  body.headless .screen-only, body:not(.headless) .headless-only { display:none; }
+  #vessel_table td { padding:3px 6px 3px 0; width:auto; color:var(--fg); }
+  #vessel_table th { text-align:left; color:var(--muted); font-weight:normal; font-size:13px; padding-right:6px; }
 </style>
 </head>
 <body>
@@ -48,6 +52,13 @@
     <div class="msg" id="forget_msg"></div>
   </section>
 
+  <section class="headless-only">
+    <h2>Vessels</h2>
+    <div class="hint">Heard in the last 10 minutes, nearest the centre position first. "Via": the dongle (SDR), the
+      AIS data server (net), or both.</div>
+    <table id="vessel_table"></table>
+  </section>
+
   <section>
     <h2>AIS data server</h2>
     <label class="check"><input id="net_enabled" type="checkbox"> Use this network feed</label>
@@ -60,7 +71,7 @@
     <div class="msg" id="ais_msg"></div>
   </section>
 
-  <section>
+  <section class="screen-only">
     <h2>Aircraft (ADS-B)</h2>
     <label class="check"><input id="adsb_enabled" type="checkbox"> Show aircraft from a dump1090 receiver</label>
     <div class="row">
@@ -77,7 +88,8 @@
   </section>
 
   <section>
-    <h2>Map</h2>
+    <h2 id="map_h2">Map</h2>
+    <div class="screen-only">
     <label for="map_file">Chart set (<code>map_set.zip</code> from the map builder)</label>
     <input id="map_file" type="file" accept=".zip,application/zip">
     <button id="map_btn" onclick="uploadMap()">Upload</button>
@@ -94,6 +106,8 @@
     <div class="hint"><span id="flags_count"></span>Ships' country flags, shown in the vessel list and on a vessel's
       details. Uploading replaces the flags on the card. You can instead copy the <code>flags</code> folder to the
       root of the card.</div>
+    </div>
+    <div class="hint headless-only">Distances and bearings to vessels are measured from here.</div>
     <div class="row">
       <div><label for="center_lat">Centre latitude</label><input id="center_lat" type="number" step="any"></div>
       <div><label for="center_lon">Centre longitude</label><input id="center_lon" type="number" step="any"></div>
@@ -103,7 +117,8 @@
   </section>
 
   <section>
-    <h2>Tides, weather &amp; time</h2>
+    <h2 id="tide_h2">Tides, weather &amp; time</h2>
+    <div class="screen-only">
     <label for="tide_station">NOAA tide station ID</label>
     <input id="tide_station" inputmode="numeric" placeholder="9447130">
     <div class="hint">Find a station ID on <a href="https://tidesandcurrents.noaa.gov/map/" target="_blank" rel="noopener">tidesandcurrents.noaa.gov</a>.</div>
@@ -136,14 +151,17 @@
       <select id="wl_pick"></select>
     </div>
     <div class="msg" id="wl_msg"></div>
+    </div>
     <label for="tz_select">Time zone</label>
     <select id="tz_select" onchange="tzChanged()"></select>
     <div id="tz_custom_row" hidden>
       <label for="tz_posix">POSIX TZ string</label>
       <input id="tz_posix" placeholder="PST8PDT,M3.2.0,M11.1.0">
     </div>
+    <div class="screen-only">
     <label for="brightness">Display brightness (%)</label>
     <input id="brightness" type="number" min="5" max="100">
+    </div>
     <button onclick="saveTideTz()">Save</button>
     <div class="msg" id="tide_msg"></div>
   </section>
@@ -186,10 +204,10 @@
 
   <section>
     <h2>Wi-Fi chip firmware</h2>
-    <div class="hint">Wi-Fi runs on a separate ESP32-C6 chip with its own firmware: currently version <b id="cp_version">…</b>.
+    <div class="hint">Wi-Fi runs on a separate <span class="cp_chip">ESP32-C6</span> chip with its own firmware: currently version <b id="cp_version">…</b>.
       To update it, upload its firmware image (<code>coprocessor/build/eh_cp_ota_coprocessor_ota.bin</code>). The display restarts when it's done.
       If an update fails part way, the old firmware keeps running.</div>
-    <label for="cp_file">ESP32-C6 firmware (.bin)</label>
+    <label for="cp_file"><span class="cp_chip">ESP32-C6</span> firmware (.bin)</label>
     <input id="cp_file" type="file" accept=".bin,application/octet-stream">
     <button id="cp_btn" onclick="uploadCoprocessor()">Update</button>
     <progress id="cp_progress" max="1" value="0" hidden></progress>
@@ -594,7 +612,7 @@ function uploadFlags() { uploadZip("flags", "flags.zip", "Installing the flags�
 
 function uploadCoprocessor() {
   const f = $("cp_file").files[0];
-  if (!f) return setMsg("cp_msg", "Choose the ESP32-C6 firmware .bin first.", "bad");
+  if (!f) return setMsg("cp_msg", `Choose the ${document.querySelector(".cp_chip").textContent} firmware .bin first.`, "bad");
   $("cp_btn").disabled = true;
   const bar = $("cp_progress");
   bar.hidden = false;
@@ -698,6 +716,15 @@ function uploadFirmware() {
 
 function showFirmware(fw) {
   if (!fw) return;
+  if (fw.wifi_chip) document.querySelectorAll(".cp_chip").forEach(e => e.textContent = fw.wifi_chip);
+  const headless = fw.display === false;
+  if (headless !== document.body.classList.contains("headless")) {
+    document.body.classList.toggle("headless", headless);
+    $("map_h2").textContent = headless ? "Position" : "Map";
+    $("tide_h2").innerHTML = headless ? "Time" : "Tides, weather &amp; time";
+    document.querySelector("h1").textContent = headless ? "AIS Receiver" : "AIS Display";
+    if (headless) loadVessels();
+  }
   if (fw.board) {
     $("fw_board").textContent = `${fw.board_title} (${fw.board})`;
     $("fw_bin").textContent = fw.board === "lcd34c" ? "firmware/build/ais_display.bin"
@@ -849,6 +876,31 @@ function weatherRows(w, now) {
 }
 
 let lastUptime = Infinity;
+// Screenless boards: the vessel table, from /api/vessels.
+function nmFrom(lat, lon) {
+  if (!cfg || lat === undefined) return Infinity;
+  const r = Math.PI / 180, dlat = (lat - cfg.center_lat) * r, dlon = (lon - cfg.center_lon) * r;
+  const a = Math.sin(dlat / 2) ** 2 + Math.cos(cfg.center_lat * r) * Math.cos(lat * r) * Math.sin(dlon / 2) ** 2;
+  return 2 * 3440.065 * Math.asin(Math.sqrt(a));
+}
+async function loadVessels() {
+  if (!document.body.classList.contains("headless")) return;
+  try {
+    const list = (await api("/api/vessels")).filter(v => v.age_s < 600);
+    list.forEach(v => v.nm = nmFrom(v.lat, v.lon));
+    list.sort((a, b) => a.nm - b.nm);
+    let html = "<tr><th>Name / MMSI</th><th>Type</th><th>Distance</th><th>Speed</th><th>Heard</th><th>Via</th></tr>";
+    for (const v of list) {
+      const via = [v.msgs_sdr ? "SDR" : "", v.msgs_network ? "net" : ""].filter(Boolean).join(" + ");
+      html += `<tr><td>${esc(v.name || v.mmsi)}</td><td>${esc(v.type || v.class || "")}</td>` +
+        `<td>${isFinite(v.nm) ? v.nm.toFixed(2) + " nm" : "—"}</td><td>${v.sog !== undefined ? v.sog.toFixed(1) + " kn" : "—"}</td>` +
+        `<td>${ago(v.age_s)}</td><td>${via}</td></tr>`;
+    }
+    $("vessel_table").innerHTML = list.length ? html : "<tr><td>None heard yet.</td></tr>";
+  } catch (e) { /* the next poll tries again */ }
+}
+setInterval(loadVessels, 10000);
+
 async function pollStatus() {
   try {
     const s = await api("/api/status");
@@ -875,8 +927,8 @@ async function pollStatus() {
         `<div class="hint">network / SDR, since start-up; greyed types aren't used</div>`);
     }
     html += row("Vessels", s.vessels);
-    const ad = s.adsb;
-    if (ad && ad.state !== "off") {
+    const ad = s.adsb, headless = s.firmware && s.firmware.display === false;
+    if (ad && ad.state !== "off" && !headless) {
       html += row("Aircraft", ad.state === "connected" ? `${ad.shown} within range, ${ad.heard} heard` :
         esc(ad.state) + (ad.error ? ` (${esc(ad.error)})` : "") + (ad.last_ok_s >= 0 ? `, last data ${ago(ad.last_ok_s)}` : ""),
         ad.state === "connected" ? "ok" : ad.state === "error" ? "bad" : "warn");
@@ -897,9 +949,9 @@ async function pollStatus() {
     let tide = esc(t.state);
     if (t.next) tide = `next ${t.next.high ? "high" : "low"} ${fmtTime(t.next.time)}, ${t.next.height_ft.toFixed(1)} ft`;
     if (t.error) tide += ` (${esc(t.error)})`;
-    html += row("Tide" + (t.name ? ` — ${esc(t.name)}` : ""), tide, t.state === "ok" ? "" : "warn");
-    html += weatherRows(s.weather, s.system.time);
-    html += row("Map", m.radii_nm ? `${m.radii_nm.length} zoom levels (${m.radii_nm.join(", ")} nm), centre ${m.center_lat.toFixed(4)}, ${m.center_lon.toFixed(4)}` : "none on the card", m.radii_nm ? "" : "warn");
+    if (!headless) html += row("Tide" + (t.name ? ` — ${esc(t.name)}` : ""), tide, t.state === "ok" ? "" : "warn");
+    if (!headless) html += weatherRows(s.weather, s.system.time);
+    if (!headless) html += row("Map", m.radii_nm ? `${m.radii_nm.length} zoom levels (${m.radii_nm.join(", ")} nm), centre ${m.center_lat.toFixed(4)}, ${m.center_lon.toFixed(4)}` : "none on the card", m.radii_nm ? "" : "warn");
     html += row("microSD card", m.card ? `${(m.storage_free / 1048576).toFixed(0)} MB free of ${(m.storage_total / 1048576).toFixed(0)} MB` : "not found (insert a FAT32 card and restart)", m.card ? "" : "bad");
     html += row("Uptime", ago(s.system.uptime_s).replace(" ago", "") + `, free RAM ${Math.round(s.system.heap_internal / 1024)} KiB + ${Math.round(s.system.heap_psram / 1048576)} MiB PSRAM`);
     $("status").innerHTML = html;

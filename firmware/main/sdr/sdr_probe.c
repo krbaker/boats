@@ -22,7 +22,7 @@
 #include <sys/param.h>
 #include <sys/stat.h>
 
-#include "bsp/esp-bsp.h"
+#include "board.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -952,7 +952,7 @@ static void probe_task(void *arg)
     s_state = SDR_NONE;
     struct stat st;
     if (stat(SDR_CAPTURE_PATH, &st) == 0) s_cap_file_bytes = st.st_size;  // from before a restart
-    ESP_ERROR_CHECK(bsp_usb_host_start(BSP_USB_HOST_POWER_MODE_USB_DEV, true));
+    ESP_ERROR_CHECK(board_usb_host_start());
     usb_host_client_config_t cfg = {
         .is_synchronous = false,
         .max_num_event_msg = 5,

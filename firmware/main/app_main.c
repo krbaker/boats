@@ -2,25 +2,31 @@
 
 #include <stdlib.h>
 
+#include "sdkconfig.h"
+
+#include "board.h"
+#if CONFIG_AIS_HAS_DISPLAY
 #include "bsp/esp-bsp.h"
+#include "map_tiles.h"
+#include "ui.h"
+#endif
 #include "esp_core_dump.h"
 #include "esp_log.h"
 #include "esp_system.h"
 
 #include "adsb.h"
 #include "ais_fwd.h"
+#include "cp_update.h"
 #include "fw_update.h"
 #include "https_lock.h"
 #include "log_buf.h"
 
-#include "map_tiles.h"
 #include "map_store.h"
 #include "mdns_adv.h"
 #include "nmea_client.h"
 #include "sdr_probe.h"
 #include "settings.h"
 #include "tide.h"
-#include "ui.h"
 #include "vessel_db.h"
 #include "weather.h"
 #include "web_server.h"
@@ -31,8 +37,6 @@ static const char *TAG = "main";
 // Boards whose support is still to come (BOARDS_PLAN.md).
 #if CONFIG_AIS_BOARD_LCD10
 #error "The 10.1-inch board needs its BSP and the bottom-bar layout: BOARDS_PLAN.md steps 4-5"
-#elif CONFIG_AIS_BOARD_HEADLESS
-#error "The headless build comes with BOARDS_PLAN.md step 6"
 #endif
 // The panel the BSP drives has to be the board's.
 #if CONFIG_AIS_BOARD_LCD34C && !CONFIG_BSP_LCD_TYPE_800_800_3_4_INCH
@@ -72,7 +76,9 @@ void app_main(void)
     https_lock_init(); // before the weather and tide tasks fetch
     map_store_init();
     vessel_db_init();
+    bool ap_requested = board_ap_requested(); // before anything can take long enough to end a quick series
 
+#if CONFIG_AIS_HAS_DISPLAY
     // Upside down, the adapter rotates the picture as it goes to the panel but
     // LVGL still works upright, so the touch points need the same 180 degree
     // turn: mirrored in both x and y.
@@ -97,21 +103,32 @@ void app_main(void)
     if (!bsp_display_start_with_config(&disp_cfg)) {
         ESP_LOGE(TAG, "display init failed");
     }
+#endif
 
+    cp_update_from_card(); // before Wi-Fi: only if the card has a C6 image on it
     wifi_mgr_start();
+    if (ap_requested) wifi_mgr_ap(true);
     mdns_adv_start(); // after wifi_mgr_start: needs its network interfaces and event loop
-    tide_start();
+    tide_start(); // the clock and time zone, on every board; tides only with a screen
+#if CONFIG_AIS_HAS_DISPLAY
+    // Only drawn on the screen: a screenless board fetches none of it. Their
+    // settings are still kept, so a card's config.json moves between boards.
     weather_start();
-    nmea_client_start();
     adsb_start();
+#endif
+    nmea_client_start();
     ais_fwd_start();
+#if CONFIG_AIS_HAS_DISPLAY
     map_tiles_init();
+#endif
     web_server_start();
 #if CONFIG_AIS_SDR_PROBE
     sdr_probe_start();
 #endif
 
+#if CONFIG_AIS_HAS_DISPLAY
     ui_start(); // also applies the saved backlight brightness
+#endif
     fw_update_confirm_later(); // a trial image (just updated from the web) is kept once it has run a minute
     ESP_LOGI(TAG, "running");
 }

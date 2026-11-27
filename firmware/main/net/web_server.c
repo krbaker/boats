@@ -13,6 +13,7 @@
 #include "esp_partition.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
+#include "sdkconfig.h"
 #include "esp_system.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -499,6 +500,16 @@ static esp_err_t status_get(httpd_req_t *req)
     fw_update_info(&fw);
     cJSON *fj = cJSON_AddObjectToObject(o, "firmware");
     cJSON_AddStringToObject(fj, "board", fw.board);
+#if CONFIG_AIS_HAS_DISPLAY
+    cJSON_AddBoolToObject(fj, "display", true);
+#else
+    cJSON_AddBoolToObject(fj, "display", false); // the page hides what only the screen uses
+#endif
+#if CONFIG_SLAVE_IDF_TARGET_ESP32C5
+    cJSON_AddStringToObject(fj, "wifi_chip", "ESP32-C5");
+#else
+    cJSON_AddStringToObject(fj, "wifi_chip", "ESP32-C6");
+#endif
     cJSON_AddStringToObject(fj, "board_title", fw.board_title);
     cJSON_AddStringToObject(fj, "version", fw.version);
     cJSON_AddStringToObject(fj, "built", fw.build_date);

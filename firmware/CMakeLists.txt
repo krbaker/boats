@@ -9,7 +9,7 @@ set(ENV{IDF_COMPONENT_CHECK_NEW_VERSION} 0)
 
 # Which board this build is for (BOARDS_PLAN.md). build.sh sets it and keeps a
 # build directory per board; plain `idf.py build` builds the 3.4C.
-set(AIS_BOARDS lcd34c lcd4c lcd10 headless)
+set(AIS_BOARDS lcd34c lcd4c lcd10 poe db)
 set(AIS_BOARD lcd34c CACHE STRING "Board: one of ${AIS_BOARDS}")
 if(NOT AIS_BOARD IN_LIST AIS_BOARDS)
     message(FATAL_ERROR "AIS_BOARD=${AIS_BOARD}: use one of ${AIS_BOARDS}")

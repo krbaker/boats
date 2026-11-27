@@ -6,15 +6,16 @@
 #   ./build.sh lcd34c                          # -> build-lcd34c/ais_display.bin
 #   ./build.sh lcd4c -p /dev/ttyACM0 flash monitor
 #
-# Boards: lcd34c (3.4" round), lcd4c (4" round), lcd10 (10.1"), headless (POE-ETH).
+# Boards: lcd34c (3.4" round), lcd4c (4" round), lcd10 (10.1"),
+#         poe (ESP32-P4-WIFI6-POE-ETH), db (ESP32-P4-WIFI6-DB): no screen.
 # Plain `idf.py build` still builds the 3.4C, in build/.
 set -e
 cd "$(dirname "$0")"
 board=$1
 case "$board" in
-    lcd34c | lcd4c | lcd10 | headless) shift ;;
+    lcd34c | lcd4c | lcd10 | poe | db) shift ;;
     *)
-        sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'
+        sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'
         exit 1
         ;;
 esac

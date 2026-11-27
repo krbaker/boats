@@ -14,7 +14,13 @@
 #include "sdkconfig.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#if CONFIG_AIS_HAS_DISPLAY
 #include "ui.h"
+#else
+// No screen to freeze during the flash writes.
+static inline void ui_updating_begin(void) {}
+static inline void ui_updating_end(void) {}
+#endif
 #include "vessel_db.h"
 
 static const char *TAG = "fw_update";

@@ -1,0 +1,3 @@
+# Waveshare ESP32-P4-WIFI6-POE-ETH: no screen, Ethernet (BOARDS_PLAN.md step 7;
+# Wi-Fi when there's no link), an ESP32-C6 for Wi-Fi. (./build.sh poe)
+CONFIG_AIS_BOARD_POE=y
