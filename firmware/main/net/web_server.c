@@ -22,6 +22,7 @@
 
 #include "adsb.h"
 #include "ais_fwd.h"
+#include "mdns_adv.h"
 #include "cp_update.h"
 #include "fw_update.h"
 #include "log_buf.h"
@@ -289,6 +290,9 @@ static esp_err_t status_get(httpd_req_t *req)
     cJSON_AddStringToObject(wj, "state", wifi_mgr_state_str(w.state));
     cJSON_AddStringToObject(wj, "ssid", w.sta_ssid);
     cJSON_AddStringToObject(wj, "ip", w.sta_ip);
+    char mdns_host[64];
+    mdns_adv_hostname(mdns_host, sizeof(mdns_host));
+    cJSON_AddStringToObject(wj, "mdns_host", mdns_host);
     cJSON_AddNumberToObject(wj, "rssi", w.rssi);
     cJSON_AddStringToObject(wj, "netmask", w.sta_netmask);
     cJSON_AddStringToObject(wj, "gateway", w.sta_gw);
@@ -468,6 +472,27 @@ static esp_err_t status_get(httpd_req_t *req)
         cJSON_AddNumberToObject(d, "connected_s", fs.connected_us ? (now_us - fs.connected_us) / 1000000 : -1);
         cJSON_AddStringToObject(d, "error", fs.error);
         cJSON_AddItemToArray(rtj, d);
+    }
+
+    srv_status_t ss;
+    ais_fwd_get_server_status(&ss);
+    cJSON *nsj = cJSON_AddObjectToObject(o, "nmea_server");
+    cJSON_AddStringToObject(nsj, "state", ais_fwd_server_state_str(ss.state));
+    cJSON_AddNumberToObject(nsj, "port", ss.port);
+    cJSON_AddNumberToObject(nsj, "sent", ss.sent);
+    cJSON_AddNumberToObject(nsj, "sent_per_min", ss.sent_last_min);
+    cJSON_AddNumberToObject(nsj, "dropped", ss.dropped);
+    cJSON_AddNumberToObject(nsj, "refused", ss.refused);
+    cJSON_AddStringToObject(nsj, "error", ss.error);
+    cJSON *cl = cJSON_AddArrayToObject(nsj, "clients");
+    for (int i = 0; i < SRV_CLIENTS_MAX; i++) {
+        if (!ss.client[i].connected_us) continue;
+        cJSON *c = cJSON_CreateObject();
+        cJSON_AddStringToObject(c, "addr", ss.client[i].addr);
+        cJSON_AddNumberToObject(c, "connected_s", (now_us - ss.client[i].connected_us) / 1000000);
+        cJSON_AddNumberToObject(c, "sent", ss.client[i].sent);
+        cJSON_AddNumberToObject(c, "dropped", ss.client[i].dropped);
+        cJSON_AddItemToArray(cl, c);
     }
 
     fw_info_t fw;

@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "ais_fwd.h"
+#include "mdns_adv.h"
 #include "nmea_client.h"
 #include "sdr_probe.h"
 #include "tide.h"
@@ -76,11 +77,15 @@ static void refresh(void)
 
     char buf[768];
     int len = 0;
+    char host[64];
+    mdns_adv_hostname(host, sizeof(host));
     if (w.state == WIFI_MGR_STA_CONNECTED) {
         len += snprintf(buf + len, sizeof(buf) - len,
                         "Wi-Fi: #3ccf7a %s#  (%d dBm)\nIP address: #3fa7f5 %s#  /  %s\nGateway: %s\nMAC: %s\n"
-                        "Internet: %s\nSettings: http://%s/\n",
+                        "Internet: %s\nSettings: http://%s/",
                         w.sta_ssid, w.rssi, w.sta_ip, w.sta_netmask, w.sta_gw, w.sta_mac, net_text(&w), w.sta_ip);
+        if (host[0]) len += snprintf(buf + len, sizeof(buf) - len, "  or  http://%s.local/", host);
+        len += snprintf(buf + len, sizeof(buf) - len, "\n");
     } else if (w.state == WIFI_MGR_STA_CONNECTING) {
         len += snprintf(buf + len, sizeof(buf) - len, "Wi-Fi: #f5b13f connecting to %s...#\nMAC: %s\n", w.sta_ssid,
                         w.sta_mac);
@@ -133,6 +138,14 @@ static void refresh(void)
     if (on) {
         len += snprintf(buf + len, sizeof(buf) - len, "\nRetransmit: sending to %d of %d", sending, on);
         if (problem[0]) len += snprintf(buf + len, sizeof(buf) - len, "\n(%s)", problem);
+    }
+    srv_status_t ss;
+    ais_fwd_get_server_status(&ss);
+    if (ss.state == FWD_STATE_SENDING) {
+        len += snprintf(buf + len, sizeof(buf) - len, "\nTCP server: port %u, %d client%s", ss.port, ss.nclients,
+                        ss.nclients == 1 ? "" : "s");
+    } else if (ss.state != FWD_STATE_OFF) {
+        len += snprintf(buf + len, sizeof(buf) - len, "\nTCP server: %s", ss.error[0] ? ss.error : ais_fwd_server_state_str(ss.state));
     }
     if (t.station[0]) {
         len += snprintf(buf + len, sizeof(buf) - len, "\nTide station: %s %s", t.station, t.station_name);

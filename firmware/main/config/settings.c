@@ -53,6 +53,8 @@ static void defaults(settings_t *s)
     s->net_enabled = true;
     s->sdr_enabled = true;
     s->sdr_gain = SDR_GAIN_BEST;
+    s->srv_port = SRV_PORT_DEFAULT;
+    strcpy(s->mdns_name, MDNS_NAME_DEFAULT);
     s->adsb_range_nm = ADSB_RANGE_DEFAULT_NM;
 }
 
@@ -142,6 +144,9 @@ static esp_err_t nvs_save(const settings_t *in)
     nvs_set_i16(h, "sdr_gain", in->sdr_gain);
     nvs_set_i16(h, "sdr_ppm", in->sdr_ppm_tenths);
     set_fwd(h, in->fwd);
+    nvs_set_u8(h, "srv_on", in->srv_enabled);
+    nvs_set_u16(h, "srv_port", in->srv_port);
+    nvs_set_str(h, "mdns_name", in->mdns_name);
     nvs_set_str(h, "wx_zone", in->wx_zone);
     nvs_set_str(h, "wx_buoy", in->wx_buoy);
     nvs_set_str(h, "wx_obs", in->wx_obs);
@@ -334,6 +339,9 @@ esp_err_t settings_init(void)
         nvs_get_i16(h, "sdr_gain", &s_settings.sdr_gain);
         nvs_get_i16(h, "sdr_ppm", &s_settings.sdr_ppm_tenths);
         get_fwd(h, s_settings.fwd);
+        if (nvs_get_u8(h, "srv_on", &u8) == ESP_OK) s_settings.srv_enabled = u8;
+        nvs_get_u16(h, "srv_port", &s_settings.srv_port);
+        get_str(h, "mdns_name", s_settings.mdns_name, sizeof(s_settings.mdns_name));
         get_str(h, "wx_zone", s_settings.wx_zone, sizeof(s_settings.wx_zone));
         get_str(h, "wx_buoy", s_settings.wx_buoy, sizeof(s_settings.wx_buoy));
         get_str(h, "wx_obs", s_settings.wx_obs, sizeof(s_settings.wx_obs));
@@ -391,6 +399,7 @@ esp_err_t settings_set(const settings_t *in)
     for (int i = 0; i < FWD_DEST_MAX; i++) {
         if (!fwd_equal(&old.fwd[i], &in->fwd[i])) bits |= SETTINGS_EV_FWD;
     }
+    if (old.srv_enabled != in->srv_enabled || old.srv_port != in->srv_port) bits |= SETTINGS_EV_FWD;
     if (strcmp(old.wx_zone, in->wx_zone) || strcmp(old.wx_buoy, in->wx_buoy) || strcmp(old.wx_obs, in->wx_obs) ||
         strcmp(old.wl_key, in->wl_key) ||
         old.wl_station != in->wl_station || old.wl_tx != in->wl_tx) {
@@ -400,6 +409,7 @@ esp_err_t settings_set(const settings_t *in)
         old.adsb_range_nm != in->adsb_range_nm) {
         bits |= SETTINGS_EV_ADSB;
     }
+    if (strcmp(old.mdns_name, in->mdns_name)) bits |= SETTINGS_EV_NAME;
     notify(bits);
     return err;
 }

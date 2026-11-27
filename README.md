@@ -31,7 +31,7 @@ Vessel colours: green cargo, red tanker, blue passenger, orange fishing, violet 
 
 ## Configuration web page
 
-Open `http://<display-ip>/`. The Network screen shows the address. In setup mode it's `http://192.168.4.1/`, and most phones open the page automatically after you join the access point.
+Open `http://ais.local/` (or `http://<display-ip>/`). The Network screen shows both. In setup mode it's `http://192.168.4.1/`, and most phones open the page automatically after you join the access point.
 
 - **AIS data server**: host and TCP port of the NMEA 0183 feed, and whether to use it. Timestamped feeds are fine: NMEA 4 TAG blocks, leading ISO or epoch timestamps, and trailing fields are all handled. Unsupported or corrupt sentences are counted and ignored. Decoded message types: 1, 2, 3, 5, 18, 19, 24 and 27.
 - **Map**: upload the `map_set.zip` produced by the map builder; the page shows progress. It's stored on the display's microSD card, which must be formatted **FAT32** (cards over 32 GB usually come as exFAT and need reformatting). The chart's centre becomes the configured position. You can still edit the centre latitude and longitude by hand.
@@ -45,6 +45,7 @@ Open `http://<display-ip>/`. The Network screen shows the address. In setup mode
     - **WeatherLink API key and secret** (v2, from weatherlink.com): your Davis station. **Find my stations** lists your stations and their outdoor sensor suites to choose from. The secret is stored on the display and never shown again.
   - **Display brightness**.
 - **Wi-Fi**: the display tests a new network for 20 s before saving it. If it can't join, it reconnects to the previous network, or falls back to the setup access point if that fails too. The page reports the result.
+  - **Network name** (default `ais`): the display answers at `http://<name>.local/` over mDNS, and uses the same name as its DHCP host name, so routers list it by that name. It also announces its config page (`_http._tcp`) and, while it's on, the TCP server (`_nmea-0183._tcp`), for apps that browse for services. If another device already has the name, the display adds a number (`ais-2`), and the Wi-Fi status shows the name in use. Give each display its own name when there are several.
 - **Display firmware**: shows the running version and its build date, and updates the display from an uploaded `firmware/build/ais_display.bin`. The display restarts into the new firmware on trial. If that doesn't keep running for a minute (it crashes or restarts), it goes back to the previous firmware by itself, and the page says so. A failed or interrupted upload changes nothing.
 - **Wi-Fi chip firmware**: shows the ESP32-C6's firmware version, and updates it from an uploaded image (`coprocessor/build/eh_cp_ota_coprocessor_ota.bin`). The display restarts afterwards. A failed update leaves the old firmware running.
 - **RTL-SDR receiver**: see below.
@@ -68,7 +69,8 @@ On the config page:
 - **Frequency correction (ppm)**: the V3 needs none, and the decoder also corrects itself once it hears packets.
 - **Bias-tee**: puts 4.5 V on the antenna socket to power an LNA or active antenna. Leave it off otherwise.
 - **Record**: saves up to 10 minutes of the raw signal (8-bit I/Q, 288 kS/s, centred on 162.000 MHz, the same as `rtl_sdr` writes; about 35 MB a minute) to the microSD card. It also saves every AIS sentence heard meanwhile from the network feed and from the SDR, timed to the I/Q. Both download from the page. They're for testing the decoder on a PC; see below.
-- **Retransmit**: sends what the dongle decodes on to up to three destinations, each UDP or TCP to an IP address (or host name) and port. Use it to feed AIS sharing services, which assign your station an address and port when you register it (MarineTraffic, AIS Friends, aiscatcher.org), or chart software such as OpenCPN (set it to listen for UDP). TCP connects out to the destination and reconnects by itself. Only the dongle's sentences are sent, never the network feed's. Each destination shows its state, sentences sent and not sent, and any error; the display's Network screen shows how many are sending.
+- **Retransmit**: sends what the dongle decodes on to up to five destinations, each UDP or TCP to an IP address (or host name) and port. Use it to feed AIS sharing services, which assign your station an address and port when you register it (MarineTraffic, AIS Friends, aiscatcher.org), or chart software such as OpenCPN (set it to listen for UDP). TCP connects out to the destination and reconnects by itself. Only the dongle's sentences are sent, never the network feed's. Each destination shows its state, sentences sent and not sent, and any error; the display's Network screen shows how many are sending.
+- **TCP server**: serves the same sentences (the dongle's only) to up to four TCP clients that connect to the display, on port 10110 unless you change it. Point OpenCPN at `<display-ip>:10110`, or set another display's **AIS data server** to it, so a display elsewhere shows what this one's dongle hears. A client gets sentences from when it connects; one that stops taking data for 30 s is dropped, and a fifth is turned away. The status lists each client's address, how long it's been connected and what it's been sent. It can be turned on and off from the display's Retransmit tab too.
 
 The decoder uses about 60% of one CPU core. The Receiver tab and the config page show how the SDR compares with the network feed.
 
@@ -99,7 +101,7 @@ With the defaults a chart set is around 10 MB (9.3 MB for Seattle; open water an
 You need ESP-IDF **v5.5 or later**:
 
 ```sh
-git clone -b v5.5.5 --recursive https://github.com/espressif/esp-idf.git ~/esp/esp-idf
+git clone -b v5.5.6 --recursive https://github.com/espressif/esp-idf.git ~/esp/esp-idf
 ~/esp/esp-idf/install.sh esp32p4
 . ~/esp/esp-idf/export.sh
 

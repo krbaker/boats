@@ -37,6 +37,17 @@ static bool valid_host(const char *h)
     return true;
 }
 
+// A DNS label: 1-31 letters, digits and hyphens, not starting or ending with a hyphen.
+static bool valid_label(const char *n)
+{
+    size_t len = strlen(n);
+    if (len < 1 || len > 31 || n[0] == '-' || n[len - 1] == '-') return false;
+    for (; *n; n++) {
+        if (!isalnum((unsigned char)*n) && *n != '-') return false;
+    }
+    return true;
+}
+
 // Empty, or a plain-HTTP URL (dump1090 doesn't do HTTPS).
 static bool valid_http_url(const char *u)
 {
@@ -92,6 +103,31 @@ static bool parse_fwd(const cJSON *o, fwd_dest_t *d, int n, char *msg, size_t ca
     return true;
 bad:
     snprintf(msg, cap, "invalid retransmit destination %d", n);
+    return false;
+}
+
+static bool parse_srv(const cJSON *o, settings_t *s, char *msg, size_t cap)
+{
+    cJSON *v;
+    if (!cJSON_IsObject(o)) goto bad;
+    if ((v = cJSON_GetObjectItem(o, "enabled"))) {
+        if (!cJSON_IsBool(v)) goto bad;
+        s->srv_enabled = cJSON_IsTrue(v);
+    }
+    if ((v = cJSON_GetObjectItem(o, "port"))) {
+        if (!cJSON_IsNumber(v) || v->valueint < 1 || v->valueint > 65535) {
+            snprintf(msg, cap, "TCP server: the port must be 1-65535");
+            return false;
+        }
+        if (v->valueint == 80) {
+            snprintf(msg, cap, "TCP server: port 80 is this web page; use another (10110 is usual)");
+            return false;
+        }
+        s->srv_port = v->valueint;
+    }
+    return true;
+bad:
+    snprintf(msg, cap, "invalid TCP server settings");
     return false;
 }
 
@@ -154,6 +190,7 @@ cJSON *settings_to_json(const settings_t *s)
 {
     cJSON *o = cJSON_CreateObject();
     cJSON_AddStringToObject(o, "ais_host", s->ais_host);
+    cJSON_AddStringToObject(o, "mdns_name", s->mdns_name);
     cJSON_AddNumberToObject(o, "ais_port", s->ais_port);
     cJSON_AddStringToObject(o, "tide_station", s->tide_station);
     cJSON_AddStringToObject(o, "tz_name", s->tz_name);
@@ -185,6 +222,9 @@ cJSON *settings_to_json(const settings_t *s)
         cJSON_AddNumberToObject(d, "port", s->fwd[i].port);
         cJSON_AddItemToArray(fa, d);
     }
+    cJSON *sj = cJSON_AddObjectToObject(o, "nmea_server");
+    cJSON_AddBoolToObject(sj, "enabled", s->srv_enabled);
+    cJSON_AddNumberToObject(sj, "port", s->srv_port);
     cJSON *f = cJSON_AddObjectToObject(o, "filter");
     cJSON_AddNumberToObject(f, "min_len_ft", s->filter.min_len_ft);
     cJSON_AddNumberToObject(f, "min_speed_kn", s->filter.min_speed_kn);
@@ -243,6 +283,14 @@ bool settings_from_json(const cJSON *o, settings_t *s, char *msg, size_t cap)
             for (int i = 0; i < cJSON_GetArraySize(v) && !msg[0]; i++) {
                 parse_fwd(cJSON_GetArrayItem(v, i), &s->fwd[i], i + 1, msg, cap);
             }
+        }
+    }
+    if (!msg[0] && (v = cJSON_GetObjectItem(o, "nmea_server"))) parse_srv(v, s, msg, cap);
+    if (!msg[0] && (v = cJSON_GetObjectItem(o, "mdns_name"))) {
+        if (!cJSON_IsString(v) || !valid_label(v->valuestring)) {
+            snprintf(msg, cap, "the network name must be 1-31 letters, digits and hyphens (not at either end)");
+        } else {
+            strcpy(s->mdns_name, v->valuestring);
         }
     }
     if (!msg[0] && !valid_http_url(s->adsb_url)) {

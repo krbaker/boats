@@ -1,6 +1,6 @@
 // Host test for the retransmitter (main/net/ais_fwd.c): runs the real code,
 // with the FreeRTOS stand-ins in fwd_stubs/, against UDP and TCP listeners on
-// 127.0.0.1. Takes about 15 s: it waits out the TCP reconnect back-off.
+// 127.0.0.1, and TCP clients of its server. Takes about 15 s: it waits out the TCP reconnect back-off.
 
 #include <errno.h>
 #include <signal.h>
@@ -118,6 +118,49 @@ static const char *tcp_read(int s, size_t want, int ms)
     return buf;
 }
 
+static void set_server(bool on, uint16_t port)
+{
+    pthread_mutex_lock(&s_cfg_lock);
+    s_cfg.srv_enabled = on;
+    s_cfg.srv_port = port;
+    pthread_mutex_unlock(&s_cfg_lock);
+    xEventGroupSetBits(s_group, SETTINGS_EV_FWD);
+}
+
+// A client of the server. -1 if it can't connect.
+static int tcp_connect(uint16_t port)
+{
+    int s = socket(AF_INET, SOCK_STREAM, 0);
+    struct sockaddr_in a = {.sin_family = AF_INET, .sin_port = htons(port), .sin_addr.s_addr = htonl(INADDR_LOOPBACK)};
+    if (connect(s, (struct sockaddr *)&a, sizeof(a)) < 0) {
+        close(s);
+        return -1;
+    }
+    return s;
+}
+
+static bool wait_server(fwd_state_t want, int ms)
+{
+    for (int t = 0; t < ms; t += 20) {
+        srv_status_t st;
+        ais_fwd_get_server_status(&st);
+        if (st.state == want) return true;
+        usleep(20000);
+    }
+    return false;
+}
+
+static bool wait_clients(int want, int ms)
+{
+    for (int t = 0; t < ms; t += 20) {
+        srv_status_t st;
+        ais_fwd_get_server_status(&st);
+        if (st.nclients == want) return true;
+        usleep(20000);
+    }
+    return false;
+}
+
 static bool wait_state(int dest, fwd_state_t want, int ms)
 {
     for (int t = 0; t < ms; t += 20) {
@@ -145,7 +188,7 @@ static fwd_status_t status(int dest)
 int main(void)
 {
     signal(SIGPIPE, SIG_IGN); // Linux raises it on a write to a closed socket; lwIP doesn't
-    uint16_t up, tp, up2, closed_port;
+    uint16_t up, tp, up2, closed_port, sp, qp;
     int udp = listen_on(SOCK_DGRAM, &up);
     int tl = listen_on(SOCK_STREAM, &tp);
     int udp2 = listen_on(SOCK_DGRAM, &up2);
@@ -244,6 +287,88 @@ int main(void)
     set_dest(1, false, FWD_TCP, "localhost", tp);
     CHECK(wait_state(1, FWD_STATE_OFF, 2000));
     CHECK(strcmp(tcp_read(tc, 1, 1000), "") == 0); // the connection was closed
+
+    // ---- TCP server ----
+    int spare = listen_on(SOCK_STREAM, &sp);
+    close(spare); // a free port for the server
+    set_server(true, sp);
+    CHECK(wait_server(FWD_STATE_SENDING, 2000));
+    int c1 = tcp_connect(sp), c2 = tcp_connect(sp);
+    CHECK(c1 >= 0 && c2 >= 0);
+    CHECK(wait_clients(2, 2000));
+    srv_status_t ss;
+    ais_fwd_get_server_status(&ss);
+    int seen = 0;
+    for (int i = 0; i < SRV_CLIENTS_MAX; i++) {
+        if (ss.client[i].connected_us) seen += strcmp(ss.client[i].addr, "127.0.0.1") == 0;
+    }
+    CHECK(seen == 2);
+
+    // Both clients get each message, a two-part one whole and in order.
+    ais_fwd_sentence(S1);
+    ais_fwd_sentence(T5A);
+    ais_fwd_sentence(T5B);
+    CHECK(strcmp(tcp_read(c1, strlen(all), 1000), all) == 0);
+    CHECK(strcmp(tcp_read(c2, strlen(all), 1000), all) == 0);
+    usleep(100000);
+    ais_fwd_get_server_status(&ss);
+    CHECK(ss.sent == 6 && ss.dropped == 0);
+
+    // One goes away: noticed, and the other carries on.
+    close(c1);
+    CHECK(wait_clients(1, 2000));
+    ais_fwd_sentence(S1);
+    CHECK(strcmp(tcp_read(c2, strlen(S1) + 2, 1000), S1 "\r\n") == 0);
+
+    // A client gets messages only from when it connects.
+    c1 = tcp_connect(sp);
+    CHECK(wait_clients(2, 2000));
+    CHECK(strcmp(tcp_read(c1, 1, 300), "") == 0);
+
+    // Four slots: a fifth is turned away.
+    int c3 = tcp_connect(sp), c4 = tcp_connect(sp);
+    CHECK(wait_clients(4, 2000));
+    int c5 = tcp_connect(sp);
+    CHECK(strcmp(tcp_read(c5, 1, 1000), "") == 0); // closed straight away
+    ais_fwd_get_server_status(&ss);
+    CHECK(ss.refused == 1 && ss.nclients == 4);
+    close(c5);
+    ais_fwd_sentence(S1);
+    for (int i = 0; i < 4; i++) {
+        int c = (int[]){c1, c2, c3, c4}[i];
+        CHECK(strcmp(tcp_read(c, strlen(S1) + 2, 1000), S1 "\r\n") == 0);
+    }
+
+    // The port taken by something else: an error, not a crash.
+    int squat = listen_on(SOCK_STREAM, &qp);
+    set_server(true, qp);
+    CHECK(wait_server(FWD_STATE_ERROR, 2000));
+    ais_fwd_get_server_status(&ss);
+    CHECK(strcmp(ss.error, "port already in use") == 0);
+    CHECK(strcmp(tcp_read(c2, 1, 1000), "") == 0); // moving port closed the old clients
+    close(squat);
+
+    // Back on the free port; then Wi-Fi drops and returns.
+    set_server(true, sp);
+    CHECK(wait_server(FWD_STATE_SENDING, 2000));
+    int c6 = tcp_connect(sp);
+    CHECK(wait_clients(1, 2000));
+    s_has_ip = false;
+    CHECK(wait_server(FWD_STATE_WAITING_NETWORK, 2000));
+    CHECK(strcmp(tcp_read(c6, 1, 1000), "") == 0);
+    s_has_ip = true;
+    CHECK(wait_server(FWD_STATE_SENDING, 2000));
+    int c7 = tcp_connect(sp);
+    CHECK(wait_clients(1, 2000));
+    ais_fwd_sentence(S1);
+    CHECK(strcmp(tcp_read(c7, strlen(S1) + 2, 1000), S1 "\r\n") == 0);
+
+    // Turned off: the client is closed, and nothing listens.
+    set_server(false, sp);
+    CHECK(wait_server(FWD_STATE_OFF, 2000));
+    CHECK(strcmp(tcp_read(c7, 1, 1000), "") == 0);
+    CHECK(tcp_connect(sp) < 0);
+    close(c1), close(c2), close(c3), close(c4), close(c6), close(c7);
 
     if (failures) {
         printf("%d failure(s)\n", failures);

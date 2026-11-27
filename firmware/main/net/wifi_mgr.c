@@ -516,7 +516,9 @@ void wifi_mgr_start(void)
     ESP_ERROR_CHECK(esp_event_loop_create_default());
     s_sta_netif = esp_netif_create_default_wifi_sta();
     s_ap_netif = esp_netif_create_default_wifi_ap();
-    esp_netif_set_hostname(s_sta_netif, "ais-display");
+    settings_t boot_cfg;
+    settings_get(&boot_cfg);
+    esp_netif_set_hostname(s_sta_netif, boot_cfg.mdns_name); // mdns_adv.c keeps it up to date
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));

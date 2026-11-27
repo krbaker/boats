@@ -1,5 +1,6 @@
 // Retransmits the dongle's AIS sentences to up to FWD_DEST_MAX destinations,
-// over UDP or TCP (RETRANSMIT_PLAN.md).
+// over UDP or TCP (RETRANSMIT_PLAN.md), and serves them to up to
+// SRV_CLIENTS_MAX TCP clients (BOARDS_PLAN.md).
 
 #pragma once
 
@@ -25,6 +26,29 @@ typedef struct {
     char error[48];             // the last problem ("" if none since the settings changed)
 } fwd_status_t;
 
+#define SRV_CLIENTS_MAX 4
+
+typedef struct {
+    char addr[16];              // the client's IP address
+    int64_t connected_us;       // esp_timer time it connected
+    uint32_t sent;
+    uint32_t dropped;
+} srv_client_status_t;
+
+// The TCP server. Its states are fwd_state_t's: OFF, WAITING_NETWORK,
+// SENDING (listening, with or without clients) and ERROR.
+typedef struct {
+    fwd_state_t state;
+    uint16_t port;
+    int nclients;
+    srv_client_status_t client[SRV_CLIENTS_MAX]; // by slot: a free slot has connected_us 0
+    uint32_t sent;              // sentences sent, counted once per client
+    uint32_t dropped;           // ...and not sent: a client too slow to take them
+    uint32_t sent_last_min;
+    uint32_t refused;           // connections turned away: all slots in use
+    char error[48];
+} srv_status_t;
+
 void ais_fwd_start(void);
 
 // A sentence from the SDR decoder, without CR LF. Never blocks: it's queued,
@@ -33,3 +57,6 @@ void ais_fwd_sentence(const char *sentence);
 
 void ais_fwd_get_status(int dest, fwd_status_t *out);
 const char *ais_fwd_state_str(fwd_state_t s);
+
+void ais_fwd_get_server_status(srv_status_t *out);
+const char *ais_fwd_server_state_str(fwd_state_t s); // "listening" for SENDING

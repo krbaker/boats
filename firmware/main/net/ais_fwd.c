@@ -7,6 +7,10 @@
 // others with back-off. Nothing here blocks the decoder, and a destination
 // that's down or slow never holds up the others: TCP sockets are
 // non-blocking, and a message one can't take is dropped and counted there.
+//
+// The same task runs the TCP server (BOARDS_PLAN.md): a listening socket and
+// up to SRV_CLIENTS_MAX clients, each fed like a TCP destination. A client
+// gets messages from when it connects; nothing is kept back for it.
 
 #include "ais_fwd.h"
 
@@ -55,6 +59,25 @@ typedef struct {
 } dest_t;
 
 static dest_t s_dest[FWD_DEST_MAX];
+
+typedef struct {
+    int sock;                   // -1 = free slot
+    char pending[PENDING_MAX];
+    int npending;
+    int64_t pending_since_us;
+} client_t;
+
+static struct {
+    bool enabled;
+    uint16_t port;
+    int listen_sock;            // -1 when closed
+    int64_t retry_at_us;
+    uint32_t backoff_ms;
+    uint32_t minute_count;
+    client_t client[SRV_CLIENTS_MAX];
+    srv_status_t st;            // copied out under s_lock
+} s_srv;
+
 static SemaphoreHandle_t s_lock;
 static RingbufHandle_t s_queue;
 static EventGroupHandle_t s_events;
@@ -87,6 +110,18 @@ void ais_fwd_get_status(int dest, fwd_status_t *out)
     xSemaphoreTake(s_lock, portMAX_DELAY);
     *out = s_dest[dest].st;
     xSemaphoreGive(s_lock);
+}
+
+void ais_fwd_get_server_status(srv_status_t *out)
+{
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    *out = s_srv.st;
+    xSemaphoreGive(s_lock);
+}
+
+const char *ais_fwd_server_state_str(fwd_state_t s)
+{
+    return s == FWD_STATE_SENDING ? "listening" : ais_fwd_state_str(s);
 }
 
 const char *ais_fwd_state_str(fwd_state_t s)
@@ -323,12 +358,209 @@ static void deliver(dest_t *d, const char *msg, size_t len, int lines, int64_t n
     count(d, lines, 0);
 }
 
+// ---------------------------------------------------------------------------
+// TCP server (the forwarder task)
+// ---------------------------------------------------------------------------
+
+static void srv_set_state(fwd_state_t state, const char *err)
+{
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    s_srv.st.state = state;
+    if (err) strlcpy(s_srv.st.error, err, sizeof(s_srv.st.error));
+    xSemaphoreGive(s_lock);
+}
+
+static void srv_count_clients(void)
+{
+    int n = 0;
+    for (int i = 0; i < SRV_CLIENTS_MAX; i++) n += s_srv.client[i].sock >= 0;
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    s_srv.st.nclients = n;
+    xSemaphoreGive(s_lock);
+}
+
+static void srv_drop_client(int i, const char *why)
+{
+    client_t *c = &s_srv.client[i];
+    if (c->sock < 0) return;
+    ESP_LOGI(TAG, "server: client %s %s", s_srv.st.client[i].addr, why);
+    close(c->sock);
+    c->sock = -1;
+    c->npending = 0;
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    s_srv.st.client[i] = (srv_client_status_t){0};
+    xSemaphoreGive(s_lock);
+    srv_count_clients();
+}
+
+static void srv_close(void)
+{
+    for (int i = 0; i < SRV_CLIENTS_MAX; i++) srv_drop_client(i, "disconnected: server stopped");
+    if (s_srv.listen_sock >= 0) close(s_srv.listen_sock);
+    s_srv.listen_sock = -1;
+}
+
+static void srv_open(int64_t now)
+{
+    int s = socket(AF_INET, SOCK_STREAM, 0);
+    if (s < 0) {
+        srv_set_state(FWD_STATE_ERROR, "no socket available");
+    } else {
+        int one = 1;
+        setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+        struct sockaddr_in a = {.sin_family = AF_INET, .sin_port = htons(s_srv.port), .sin_addr.s_addr = htonl(INADDR_ANY)};
+        if (bind(s, (struct sockaddr *)&a, sizeof(a)) == 0 && listen(s, 2) == 0) {
+            fcntl(s, F_SETFL, fcntl(s, F_GETFL, 0) | O_NONBLOCK);
+            s_srv.listen_sock = s;
+            s_srv.backoff_ms = BACKOFF_MIN_MS;
+            ESP_LOGI(TAG, "server: listening on port %u", s_srv.port);
+            return srv_set_state(FWD_STATE_SENDING, "");
+        }
+        close(s);
+        srv_set_state(FWD_STATE_ERROR, errno == EADDRINUSE ? "port already in use" : "can't listen on the port");
+    }
+    ESP_LOGW(TAG, "server: port %u: %s; retrying in %lu s", s_srv.port, s_srv.st.error,
+             (unsigned long)(s_srv.backoff_ms / 1000));
+    s_srv.retry_at_us = now + (int64_t)s_srv.backoff_ms * 1000;
+    s_srv.backoff_ms = s_srv.backoff_ms * 2 > BACKOFF_MAX_MS ? BACKOFF_MAX_MS : s_srv.backoff_ms * 2;
+}
+
+static void srv_accept(int64_t now)
+{
+    for (;;) {
+        struct sockaddr_in a;
+        socklen_t alen = sizeof(a);
+        int s = accept(s_srv.listen_sock, (struct sockaddr *)&a, &alen);
+        if (s < 0) return; // none waiting (or a transient error: tried again next pass)
+        int slot = -1;
+        for (int i = 0; i < SRV_CLIENTS_MAX && slot < 0; i++) {
+            if (s_srv.client[i].sock < 0) slot = i;
+        }
+        if (slot < 0) {
+            xSemaphoreTake(s_lock, portMAX_DELAY);
+            s_srv.st.refused++;
+            xSemaphoreGive(s_lock);
+            close(s);
+            ESP_LOGW(TAG, "server: turned a client away: all %d slots in use", SRV_CLIENTS_MAX);
+            continue;
+        }
+        fcntl(s, F_SETFL, fcntl(s, F_GETFL, 0) | O_NONBLOCK);
+        int one = 1;
+        setsockopt(s, SOL_SOCKET, SO_KEEPALIVE, &one, sizeof(one));
+        s_srv.client[slot] = (client_t){.sock = s};
+        xSemaphoreTake(s_lock, portMAX_DELAY);
+        srv_client_status_t *cs = &s_srv.st.client[slot];
+        *cs = (srv_client_status_t){.connected_us = now};
+        inet_ntoa_r(a.sin_addr, cs->addr, sizeof(cs->addr));
+        xSemaphoreGive(s_lock);
+        ESP_LOGI(TAG, "server: client %s connected", cs->addr);
+        srv_count_clients();
+    }
+}
+
+// Write what's left of the last message. False if the client was dropped.
+static bool srv_flush(int i, int64_t now)
+{
+    client_t *c = &s_srv.client[i];
+    if (!c->npending) return true;
+    int n = send(c->sock, c->pending, c->npending, MSG_DONTWAIT);
+    if (n < 0) {
+        if (errno != EAGAIN && errno != EWOULDBLOCK) {
+            srv_drop_client(i, "disconnected");
+            return false;
+        }
+        if (now - c->pending_since_us > STUCK_US) {
+            srv_drop_client(i, "dropped: not taking data");
+            return false;
+        }
+        return true;
+    }
+    memmove(c->pending, c->pending + n, c->npending - n);
+    c->npending -= n;
+    c->pending_since_us = now;
+    return true;
+}
+
+static void srv_count(int i, uint32_t sent, uint32_t dropped)
+{
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    s_srv.st.client[i].sent += sent;
+    s_srv.st.client[i].dropped += dropped;
+    s_srv.st.sent += sent;
+    s_srv.st.dropped += dropped;
+    xSemaphoreGive(s_lock);
+    s_srv.minute_count += sent;
+}
+
+static void srv_service(bool has_ip, int64_t now)
+{
+    if (!s_srv.enabled) return;
+    if (!has_ip) {
+        if (s_srv.listen_sock >= 0) srv_close();
+        srv_set_state(FWD_STATE_WAITING_NETWORK, NULL);
+        s_srv.retry_at_us = 0;
+        return;
+    }
+    if (s_srv.listen_sock < 0) {
+        if (now >= s_srv.retry_at_us) srv_open(now);
+        if (s_srv.listen_sock < 0) return;
+    }
+    srv_accept(now);
+    for (int i = 0; i < SRV_CLIENTS_MAX; i++) {
+        client_t *c = &s_srv.client[i];
+        if (c->sock < 0 || !srv_flush(i, now)) continue;
+        char buf[64];
+        int n = recv(c->sock, buf, sizeof(buf), MSG_DONTWAIT); // anything a client sends is ignored
+        if (n == 0 || (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) srv_drop_client(i, "disconnected");
+    }
+}
+
+static void srv_deliver(const char *msg, size_t len, int lines, int64_t now)
+{
+    if (s_srv.listen_sock < 0) return;
+    for (int i = 0; i < SRV_CLIENTS_MAX; i++) {
+        client_t *c = &s_srv.client[i];
+        if (c->sock < 0) continue;
+        if (!srv_flush(i, now)) continue;
+        if (c->npending) { // still busy with the last one
+            srv_count(i, 0, lines);
+            continue;
+        }
+        int n = send(c->sock, msg, len, MSG_DONTWAIT);
+        if (n < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) srv_count(i, 0, lines);
+            else srv_drop_client(i, "disconnected");
+            continue;
+        }
+        if ((size_t)n < len) {
+            memcpy(c->pending, msg + n, len - n);
+            c->npending = len - n;
+            c->pending_since_us = now;
+        }
+        srv_count(i, lines, 0);
+    }
+}
+
+static void srv_load_settings(const settings_t *cfg)
+{
+    if (s_srv.enabled == cfg->srv_enabled && s_srv.port == cfg->srv_port) return;
+    srv_close();
+    s_srv.enabled = cfg->srv_enabled;
+    s_srv.port = cfg->srv_port;
+    s_srv.retry_at_us = 0;
+    s_srv.backoff_ms = BACKOFF_MIN_MS;
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    s_srv.st = (srv_status_t){.state = s_srv.enabled ? FWD_STATE_CONNECTING : FWD_STATE_OFF, .port = s_srv.port};
+    xSemaphoreGive(s_lock);
+}
+
 // Picks up changed settings. A destination whose settings changed starts over.
 static void load_settings(void)
 {
     settings_t cfg;
     settings_get(&cfg);
-    bool active = false;
+    srv_load_settings(&cfg);
+    bool active = cfg.srv_enabled;
     for (int i = 0; i < FWD_DEST_MAX; i++) {
         dest_t *d = &s_dest[i];
         const fwd_dest_t *c = &cfg.fwd[i];
@@ -360,11 +592,15 @@ static void fwd_task(void *arg)
         int64_t now = esp_timer_get_time();
         bool has_ip = wifi_mgr_has_ip();
         for (int i = 0; i < FWD_DEST_MAX; i++) service(&s_dest[i], has_ip, now);
+        srv_service(has_ip, now);
 
         uint32_t qdrop = __atomic_exchange_n(&s_queue_dropped, 0, __ATOMIC_RELAXED);
         if (qdrop) {
             for (int i = 0; i < FWD_DEST_MAX; i++) {
                 if (usable(&s_dest[i])) count(&s_dest[i], 0, qdrop);
+            }
+            for (int i = 0; i < SRV_CLIENTS_MAX; i++) {
+                if (s_srv.client[i].sock >= 0) srv_count(i, 0, qdrop);
             }
         }
 
@@ -374,6 +610,7 @@ static void fwd_task(void *arg)
             int lines = count_lines(msg, len);
             now = esp_timer_get_time();
             for (int i = 0; i < FWD_DEST_MAX; i++) deliver(&s_dest[i], msg, len, lines, now);
+            srv_deliver(msg, len, lines, now);
             vRingbufferReturnItem(s_queue, msg);
         }
 
@@ -384,6 +621,8 @@ static void fwd_task(void *arg)
                 s_dest[i].st.sent_last_min = s_dest[i].minute_count;
                 s_dest[i].minute_count = 0;
             }
+            s_srv.st.sent_last_min = s_srv.minute_count;
+            s_srv.minute_count = 0;
             xSemaphoreGive(s_lock);
         }
     }
@@ -394,6 +633,8 @@ void ais_fwd_start(void)
     s_lock = xSemaphoreCreateMutex();
     s_events = settings_subscribe();
     for (int i = 0; i < FWD_DEST_MAX; i++) s_dest[i].sock = -1;
+    s_srv.listen_sock = -1;
+    for (int i = 0; i < SRV_CLIENTS_MAX; i++) s_srv.client[i].sock = -1;
     s_queue = xRingbufferCreate(QUEUE_BYTES, RINGBUF_TYPE_NOSPLIT);
     if (!s_queue) {
         ESP_LOGE(TAG, "no memory for the retransmit queue");

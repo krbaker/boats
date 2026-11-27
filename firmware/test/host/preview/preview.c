@@ -13,6 +13,7 @@
 
 #include "adsb.h"
 #include "ais_fwd.h"
+#include "mdns_adv.h"
 #include "log_save.h"
 #include "map_pack.h"
 #include "map_store.h"
@@ -568,6 +569,13 @@ void ais_fwd_get_status(int dest, fwd_status_t *out)
     out->state = dest == 0 ? FWD_STATE_SENDING : FWD_STATE_OFF;
 }
 const char *ais_fwd_state_str(fwd_state_t st) { return st == FWD_STATE_SENDING ? "sending" : "off"; }
+void ais_fwd_get_server_status(srv_status_t *out)
+{
+    memset(out, 0, sizeof(*out));
+    *out = (srv_status_t){.state = FWD_STATE_SENDING, .port = SRV_PORT_DEFAULT, .nclients = 2};
+}
+const char *ais_fwd_server_state_str(fwd_state_t st) { return st == FWD_STATE_SENDING ? "listening" : "off"; }
+void mdns_adv_hostname(char *out, size_t cap) { snprintf(out, cap, "ais"); }
 void vessel_db_save(void) {}
 void vessel_db_forget_all(void) {}
 bool sdr_capture_start(int seconds, char *err, size_t errlen) { return true; }

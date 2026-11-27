@@ -35,6 +35,8 @@ typedef struct {
     char host[64];           // IP address or host name
 } fwd_dest_t;
 
+#define SRV_PORT_DEFAULT 10110   // the usual port for NMEA 0183 over TCP
+
 typedef struct {
     char ais_host[64];
     uint16_t ais_port;
@@ -54,6 +56,9 @@ typedef struct {
     int16_t sdr_ppm_tenths;  // dongle crystal correction, tenths of a ppm
     bool sdr_bias_tee;       // power an LNA / active antenna through the coax
     fwd_dest_t fwd[FWD_DEST_MAX];
+    bool srv_enabled;        // serve the dongle's sentences to TCP clients (BOARDS_PLAN.md)
+    uint16_t srv_port;
+    char mdns_name[32];      // advertised as <name>.local, and the DHCP host name
     // Weather (WEATHER_PLAN.md). Empty / 0 = not used.
     char wx_zone[8];         // NOAA marine forecast zone, e.g. "PZZ135"
     char wx_buoy[8];         // NDBC buoy, e.g. "46088"
@@ -78,9 +83,12 @@ typedef struct {
 #define SETTINGS_EV_MAP     BIT4  // a new chart set was uploaded
 #define SETTINGS_EV_DISPLAY BIT5
 #define SETTINGS_EV_SDR     BIT6
-#define SETTINGS_EV_FWD     BIT7  // a retransmit destination changed
+#define SETTINGS_EV_FWD     BIT7  // a retransmit destination, or the TCP server, changed
 #define SETTINGS_EV_WEATHER BIT8  // a weather source changed (including the WeatherLink secret)
 #define SETTINGS_EV_ADSB    BIT9  // the dump1090 source, or its range
+#define SETTINGS_EV_NAME    BIT10 // the network name (mdns_name)
+
+#define MDNS_NAME_DEFAULT   "ais"
 
 #define ADSB_RANGE_DEFAULT_NM 10
 #define ADSB_RANGE_MAX_NM     250

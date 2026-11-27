@@ -15,6 +15,7 @@
 
 #include "map_tiles.h"
 #include "map_store.h"
+#include "mdns_adv.h"
 #include "nmea_client.h"
 #include "sdr_probe.h"
 #include "settings.h"
@@ -84,6 +85,7 @@ void app_main(void)
     }
 
     wifi_mgr_start();
+    mdns_adv_start(); // after wifi_mgr_start: needs its network interfaces and event loop
     tide_start();
     weather_start();
     nmea_client_start();

@@ -46,7 +46,23 @@ CONFIG_ESP_HOSTED_HOST_SDIO_PIN_D1=15
 CONFIG_ESP_HOSTED_HOST_SDIO_PIN_D2=16
 CONFIG_ESP_HOSTED_HOST_SDIO_PIN_D3=17
 CONFIG_ESP_HOSTED_HOST_RESET_GPIO=54
-CONFIG_LWIP_MAX_SOCKETS=20
+# ESP-Hosted's transfer buffers in PSRAM (the P4 can DMA to it). From 3.1.0
+# the SDIO receive staging is sized from what the C6 advertises: 2 slots of
+# 14 x 1536 B, ~43 KB, which would otherwise come out of internal RAM.
+CONFIG_EH_HOST_PORT_DMA_PREFER_SPIRAM=y
+# 24: the web server, the AIS feed, five retransmit destinations, and the TCP
+# server's listener and four clients, with room for the HTTPS fetches.
+CONFIG_LWIP_MAX_SOCKETS=24
+CONFIG_LWIP_MAX_ACTIVE_TCP=24
+
+# --- mDNS (<name>.local) ---
+# Its task and memory in PSRAM: internal RAM is what runs short.
+CONFIG_MDNS_TASK_CREATE_FROM_SPIRAM=y
+CONFIG_MDNS_MEMORY_ALLOC_SPIRAM=y
+CONFIG_MDNS_MAX_SERVICES=4
+# Answering only: no console commands, no browsing for other devices.
+CONFIG_MDNS_ENABLE_CONSOLE_CLI=n
+CONFIG_MDNS_ENABLE_BROWSE=n
 
 # --- HTTP server / client ---
 CONFIG_HTTPD_MAX_REQ_HDR_LEN=1024

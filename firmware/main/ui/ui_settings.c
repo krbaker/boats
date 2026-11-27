@@ -58,6 +58,7 @@ static const uint8_t k_ranges[] = {1, 2, 3, 5, 10, 15, 20, 25, 30, 40, 50, 75, 1
 
 static lv_obj_t *s_net_sw, *s_net_note, *s_sdr_sw, *s_gain_dd, *s_ppm_lbl, *s_bias_sw, *s_bias_note;
 static lv_obj_t *s_fwd_sw[FWD_DEST_MAX], *s_fwd_dd[FWD_DEST_MAX], *s_fwd_name[FWD_DEST_MAX], *s_fwd_note[FWD_DEST_MAX];
+static lv_obj_t *s_srv_sw, *s_srv_name, *s_srv_note;
 static lv_obj_t *s_bright_slider, *s_bright_lbl, *s_tz_dd;
 static lv_obj_t *s_adsb_sw, *s_adsb_src, *s_adsb_range_lbl, *s_adsb_note;
 static uint32_t s_adsb_refused;                                      // lv_tick a switch-on was refused
@@ -309,6 +310,13 @@ static void fwd_dd_cb(lv_event_t *e)
     change(set_fwd_proto, i | (lv_dropdown_get_selected(lv_event_get_target(e)) ? FWD_TCP << 8 : FWD_UDP << 8));
 }
 
+static void set_srv_on(settings_t *c, intptr_t v) { c->srv_enabled = v; }
+
+static void srv_sw_cb(lv_event_t *e)
+{
+    change(set_srv_on, lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED));
+}
+
 static void build_fwd(lv_obj_t *tab)
 {
     column_tab(tab);
@@ -327,6 +335,13 @@ static void build_fwd(lv_obj_t *tab)
         lv_label_set_recolor(s_fwd_note[i], true);
         s_fwd_sw[i] = switch_in(r, fwd_sw_cb, (void *)(intptr_t)i);
     }
+    s_srv_name = heading(tab, "");
+    lv_obj_t *r = row(tab);
+    s_srv_note = text(r, "", UI_COLOR_MUTED);
+    lv_obj_set_flex_grow(s_srv_note, 1);
+    lv_label_set_long_mode(s_srv_note, LV_LABEL_LONG_DOT);
+    lv_obj_set_style_text_font(s_srv_note, &lv_font_montserrat_16, 0);
+    s_srv_sw = switch_in(r, srv_sw_cb, NULL);
 }
 
 // ---------------------------------------------------------------------------
@@ -565,6 +580,15 @@ void ui_settings_refresh(void)
         }
         set_text(s_fwd_note[i], buf);
     }
+    snprintf(buf, sizeof(buf), "TCP server   port %u", cfg.srv_port);
+    set_text(s_srv_name, buf);
+    set_checked(s_srv_sw, cfg.srv_enabled);
+    srv_status_t ss;
+    ais_fwd_get_server_status(&ss);
+    if (!cfg.srv_enabled) strcpy(buf, "off");
+    else if (ss.state == FWD_STATE_SENDING) snprintf(buf, sizeof(buf), "%d client%s", ss.nclients, ss.nclients == 1 ? "" : "s");
+    else snprintf(buf, sizeof(buf), "%s%s%s", ais_fwd_server_state_str(ss.state), ss.error[0] ? ": " : "", ss.error);
+    set_text(s_srv_note, buf);
 
     // Display
     if (!lv_obj_has_state(s_bright_slider, LV_STATE_PRESSED)) {

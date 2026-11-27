@@ -11,6 +11,7 @@ idf_component_register(
         "net/cp_update.c"
         "net/fw_update.c"
         "net/ais_fwd.c"
+        "net/mdns_adv.c"
         "ais/vessel_db.c"
         "ais/met_db.c"
         "ais/nmea_client.c"
@@ -41,5 +42,5 @@ idf_component_register(
         "ui/ui_weather.c"
     INCLUDE_DIRS "." "config" "net" "ais" "tide" "geo" "map" "ui" "sdr" "weather" "adsb"
     EMBED_TXTFILES "web/index.html"
-    REQUIRES adsb_parse ais ais_demod vessel_cache weather_parse esp_ringbuf app_update esp_http_server esp_http_client esp-tls json nvs_flash esp_wifi esp_netif esp_timer lwip usb esp_hosted bootloader_support espcoredump esp_partition
+    REQUIRES adsb_parse ais ais_demod vessel_cache weather_parse esp_ringbuf app_update esp_http_server esp_http_client esp-tls json nvs_flash esp_wifi esp_netif esp_timer lwip usb esp_hosted mdns bootloader_support espcoredump esp_partition
 )
