@@ -498,6 +498,8 @@ static esp_err_t status_get(httpd_req_t *req)
     fw_info_t fw;
     fw_update_info(&fw);
     cJSON *fj = cJSON_AddObjectToObject(o, "firmware");
+    cJSON_AddStringToObject(fj, "board", fw.board);
+    cJSON_AddStringToObject(fj, "board_title", fw.board_title);
     cJSON_AddStringToObject(fj, "version", fw.version);
     cJSON_AddStringToObject(fj, "built", fw.build_date);
     cJSON_AddStringToObject(fj, "slot", fw.running);

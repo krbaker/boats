@@ -1,4 +1,4 @@
-// AIS display for the Waveshare ESP32-P4-WIFI6-Touch-LCD-3.4C.
+// AIS display for Waveshare ESP32-P4 boards: see BOARDS_PLAN.md for which.
 
 #include <stdlib.h>
 
@@ -28,6 +28,20 @@
 
 static const char *TAG = "main";
 
+// Boards whose support is still to come (BOARDS_PLAN.md).
+#if CONFIG_AIS_BOARD_LCD10
+#error "The 10.1-inch board needs its BSP and the bottom-bar layout: BOARDS_PLAN.md steps 4-5"
+#elif CONFIG_AIS_BOARD_HEADLESS
+#error "The headless build comes with BOARDS_PLAN.md step 6"
+#endif
+// The panel the BSP drives has to be the board's.
+#if CONFIG_AIS_BOARD_LCD34C && !CONFIG_BSP_LCD_TYPE_800_800_3_4_INCH
+#error "lcd34c needs CONFIG_BSP_LCD_TYPE_800_800_3_4_INCH (sdkconfig.defaults.lcd34c)"
+#endif
+#if CONFIG_AIS_BOARD_LCD4C && !CONFIG_BSP_LCD_TYPE_720_720_4_INCH
+#error "lcd4c needs CONFIG_BSP_LCD_TYPE_720_720_4_INCH (sdkconfig.defaults.lcd4c)"
+#endif
+
 // Why the last run ended, and if it crashed, what the core dump says.
 static void log_last_reset(void)
 {
@@ -51,7 +65,7 @@ static void log_last_reset(void)
 void app_main(void)
 {
     log_buf_init();
-    ESP_LOGI(TAG, "AIS display starting");
+    ESP_LOGI(TAG, "AIS display starting: %s", CONFIG_AIS_BOARD_TITLE);
     log_last_reset();
     map_store_mount(); // the settings are on the card
     ESP_ERROR_CHECK(settings_init());

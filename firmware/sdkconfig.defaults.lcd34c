@@ -1,0 +1,6 @@
+# Waveshare ESP32-P4-WIFI6-Touch-LCD-3.4C: 800x800 round. (./build.sh lcd34c, or plain idf.py build)
+CONFIG_AIS_BOARD_LCD34C=y
+CONFIG_BSP_LCD_TYPE_800_800_3_4_INCH=y
+# This board's chip is pre-v3 (it runs at 360 MHz). A v3.x 3.4C needs these two lines removed.
+CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y
+CONFIG_ESP32P4_REV_MIN_100=y

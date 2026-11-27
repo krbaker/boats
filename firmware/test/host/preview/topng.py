@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Convert the preview's raw RGB565 800x800 frames to PNG.
+"""Convert the preview's raw RGB565 frames (square: 800x800, or 720x720) to PNG.
 
     topng.py frame.raw frame.png       (outside the round screen blacked out)
 """
@@ -7,11 +7,9 @@ import struct
 import sys
 import zlib
 
-SIZE = 800
-
-
 def to_png(src, dst):
     px = open(src, "rb").read()
+    SIZE = int(round((len(px) / 2) ** 0.5))
     rr = (SIZE / 2) ** 2
     raw = bytearray()
     for y in range(SIZE):

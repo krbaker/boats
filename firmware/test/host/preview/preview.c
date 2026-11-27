@@ -655,7 +655,7 @@ void adsb_get_status(adsb_status_t *out)
 
 const char *adsb_state_str(adsb_state_t st) { return st == ADSB_OK ? "connected" : "off"; }
 
-static uint16_t s_fb[800 * 800];
+static uint16_t s_fb[UI_SIZE * UI_SIZE];
 
 static uint32_t tick_ms(void)
 {
@@ -683,7 +683,7 @@ static void snap(const char *name)
     char path[64];
     snprintf(path, sizeof(path), "%s.raw", name);
     FILE *f = fopen(path, "wb");
-    fwrite(s_fb, 2, 800 * 800, f);
+    fwrite(s_fb, 2, UI_SIZE * UI_SIZE, f);
     fclose(f);
 }
 
@@ -711,7 +711,8 @@ static void drag(int32_t x0, int32_t y0, int32_t x1, int32_t y1)
 // Point on a pill at the given angle (0 = 3 o'clock, clockwise).
 static void tap_edge(float deg)
 {
-    tap((int32_t)(UI_CENTER + 372 * cosf(deg * (float)M_PI / 180)), (int32_t)(UI_CENTER + 372 * sinf(deg * (float)M_PI / 180)));
+    const float r = UI_CENTER - 28; // on the bubbles at the rim
+    tap((int32_t)(UI_CENTER + r * cosf(deg * (float)M_PI / 180)), (int32_t)(UI_CENTER + r * sinf(deg * (float)M_PI / 180)));
 }
 
 static lv_obj_t *find_class(lv_obj_t *root, const lv_obj_class_t *cls)
@@ -744,7 +745,7 @@ int main(int argc, char **argv)
 
     lv_init();
     lv_tick_set_cb(tick_ms);
-    lv_display_t *disp = lv_display_create(800, 800);
+    lv_display_t *disp = lv_display_create(UI_SIZE, UI_SIZE);
     lv_display_set_color_format(disp, LV_COLOR_FORMAT_RGB565);
     lv_display_set_buffers(disp, s_fb, NULL, sizeof(s_fb), LV_DISPLAY_RENDER_MODE_DIRECT);
     lv_display_set_flush_cb(disp, flush_cb);
@@ -759,7 +760,7 @@ int main(int argc, char **argv)
     ui_map_on_show();
     run_ms(1300); // let the 1 s refresh timer fill in the border text
     snap("alert_popup"); // the advisory is new: it pops up over the map
-    tap(800 / 2 + 520 / 2 - 8 - 26, 150 + 8 + 26); // its X
+    tap(UI_CENTER + UI_PX(520) / 2 - 8 - 26, UI_PX(150) + 8 + 26); // its X
     snap("map");
 
     // Zoom in twice with the "+" pill, then drag the chart up and to the left.
@@ -776,7 +777,7 @@ int main(int argc, char **argv)
     lv_tabview_set_active(find_class(scr, &lv_tabview_class), 1, LV_ANIM_OFF);
     lv_obj_send_event(find_class(scr, &lv_tabview_class), LV_EVENT_VALUE_CHANGED, NULL);
     snap("receiver");
-    drag(400, 640, 400, 260); // down to the message types
+    drag(UI_CENTER, UI_PX(640), UI_CENTER, UI_PX(260)); // down to the message types
     run_ms(600);
     snap("receiver_types");
     lv_tabview_set_active(find_class(scr, &lv_tabview_class), 2, LV_ANIM_OFF);
@@ -794,7 +795,7 @@ int main(int argc, char **argv)
         lv_obj_t *c = lv_obj_get_child(scr, i);
         if (!lv_obj_is_hidden(c) && lv_obj_get_width(c) == UI_SIZE) wtabs = find_class(c, &lv_tabview_class);
     }
-    tap(400, 250); // the advisory box: expand it
+    tap(UI_CENTER, UI_PX(250)); // the advisory box: expand it
     snap("weather_alert_open");
     lv_tabview_set_active(wtabs, 1, LV_ANIM_OFF);
     snap("weather_waves");
@@ -881,7 +882,7 @@ int main(int argc, char **argv)
     snap("map_aircraft");
     tap_edge(180);
     snap("status_chooser");
-    tap(400, 400 + 44); // "Aircraft", the lower button
+    tap(UI_CENTER, UI_CENTER + 44); // "Aircraft", the lower button
     snap("aircraft_list");
     hide_overlays(scr);
     lv_obj_t *acs = ui_aircraft_detail_create(); // (ui_start makes it on the display)

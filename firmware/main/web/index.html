@@ -170,9 +170,11 @@
   <section>
     <h2>Display firmware</h2>
     <table>
+      <tr><td>Board</td><td id="fw_board">…</td></tr>
       <tr><td>Running</td><td id="fw_version">…</td></tr>
     </table>
-    <div class="hint">Upload <code>firmware/build/ais_display.bin</code> to update the display. It restarts into the new
+    <div class="hint">Upload the <code>.bin</code> built for this board (<code id="fw_bin">firmware/build/ais_display.bin</code>)
+      to update the display; another board's firmware is refused. It restarts into the new
       firmware on trial: if that doesn't run for a minute (it crashes, or restarts), the display goes back to the
       current one by itself. A failed or interrupted upload changes nothing.</div>
     <label for="fw_file">Display firmware (.bin)</label>
@@ -667,7 +669,7 @@ function showSdr(r, x) {
 let fwUpdating = null;  // version we were running when an update was sent
 function uploadFirmware() {
   const f = $("fw_file").files[0];
-  if (!f) return setMsg("fw_msg", "Choose firmware/build/ais_display.bin first.", "bad");
+  if (!f) return setMsg("fw_msg", `Choose ${$("fw_bin").textContent} first.`, "bad");
   $("fw_btn").disabled = true;
   const bar = $("fw_progress");
   bar.hidden = false;
@@ -696,6 +698,11 @@ function uploadFirmware() {
 
 function showFirmware(fw) {
   if (!fw) return;
+  if (fw.board) {
+    $("fw_board").textContent = `${fw.board_title} (${fw.board})`;
+    $("fw_bin").textContent = fw.board === "lcd34c" ? "firmware/build/ais_display.bin"
+                                                     : `firmware/build-${fw.board}/ais_display_${fw.board}.bin`;
+  }
   const el = $("fw_version");
   el.dataset.version = fw.version;
   el.textContent = `${fw.version} (built ${fw.built})` + (fw.on_trial ? " — on trial, kept after a minute" : "") +

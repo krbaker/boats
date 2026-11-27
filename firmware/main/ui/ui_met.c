@@ -13,9 +13,9 @@
 #include "tide.h"
 #include "ui.h"
 
-#define POPUP_W     520
-#define POPUP_Y     130
-#define TEXT_MAX_H  360     // the readings scroll beyond this
+#define POPUP_W     UI_PX(520)
+#define POPUP_Y     UI_PX(130)
+#define TEXT_MAX_H  UI_PX(360)    // the readings scroll beyond this
 
 static lv_obj_t *s_popup, *s_title, *s_sub, *s_body;
 static uint32_t s_mmsi;

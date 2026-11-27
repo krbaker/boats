@@ -24,9 +24,9 @@ static const char *const k_row_names[ROW_COUNT] = {
     "Distance", "Bearing", "Size", "Destination", "Last update",
 };
 
-#define TOP         162
-#define ROW_H       34
-#define VALUE_X     400
+#define TOP         UI_PX(162)
+#define ROW_H       UI_PX(34)
+#define VALUE_X     UI_PX(400)
 
 static lv_obj_t *s_scr, *s_title, *s_swatch, *s_values[ROW_COUNT], *s_flag;
 static uint32_t s_mmsi;
@@ -155,30 +155,30 @@ lv_obj_t *ui_detail_create(void)
     lv_obj_set_size(s_swatch, 24, 24);
     lv_obj_set_style_radius(s_swatch, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_bg_opa(s_swatch, LV_OPA_COVER, 0);
-    lv_obj_align(s_swatch, LV_ALIGN_TOP_MID, 0, 62);
+    lv_obj_align(s_swatch, LV_ALIGN_TOP_MID, 0, UI_PX(62));
 
     s_title = lv_label_create(s_scr);
-    lv_obj_set_width(s_title, 520);
+    lv_obj_set_width(s_title, UI_PX(520));
     lv_label_set_long_mode(s_title, LV_LABEL_LONG_MODE_DOTS);
     lv_obj_set_style_text_align(s_title, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_font(s_title, &lv_font_montserrat_32, 0);
     lv_obj_set_style_text_color(s_title, UI_COLOR_TEXT, 0);
-    lv_obj_align(s_title, LV_ALIGN_TOP_MID, 0, 100);
+    lv_obj_align(s_title, LV_ALIGN_TOP_MID, 0, UI_PX(100));
 
     const int top = TOP, row_h = ROW_H;
     for (int i = 0; i < ROW_COUNT; i++) {
         lv_obj_t *k = lv_label_create(s_scr);
         lv_label_set_text(k, k_row_names[i]);
-        lv_obj_set_width(k, 220);
+        lv_obj_set_width(k, UI_PX(220));
         lv_obj_set_style_text_align(k, LV_TEXT_ALIGN_RIGHT, 0);
         lv_obj_set_style_text_font(k, &lv_font_montserrat_20, 0);
         lv_obj_set_style_text_color(k, UI_COLOR_MUTED, 0);
-        lv_obj_set_pos(k, 160, top + i * row_h);
+        lv_obj_set_pos(k, UI_PX(160), top + i * row_h);
 
         s_values[i] = lv_label_create(s_scr);
         lv_label_set_text(s_values[i], "");
         lv_label_set_recolor(s_values[i], true);
-        lv_obj_set_width(s_values[i], 320);
+        lv_obj_set_width(s_values[i], UI_PX(320));
         lv_label_set_long_mode(s_values[i], LV_LABEL_LONG_MODE_DOTS);
         lv_obj_set_style_text_font(s_values[i], &lv_font_montserrat_20, 0);
         lv_obj_set_style_text_color(s_values[i], UI_COLOR_TEXT, 0);
@@ -189,7 +189,7 @@ lv_obj_t *ui_detail_create(void)
     lv_obj_set_hidden(s_flag, true);
 
     lv_obj_t *back = ui_round_button(s_scr, LV_SYMBOL_LEFT " Map", 160, 64);
-    lv_obj_align(back, LV_ALIGN_BOTTOM_MID, 0, -50);
+    lv_obj_align(back, LV_ALIGN_BOTTOM_MID, 0, -UI_PX(50));
     lv_obj_add_event_cb(back, back_cb, LV_EVENT_CLICKED, NULL);
 
     lv_timer_create(timer_cb, 1000, NULL);

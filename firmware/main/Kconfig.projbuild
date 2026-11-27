@@ -1,7 +1,50 @@
 menu "AIS Display"
 
+    # Set by the board's sdkconfig.defaults.<board>, which CMakeLists.txt picks
+    # from AIS_BOARD (build.sh <board>). See BOARDS_PLAN.md.
+    choice AIS_BOARD
+        prompt "Board"
+        default AIS_BOARD_LCD34C
+
+        config AIS_BOARD_LCD34C
+            bool "Waveshare ESP32-P4-WIFI6-Touch-LCD-3.4C (800x800 round)"
+        config AIS_BOARD_LCD4C
+            bool "Waveshare ESP32-P4-WIFI6-Touch-LCD-4C (720x720 round)"
+        config AIS_BOARD_LCD10
+            bool "Waveshare ESP32-P4-WIFI6-Touch-LCD-10.1 (1280x800, landscape)"
+        config AIS_BOARD_HEADLESS
+            bool "Waveshare ESP32-P4-WIFI6-POE-ETH (no screen)"
+    endchoice
+
+    config AIS_BOARD_NAME
+        string
+        default "lcd34c" if AIS_BOARD_LCD34C
+        default "lcd4c" if AIS_BOARD_LCD4C
+        default "lcd10" if AIS_BOARD_LCD10
+        default "headless" if AIS_BOARD_HEADLESS
+
+    config AIS_BOARD_TITLE
+        string
+        default "ESP32-P4-WIFI6-Touch-LCD-3.4C" if AIS_BOARD_LCD34C
+        default "ESP32-P4-WIFI6-Touch-LCD-4C" if AIS_BOARD_LCD4C
+        default "ESP32-P4-WIFI6-Touch-LCD-10.1" if AIS_BOARD_LCD10
+        default "ESP32-P4-WIFI6-POE-ETH" if AIS_BOARD_HEADLESS
+
+    config AIS_HAS_DISPLAY
+        bool
+        default y if !AIS_BOARD_HEADLESS
+
+    config AIS_DISPLAY_ROUND
+        bool
+        default y if AIS_BOARD_LCD34C || AIS_BOARD_LCD4C
+
+    config AIS_HAS_ETH
+        bool
+        default y if AIS_BOARD_HEADLESS
+
     config AIS_DISPLAY_UPSIDE_DOWN
         bool "Board mounted upside down (USB-C ports at the bottom)"
+        depends on AIS_HAS_DISPLAY
         default y
         help
             Rotates the picture and the touch input by 180 degrees, so the board can
@@ -19,6 +62,7 @@ menu "AIS Display"
 
     config AIS_TOUCH_SWAP_XY
         int "Touch: swap X and Y (0/1)"
+        depends on AIS_HAS_DISPLAY
         range 0 1
         default 0
         help
@@ -27,11 +71,13 @@ menu "AIS Display"
 
     config AIS_TOUCH_MIRROR_X
         int "Touch: mirror X (0/1)"
+        depends on AIS_HAS_DISPLAY
         range 0 1
         default 0
 
     config AIS_TOUCH_MIRROR_Y
         int "Touch: mirror Y (0/1)"
+        depends on AIS_HAS_DISPLAY
         range 0 1
         default 0
 

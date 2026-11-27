@@ -11,8 +11,8 @@
 
 #define PAST_S          (6 * 3600)
 #define FUTURE_S        (24 * 3600)
-#define GRAPH_W         620
-#define GRAPH_H         300
+#define GRAPH_W         UI_PX(620)
+#define GRAPH_H         UI_PX(300)
 #define AXIS_LEFT       44      // room for the height labels
 #define AXIS_BOTTOM     28      // room for the time labels
 #define MAX_SAMPLES     128
@@ -236,20 +236,20 @@ lv_obj_t *ui_tide_create(lv_obj_t *parent)
     s_title = lv_label_create(s_root);
     lv_obj_set_style_text_font(s_title, &lv_font_montserrat_24, 0);
     lv_obj_set_style_text_color(s_title, UI_COLOR_MUTED, 0);
-    lv_obj_set_width(s_title, 560);
+    lv_obj_set_width(s_title, UI_PX(560));
     lv_obj_set_style_text_align(s_title, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_long_mode(s_title, LV_LABEL_LONG_MODE_DOTS);
-    lv_obj_align(s_title, LV_ALIGN_TOP_MID, 0, 150);
+    lv_obj_align(s_title, LV_ALIGN_TOP_MID, 0, UI_PX(150));
 
     s_now = lv_label_create(s_root);
     lv_obj_set_style_text_font(s_now, &lv_font_montserrat_32, 0);
     lv_obj_set_style_text_color(s_now, UI_COLOR_TEXT, 0);
-    lv_obj_align(s_now, LV_ALIGN_TOP_MID, 0, 190);
+    lv_obj_align(s_now, LV_ALIGN_TOP_MID, 0, UI_PX(190));
 
     s_graph = lv_obj_create(s_root);
     lv_obj_remove_style_all(s_graph);
     lv_obj_set_size(s_graph, GRAPH_W, GRAPH_H);
-    lv_obj_align(s_graph, LV_ALIGN_CENTER, -AXIS_LEFT / 2, 70);
+    lv_obj_align(s_graph, LV_ALIGN_CENTER, -AXIS_LEFT / 2, UI_PX(70));
     lv_obj_set_clickable(s_graph, false);
     lv_obj_add_event_cb(s_graph, graph_draw_cb, LV_EVENT_DRAW_MAIN, NULL);
 

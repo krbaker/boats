@@ -12,8 +12,8 @@
 #include "ui.h"
 #include "vessel_db.h"
 
-#define POPUP_W         520
-#define POPUP_Y         150
+#define POPUP_W         UI_PX(520)
+#define POPUP_Y         UI_PX(150)
 #define POLL_MS         1000
 #define MAX_DISMISSED   32
 #define NOTICE_FRESH_S  (15 * 60)   // a notice older than this when first seen doesn't pop up

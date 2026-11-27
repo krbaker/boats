@@ -11,6 +11,7 @@
 #include "esp_ota_ops.h"
 #include "esp_system.h"
 #include "esp_timer.h"
+#include "sdkconfig.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "ui.h"
@@ -36,6 +37,8 @@ struct fw_update {
 void fw_update_info(fw_info_t *out)
 {
     memset(out, 0, sizeof(*out));
+    out->board = CONFIG_AIS_BOARD_NAME;
+    out->board_title = CONFIG_AIS_BOARD_TITLE;
     const esp_app_desc_t *d = esp_app_get_description();
     snprintf(out->version, sizeof(out->version), "%s", d->version);
     snprintf(out->build_date, sizeof(out->build_date), "%s %s", d->date, d->time);
@@ -101,14 +104,15 @@ static bool start(fw_update_t *u)
     const esp_app_desc_t *d =
         (const esp_app_desc_t *)(u->head + sizeof(esp_image_header_t) + sizeof(esp_image_segment_header_t));
     if (h->magic != ESP_IMAGE_HEADER_MAGIC || d->magic_word != ESP_APP_DESC_MAGIC_WORD) {
-        return fail(u, "not an ESP firmware image (upload firmware/build/ais_display.bin)", ESP_OK);
+        return fail(u, "not an ESP firmware image (upload the .bin from the firmware's build directory)", ESP_OK);
     }
     if (h->chip_id != ESP_CHIP_ID_ESP32P4) return fail(u, "this image is for another chip, not the display's ESP32-P4", ESP_OK);
     const esp_app_desc_t *me = esp_app_get_description();
     if (strncmp(d->project_name, me->project_name, sizeof(d->project_name)) != 0) {
         char msg[128];
-        snprintf(msg, sizeof(msg), "this is \"%.32s\" firmware, not the display's (%.32s)", d->project_name,
-                 me->project_name);
+        // Each board's build has its own project name (CMakeLists.txt).
+        snprintf(msg, sizeof(msg), "this is \"%.32s\" firmware, not this %s's (%.32s)", d->project_name,
+                 CONFIG_AIS_BOARD_TITLE, me->project_name);
         return fail(u, msg, ESP_OK);
     }
     ui_updating_begin();  // before the first flash write

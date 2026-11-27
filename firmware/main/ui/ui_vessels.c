@@ -18,11 +18,12 @@
 #include "ui.h"
 #include "vessel_db.h"
 
-#define BOX_W       540     // content box; its corners just fit inside the round screen
-#define BOX_H       560
-#define BOX_Y       24      // offset of the box below the screen centre
-#define COL_FLAG_W  (UI_FLAG_W + 28)   // the flag, between the cells' 14 px padding
-#define COL_NAME_W  220
+#define BOX_W       UI_PX(540)  // content box; its corners just fit inside the round screen
+#define BOX_H       UI_PX(560)
+#define BOX_Y       UI_PX(24)     // offset of the box below the screen centre
+#define CELL_PAD_X  (UI_SIZE < 800 ? 10 : 14)    // a table cell's padding left and right
+#define COL_FLAG_W  (UI_FLAG_W + 2 * CELL_PAD_X)   // the flag, between the cell's padding
+#define COL_NAME_W  UI_PX(220)
 #define COL_NUM_W   ((BOX_W - COL_FLAG_W - COL_NAME_W) / 2)
 #define FLAG_READS  4               // flags read from the card per refresh
 #define POLL_MS     250
@@ -236,7 +237,7 @@ static void style_table(lv_obj_t *t)
     lv_obj_set_style_border_color(t, UI_COLOR_PANEL, LV_PART_ITEMS);
     lv_obj_set_style_border_side(t, LV_BORDER_SIDE_BOTTOM, LV_PART_ITEMS);
     lv_obj_set_style_pad_ver(t, 12, LV_PART_ITEMS);
-    lv_obj_set_style_pad_hor(t, 14, LV_PART_ITEMS);
+    lv_obj_set_style_pad_hor(t, CELL_PAD_X, LV_PART_ITEMS);
     lv_obj_add_event_cb(t, table_draw_cb, LV_EVENT_DRAW_TASK_ADDED, NULL);
     lv_obj_set_send_draw_task_events(t, true);
 }
@@ -257,9 +258,9 @@ static void build_rx(lv_obj_t *tab)
 
     s_rx_table = lv_table_create(tab);
     lv_table_set_column_count(s_rx_table, 3);
-    lv_table_set_column_width(s_rx_table, 0, 210);
-    lv_table_set_column_width(s_rx_table, 1, 130);
-    lv_table_set_column_width(s_rx_table, 2, 130);
+    lv_table_set_column_width(s_rx_table, 0, UI_PX(210));
+    lv_table_set_column_width(s_rx_table, 1, UI_PX(130));
+    lv_table_set_column_width(s_rx_table, 2, UI_PX(130));
     static const char *const rows[] = {"Packets", "Ch A, last min", "Ch B, last min", "Since boot", "Vessels only here"};
     for (int i = 0; i < 5; i++) lv_table_set_cell_value(s_rx_table, i, 0, rows[i]);
     lv_table_set_cell_value(s_rx_table, 0, 1, "SDR");
@@ -271,9 +272,9 @@ static void build_rx(lv_obj_t *tab)
     // Message types, below (the tab scrolls when there are many).
     s_type_table = lv_table_create(tab);
     lv_table_set_column_count(s_type_table, 3);
-    lv_table_set_column_width(s_type_table, 0, 210);
-    lv_table_set_column_width(s_type_table, 1, 130);
-    lv_table_set_column_width(s_type_table, 2, 130);
+    lv_table_set_column_width(s_type_table, 0, UI_PX(210));
+    lv_table_set_column_width(s_type_table, 1, UI_PX(130));
+    lv_table_set_column_width(s_type_table, 2, UI_PX(130));
     lv_table_set_cell_value(s_type_table, 0, 0, "Message types");
     lv_table_set_cell_value(s_type_table, 0, 1, "SDR");
     lv_table_set_cell_value(s_type_table, 0, 2, "Network");

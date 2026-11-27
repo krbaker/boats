@@ -51,9 +51,9 @@
 #define WIND_STALE_S    3600    // the wind arrow goes after an hour without a reading
 #define WAVE_STALE_S    (3 * 3600)
 #define GUST_SHOW_MPH   10      // show the gust when it's this far above the average
-#define WIND_TAIL_R     356     // px from the centre: the wind and wave arrows, just inside the bubbles
-#define WIND_HEAD_R     302
-#define WIND_TIP_R      264
+#define WIND_TAIL_R     (UI_CENTER - 44)    // px from the centre: the wind and wave arrows, just inside the bubbles
+#define WIND_HEAD_R     (UI_CENTER - 98)
+#define WIND_TIP_R      (UI_CENTER - 136)
 #define WIND_SHAFT_W    48
 #define WIND_HEAD_W     78
 #define WX_OVERLAP_DEG  16      // wind and wave arrows this close in direction share one label
@@ -730,7 +730,9 @@ static void update_view(void)
         const map_level_t *l = &m->levels[s_zoom];
         s_view.merc_px = l->merc_px;
         s_view.m_per_px = l->m_per_px;
-        s_view.radius_nm = l->radius_nm;
+        // Chart sets are rendered for 800 px: on a smaller screen the same
+        // tiles show less, and the zoom bubble says how much.
+        s_view.radius_nm = l->radius_nm * UI_SIZE / 800.0f;
         s_view.hull_m_per_px = m->levels[HULL_TRUE_LEVEL < m->nlevels ? HULL_TRUE_LEVEL : m->nlevels - 1].m_per_px;
     } else {
         s_view.nlevels = sizeof(k_default_radii) / sizeof(k_default_radii[0]);
@@ -2218,7 +2220,7 @@ lv_obj_t *ui_map_create(void)
     lv_obj_add_event_cb(s_overlay, overlay_press_cb, LV_EVENT_PRESS_LOST, NULL);
 
     s_msg = lv_label_create(s_scr);
-    lv_obj_set_width(s_msg, 520);
+    lv_obj_set_width(s_msg, UI_PX(520));
     lv_obj_set_style_text_align(s_msg, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_font(s_msg, &lv_font_montserrat_20, 0);
     lv_obj_set_style_text_color(s_msg, lv_color_white(), 0);

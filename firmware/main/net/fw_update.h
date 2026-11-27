@@ -9,6 +9,8 @@
 #include <stdint.h>
 
 typedef struct {
+    const char *board;          // the board this firmware is for: "lcd34c", ...
+    const char *board_title;    // ...and its product name
     char version[32];
     char build_date[32];        // "<date> <time>" the image was built
     char running[17];           // app slot label, e.g. "ota_0"

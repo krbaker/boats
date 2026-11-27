@@ -110,6 +110,8 @@ idf.py build
 idf.py -p /dev/ttyACM0 flash monitor
 ```
 
+**Other boards** (see `BOARDS_PLAN.md`; the 3.4C and the 4C so far): `./build.sh <board>` builds for one board in its own build directory, `build-<board>/`. Boards are `lcd34c` (the 3.4C), `lcd4c`, `lcd10` and `headless`; anything after the board name goes to `idf.py`, e.g. `./build.sh lcd34c -p /dev/ttyACM0 flash monitor`. Plain `idf.py build` builds the 3.4C, in `build/`, as before. Each board's firmware has its own name, and a display refuses an update built for another board.
+
 After the first USB flash, later updates can go through the config page (**Display firmware**). Flash over USB again only when the partition table or bootloader changes. A display flashed before web updates existed needs one USB flash to get the two-slot layout (its settings are kept).
 
 On first boot there's no saved Wi-Fi network, so the display starts in setup mode with an `AIS-Display-XXXX` access point and shows the password on screen. Join it, open `http://192.168.4.1/`, and enter your Wi-Fi network, AIS server, tide station and time zone. Then insert a FAT32 microSD card with a chart set on it, or upload one.

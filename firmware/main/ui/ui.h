@@ -8,11 +8,25 @@
 #include <time.h>
 
 #include "lvgl.h"
+#include "sdkconfig.h"
 #include "settings.h"
 #include "vessel_db.h"
 
+// The screen: round, UI_SIZE px across (BOARDS_PLAN.md). The host preview
+// sets UI_SIZE itself to render other sizes.
+#ifndef UI_SIZE
+#if CONFIG_AIS_BOARD_LCD4C
+#define UI_SIZE     720
+#else
 #define UI_SIZE     800
+#endif
+#endif
 #define UI_CENTER   (UI_SIZE / 2)
+
+// A length laid out for the 3.4C's 800 px screen, scaled to this one. Fonts,
+// icons and minimum tap sizes aren't scaled: a smaller screen with as many
+// pixels per inch or fewer (the 4C) reads them at least as well.
+#define UI_PX(px)   ((int32_t)((px) * UI_SIZE / 800))
 
 // Palette
 #define UI_COLOR_BG         lv_color_hex(0x0d1b2a)

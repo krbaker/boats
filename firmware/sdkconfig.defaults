@@ -1,9 +1,10 @@
-# --- Chip / board: Waveshare ESP32-P4-WIFI6-Touch-LCD-3.4C ---
+# --- Chip ---
+# Shared by every board; each board's own settings are in
+# sdkconfig.defaults.<board> (see CMakeLists.txt and BOARDS_PLAN.md).
 CONFIG_IDF_TARGET="esp32p4"
-# The ESPHome config ran the CPU at 360 MHz, which means a pre-v3 chip revision.
-# If `esptool.py chip_id` reports v3.x, delete these two lines.
-CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y
-CONFIG_ESP32P4_REV_MIN_100=y
+# The chip revision is per board (sdkconfig.defaults.<board>): ESP-IDF's
+# default is v3.1 and up; the 3.4C here is pre-v3. A build for the wrong
+# revision won't boot. Check a board with `esptool.py --chip esp32p4 chip_id`.
 
 CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
 CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
@@ -72,7 +73,6 @@ CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
 CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=y
 
 # --- Display (BSP) ---
-CONFIG_BSP_LCD_TYPE_800_800_3_4_INCH=y
 CONFIG_BSP_LCD_COLOR_FORMAT_RGB565=y
 
 # --- LVGL ---

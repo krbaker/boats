@@ -16,9 +16,9 @@
 #include "ui.h"
 #include "weather.h"
 
-#define BOX_W       540     // as the vessel overlay: its corners just fit inside the round screen
-#define BOX_H       560
-#define BOX_Y       24
+#define BOX_W       UI_PX(540)  // as the vessel overlay: its corners just fit inside the round screen
+#define BOX_H       UI_PX(560)
+#define BOX_Y       UI_PX(24)
 #define POLL_MS     1000
 #define OLD_S       (45 * 60)   // a buoy value this much older than the newest row says how old
 enum { TAB_FORECAST, TAB_WAVES, TAB_WEATHER };
@@ -90,8 +90,8 @@ static lv_obj_t *kv_table(lv_obj_t *parent)
 {
     lv_obj_t *t = lv_table_create(parent);
     lv_table_set_column_count(t, 2);
-    lv_table_set_column_width(t, 0, 190);
-    lv_table_set_column_width(t, 1, BOX_W - 2 * 20 - 190);
+    lv_table_set_column_width(t, 0, UI_PX(190));
+    lv_table_set_column_width(t, 1, BOX_W - 2 * 20 - UI_PX(190));
     lv_obj_set_width(t, lv_pct(100));
     lv_obj_set_style_bg_opa(t, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(t, 0, 0);
@@ -383,9 +383,9 @@ static void refresh(bool force)
 // whatever screen is up, until its X is tapped.
 // ---------------------------------------------------------------------------
 
-#define POPUP_W         520
-#define POPUP_Y         150     // the box's top: the X sits at a fixed place
-#define POPUP_TEXT_H    330     // the text scrolls beyond this
+#define POPUP_W         UI_PX(520)
+#define POPUP_Y         UI_PX(150)  // the box's top: the X sits at a fixed place
+#define POPUP_TEXT_H    UI_PX(330)    // the text scrolls beyond this
 #define MAX_DISMISSED   16
 
 static lv_obj_t *s_popup;

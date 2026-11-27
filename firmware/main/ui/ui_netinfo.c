@@ -14,8 +14,8 @@
 #include "wifi_mgr.h"
 
 #define CONFIRM_TIMEOUT_MS 4000
-#define TABS_W             540     // the tab box; its corners just fit inside the round screen
-#define TABS_H             560
+#define TABS_W             UI_PX(540)  // the tab box; its corners just fit inside the round screen
+#define TABS_H             UI_PX(560)
 #define TABS_Y             (-16)   // offset of its centre from the screen's
 
 static lv_obj_t *s_scr, *s_tabs, *s_info, *s_ap_box, *s_ap_ssid, *s_ap_pass, *s_ap_url, *s_ap_btn, *s_ap_lbl;
@@ -188,7 +188,8 @@ lv_obj_t *ui_netinfo_create(void)
     lv_obj_set_scrollable(lv_tabview_get_content(s_tabs), false);
     lv_obj_t *bar = lv_tabview_get_tab_bar(s_tabs);
     lv_obj_set_style_bg_color(bar, UI_COLOR_PANEL, 0);
-    lv_obj_set_style_text_font(bar, &lv_font_montserrat_20, 0);
+    // Six tabs: on a smaller screen they only fit in the smaller font.
+    lv_obj_set_style_text_font(bar, UI_SIZE < 800 ? &lv_font_montserrat_16 : &lv_font_montserrat_20, 0);
 
     // Network: what it's connected to, and the access point.
     lv_obj_t *tab = lv_tabview_add_tab(s_tabs, "Network");
