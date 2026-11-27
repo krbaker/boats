@@ -8,9 +8,11 @@ mapbuilder/map_out/
 __pycache__/
 firmware/test/host/preview/build/
 firmware/test/host/preview/out/
+firmware/test/host/preview/out-*/
 mapbuilder/.venv/
 coprocessor/build/
 coprocessor/managed_components/
 coprocessor/sdkconfig
 coprocessor/sdkconfig.old
 captures/
+firmware/build-*/
